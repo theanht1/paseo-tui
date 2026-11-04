@@ -1,0 +1,38 @@
+{
+  "name": "paseo-tui",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "paseo-tui": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=26.4"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning --import tsx src/cli.tsx",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning dist/cli.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@getpaseo/client": "0.15.0",
+    "@getpaseo/highlight": "0.15.0",
+    "@getpaseo/protocol": "0.15.0",
+    "@opentui/core": "0.8.2",
+    "@opentui/react": "0.8.2",
+    "diff": "^9.0.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.0"
+  }
+}
