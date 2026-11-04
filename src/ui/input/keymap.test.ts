@@ -1,3 +1,4 @@
+import { parseKeypress } from "@opentui/core";
 import { expect, test } from "vitest";
 import {
   BINDINGS,
@@ -78,4 +79,16 @@ test("an unbound key after a prefix from insert mode returns to insert", () => {
     mode: { kind: "insert" },
     action: null,
   });
+});
+
+test("OpenTUI Shift-Tab cycles modes only in a normal pane", () => {
+  const stroke = parseKeypress("\u001b[Z");
+  if (!stroke) throw Error("missing parsed key");
+  expect(stroke.name).toBe("tab");
+  expect(stroke.shift).toBe(true);
+  expect(dispatch(normal, "pane", stroke).action).toEqual({
+    type: "agent.cycleMode",
+  });
+  expect(dispatch(normal, "sidebar", stroke).action).toBeNull();
+  expect(dispatch({ kind: "insert" }, "pane", stroke).action).toBeNull();
 });

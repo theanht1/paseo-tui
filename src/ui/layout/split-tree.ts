@@ -191,3 +191,12 @@ export function focusDirection(
   }
   return { ...layout, focusedId: best ?? layout.focusedId, zoomedId: null };
 }
+
+export function clearAgent(layout: Layout, agentId: string): Layout {
+  let root = layout.root;
+  for (const pane of panes(layout)) {
+    if (pane.agentId === agentId)
+      root = update(root, pane.id, (p) => ({ ...p, agentId: null }));
+  }
+  return { ...layout, root };
+}

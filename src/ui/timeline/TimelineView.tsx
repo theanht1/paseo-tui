@@ -383,6 +383,9 @@ export function TimelineView({
     }),
     [expandCurrent, selectCurrent],
   );
+  const modeLabel = agent.availableModes.find(
+    (mode) => mode.id === agent.currentModeId,
+  )?.label;
   return (
     <box flexDirection="column" flexGrow={1} minHeight={1}>
       <text
@@ -391,7 +394,8 @@ export function TimelineView({
         flexShrink={0}
       >
         <strong>{agentName(agent)}</strong> {agent.provider}
-        {agent.model ? `/${agent.model}` : ""} · {agent.status} ·{" "}
+        {agent.model ? `/${agent.model}` : ""}
+        {modeLabel ? ` · ${modeLabel}` : ""} · {agent.status} ·{" "}
         {shortPath(agent.cwd)}
       </text>
       {snapshot.status === "loading" ? (
@@ -405,6 +409,11 @@ export function TimelineView({
       {snapshot.lastActionError ? (
         <text fg={foregroundProp(context.theme.error)}>
           {snapshot.lastActionError}
+        </text>
+      ) : null}
+      {snapshot.lastNotice ? (
+        <text fg={foregroundProp(context.theme.muted)}>
+          {snapshot.lastNotice}
         </text>
       ) : null}
       <scrollbox

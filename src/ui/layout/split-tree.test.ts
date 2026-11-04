@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   assign,
+  clearAgent,
   close,
   computeRects,
   focusDirection,
@@ -56,4 +57,15 @@ test("zoom clears on split and out of range index does nothing", () => {
   expect(l.zoomedId).toBe("0");
   expect(split(l, "right").zoomedId).toBeNull();
   expect(focusIndex(initialLayout(), 20)).toEqual(initialLayout());
+});
+
+test("clearAgent clears every matching pane and preserves others", () => {
+  const layout = assign(
+    split(split(assign(initialLayout(), "a"), "right"), "down"),
+    "b",
+  );
+  const cleared = clearAgent(layout, "a");
+  expect(panes(cleared).map((p) => p.agentId)).toEqual([null, null, "b"]);
+  expect(panes(layout).map((p) => p.agentId)).toEqual(["a", "a", "b"]);
+  expect(cleared.focusedId).toBe(layout.focusedId);
 });

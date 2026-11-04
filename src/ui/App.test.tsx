@@ -14,11 +14,16 @@ import { createRoot, flushSync } from "@opentui/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { rendererOptions } from "../cli.js";
 import { createAgentsStore } from "../state/agents-store.js";
-import type { AgentPort, AgentsList, AgentsPort } from "../state/ports.js";
+import type {
+  AgentPort,
+  AgentsList,
+  AgentsPort,
+  CreateAgentInput,
+} from "../state/ports.js";
 import { agent, listSnapshot, page } from "../state/test-fixtures.js";
 import { createTimelineRegistry } from "../state/timeline-registry.js";
 import { createTimelineStore } from "../state/timeline-store.js";
-import { App } from "./App.js";
+import { App, type AppProps } from "./App.js";
 import { watchConnection } from "./connection-status.js";
 import {
   createSyntaxStyle,
@@ -32,6 +37,32 @@ afterEach(async () => {
 });
 
 class FakeAgents implements AgentsPort {
+  providerAvailable = true;
+  async providers() {
+    return [
+      {
+        id: "codex",
+        label: "Codex",
+        available: this.providerAvailable,
+        error: this.providerAvailable ? null : "Sign in required",
+        defaultModeId: "ask",
+      },
+    ];
+  }
+  async models() {
+    return [{ id: "best", label: "Best", description: null, isDefault: true }];
+  }
+  async modes() {
+    return [{ id: "ask", label: "Ask", description: null }];
+  }
+  createError: Error | null = null;
+  createdInputs: CreateAgentInput[] = [];
+  created = agent("created", { title: "Created agent", cwd: "/repo/one" });
+  async create(input: CreateAgentInput) {
+    this.createdInputs.push(input);
+    if (this.createError) throw this.createError;
+    return this.created;
+  }
   lists = 0;
   constructor(public agents: PaseoAgent[]) {}
   async list(): Promise<AgentsList> {
@@ -48,8 +79,12 @@ class FakeAgents implements AgentsPort {
       },
     };
   }
-  onUpdate(_handler: (update: PaseoAgentUpdate) => void) {
-    return () => {};
+  handler: ((update: PaseoAgentUpdate) => void) | null = null;
+  onUpdate(handler: (update: PaseoAgentUpdate) => void) {
+    this.handler = handler;
+    return () => {
+      this.handler = null;
+    };
   }
 }
 class FakeAgent implements AgentPort {
@@ -105,6 +140,26 @@ class FakeAgent implements AgentPort {
     this.canceled++;
     await this.cancelGate;
     if (this.cancelError) throw this.cancelError;
+  }
+  modes: string[] = [];
+  names: string[] = [];
+  archived = 0;
+  modeError: Error | null = null;
+  modeNotice: string | null = null;
+  async setMode(id: string) {
+    this.modes.push(id);
+    if (this.modeError) throw this.modeError;
+    return this.modeNotice;
+  }
+  models: string[] = [];
+  async setModel(id: string) {
+    this.models.push(id);
+  }
+  async rename(name: string) {
+    this.names.push(name);
+  }
+  async archive() {
+    this.archived++;
   }
   snapshot() {
     return this.current;
@@ -177,6 +232,7 @@ async function setup(
   height = 24,
   kittyKeyboard = false,
   env: NodeJS.ProcessEnv = {},
+  catalog?: AppProps["catalog"] | "agents",
 ) {
   const agentsPort = new FakeAgents(currentAgents);
   const store = createAgentsStore(agentsPort);
@@ -217,6 +273,7 @@ async function setup(
           agents={store}
           onExit={() => test.renderer.destroy()}
           timelines={timelines}
+          catalog={catalog === "agents" ? agentsPort : catalog}
         />
       </ThemeContext>,
     ),
@@ -608,6 +665,23 @@ describe("App", () => {
     ]);
     expect(app.lastFrame()).not.toContain("Run command?");
   });
+  it("opens the loaded agent and sends text typed after insert mode is visible", async () => {
+    const { app, ports, test } = await setup();
+    app.stdin.write("\r");
+    await settle();
+    await expect.poll(() => app.lastFrame()).toContain("Message Alpha agent");
+    await expect.poll(() => app.lastFrame()).toContain("turn idle");
+    app.stdin.write("i");
+    await settle();
+    await expect.poll(() => app.lastFrame()).toContain("INSERT");
+    await test.mockInput.typeText("show tools");
+    await settle();
+    expect(app.lastFrame()).toContain("show tools");
+    app.stdin.write("\r");
+    await settle();
+    expect(ports.get("alpha")?.sent).toEqual(["show tools"]);
+  });
+
   it("opens the prompt, sends typed text once, ignores empty input, and cancels with Esc", async () => {
     const { app, ports } = await setup();
     app.stdin.write("\r");
@@ -1011,6 +1085,45 @@ it("expands and collapses all idempotently from the palette, keeping O as a togg
   expect(app.lastFrame()).not.toContain("secret output");
 });
 
+it("search selects and expands a completed shell tool", async () => {
+  const { app, ports, test } = await setup();
+  app.stdin.write("\r");
+  await settle();
+  const port = ports.get("alpha");
+  if (!port) throw Error("missing port");
+  port.handler?.({
+    agentId: "alpha",
+    epoch: "epoch",
+    seq: 4,
+    timestamp: "2026-11-03T00:00:00Z",
+    event: {
+      type: "timeline",
+      provider: "codex",
+      item: {
+        type: "tool_call",
+        callId: "shell-search",
+        name: "bash",
+        status: "completed",
+        error: null,
+        detail: {
+          type: "shell",
+          command: "run unique-command",
+          output: "shell result",
+        },
+      },
+    },
+  });
+  await settle();
+  app.stdin.write("/");
+  await settle();
+  await test.mockInput.typeText("unique-command");
+  await settle();
+  app.stdin.write("\r");
+  await settle();
+  expect(app.lastFrame()).toContain("▌✓ bash");
+  expect(app.lastFrame()).toContain("shell result");
+});
+
 it("keeps the full search query from a key burst", async () => {
   const { app, ports } = await setup();
   app.stdin.write("\r");
@@ -1115,4 +1228,284 @@ it("uses terminal default foreground and background intent for NO_COLOR text", a
     await settle();
     expectDefaultForeground();
   }
+});
+
+const controlAgent = agent("alpha", {
+  title: "Alpha agent",
+  currentModeId: "ask",
+  availableModes: [
+    { id: "ask", label: "Ask" },
+    { id: "auto", label: "Auto" },
+  ],
+});
+async function controlSetup(command: string) {
+  const result = await setup([controlAgent]);
+  for (const key of ["\r", "\u000b", command, "\r"]) {
+    result.app.stdin.write(key);
+    await settle();
+  }
+  const port = result.ports.get("alpha");
+  if (!port) throw Error("missing port");
+  return { ...result, port };
+}
+it("chooses the second mode and returns from steps with Esc", async () => {
+  const { app, port, test } = await controlSetup("set mode");
+  expect(app.lastFrame()).toContain("Command Center › Set mode");
+  test.mockInput.pressArrow("down");
+  test.mockInput.pressEnter();
+  await settle();
+  expect(port.modes).toEqual(["auto"]);
+  for (const key of ["\u000b", "set mode", "\r", "\u001b"]) {
+    app.stdin.write(key);
+    if (key === "\u001b")
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("Command Center");
+  expect(app.lastFrame()).not.toContain("› Set mode");
+  app.stdin.write("\u001b");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await settle();
+  expect(app.lastFrame()).not.toContain("Command Center");
+});
+it("prefills rename and submits burst input", async () => {
+  const { app, port } = await controlSetup("rename");
+  expect(app.lastFrame()).toContain("Alpha agent");
+  app.stdin.write("\u0015");
+  app.stdin.write("New name");
+  app.stdin.write("\r");
+  await settle();
+  expect(port.names).toEqual(["New name"]);
+});
+it("archives and releases the removed agent's pane", async () => {
+  const { app, port, agentsPort } = await controlSetup("archive");
+  expect(app.lastFrame()).toContain("y confirm");
+  app.stdin.write("y");
+  await settle();
+  expect(port.archived).toBe(1);
+  agentsPort.handler?.({ kind: "remove", agentId: "alpha" });
+  await settle();
+  expect(app.lastFrame()).toContain("No agent");
+  expect(port.released).toBe(true);
+});
+it("cycles mode with Shift-Tab and renders a rejected action", async () => {
+  const { app, ports, test } = await setup([controlAgent]);
+  app.stdin.write("\r");
+  await settle();
+  const port = ports.get("alpha");
+  if (!port) throw Error("missing port");
+  port.modeError = Error("Mode denied");
+  test.mockInput.pressTab({ shift: true });
+  await settle();
+  expect(port.modes).toEqual(["auto"]);
+  expect(app.lastFrame()).toContain("Mode denied");
+});
+it("runs a clicked mode choice", async () => {
+  const { port, test } = await controlSetup("set mode");
+  const row = test.renderer.root.findDescendantById("command:mode:auto");
+  if (!row) throw Error("missing choice");
+  await test.mockMouse.click(row.x + 1, row.y);
+  await settle();
+  expect(port.modes).toEqual(["auto"]);
+});
+
+it("loads models asynchronously, marks current/default, and applies a clicked choice", async () => {
+  const requested: string[] = [];
+  let resolveModels: (
+    models: Awaited<ReturnType<NonNullable<AppProps["catalog"]>["models"]>>,
+  ) => void = () => {};
+  const pending = new Promise<
+    Awaited<ReturnType<NonNullable<AppProps["catalog"]>["models"]>>
+  >((resolve) => {
+    resolveModels = resolve;
+  });
+  const { app, ports, test } = await setup(
+    [agent("alpha", { ...controlAgent, model: "old" })],
+    24,
+    false,
+    {},
+    {
+      providers: async () => [],
+      modes: async () => [],
+      create: async () => {
+        throw Error("Unexpected create");
+      },
+      models(provider) {
+        requested.push(provider);
+        return pending;
+      },
+    },
+  );
+  for (const key of ["\r", "\u000b", "set model", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("Loading…");
+  expect(requested).toEqual(["codex"]);
+  resolveModels([
+    { id: "old", label: "Old model", description: null, isDefault: true },
+    { id: "new", label: "New model", description: null, isDefault: false },
+  ]);
+  await settle();
+  expect(app.lastFrame()).toContain("current · default");
+  const row = test.renderer.root.findDescendantById("command:model:new");
+  if (!row) throw Error("missing model row");
+  await test.mockMouse.click(row.x + 1, row.y);
+  await settle();
+  expect(ports.get("alpha")?.models).toEqual(["new"]);
+});
+it("shows catalog failures and returns to the preserved root query", async () => {
+  const { app, test } = await setup(
+    [controlAgent],
+    24,
+    false,
+    {},
+    {
+      providers: async () => [],
+      modes: async () => [],
+      create: async () => {
+        throw Error("Unexpected create");
+      },
+      models: async () => {
+        throw Error("Catalog unavailable");
+      },
+    },
+  );
+  for (const key of ["\r", "\u000b", "set model", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("! Catalog unavailable");
+  test.mockInput.pressEscape();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await settle();
+  expect(app.lastFrame()).not.toContain("Catalog unavailable");
+  expect(app.lastFrame()).toContain("set model");
+});
+
+it("shows the mode label and provider notice until the next action", async () => {
+  const { app, ports, test } = await setup([controlAgent]);
+  app.stdin.write("\r");
+  await settle();
+  expect(app.lastFrame()).toContain("codex · Ask · idle");
+  const port = ports.get("alpha");
+  if (!port) throw Error("missing port");
+  port.modeNotice = "Mode applies on next turn";
+  test.mockInput.pressTab({ shift: true });
+  await settle();
+  expect(app.lastFrame()).toContain("Mode applies on next turn");
+  port.modeNotice = null;
+  test.mockInput.pressTab({ shift: true });
+  await settle();
+  expect(app.lastFrame()).not.toContain("Mode applies on next turn");
+});
+
+it("creates from the focused workspace and keeps the assigned pane pending until subscription delivery", async () => {
+  const { app, agentsPort, ports } = await setup(
+    agents,
+    24,
+    false,
+    {},
+    "agents",
+  );
+  for (const key of [
+    "\r",
+    "\u000b",
+    "new agent",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+    "hi",
+    "\r",
+  ]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(agentsPort.createdInputs).toEqual([
+    {
+      provider: "codex",
+      model: "best",
+      modeId: "ask",
+      cwd: "/repo/one",
+      title: null,
+      prompt: "hi",
+    },
+  ]);
+  expect(app.lastFrame()).toContain("Loading…");
+  // A list update before the new snapshot must not clear the pending assignment.
+  agentsPort.handler?.({ kind: "upsert", agent: agents[0] });
+  await settle();
+  expect(app.lastFrame()).toContain("Loading…");
+  agentsPort.handler?.({ kind: "upsert", agent: agentsPort.created });
+  await settle();
+  expect(ports.has("created")).toBe(true);
+  expect(app.lastFrame()).toContain("hello created");
+});
+
+it("clears a pending creation after ten seconds without a snapshot", async () => {
+  const { app } = await setup(agents, 24, false, {}, "agents");
+  for (const key of [
+    "\r",
+    "\u000b",
+    "new agent",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+  ]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("Loading…");
+  await new Promise((resolve) => setTimeout(resolve, 10_050));
+  await settle();
+  expect(app.lastFrame()).toContain("No agent.");
+}, 15_000);
+
+it("shows create errors in the status bar for five seconds", async () => {
+  const { app, agentsPort } = await setup(agents, 24, false, {}, "agents");
+  agentsPort.createError = Error("Create denied");
+  for (const key of [
+    "\r",
+    "\u000b",
+    "new agent",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+    "\r",
+  ]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("! Create denied");
+  await new Promise((resolve) => setTimeout(resolve, 5050));
+  await settle();
+  expect(app.lastFrame()).not.toContain("Create denied");
+  expect(app.lastFrame()).toContain("hello alpha");
+}, 8000);
+
+it("keeps one Provider breadcrumb and the overlay open when an unavailable provider is picked", async () => {
+  const { app, agentsPort } = await setup(agents, 24, false, {}, "agents");
+  agentsPort.providerAvailable = false;
+  for (const key of ["\r", "\u000b", "new agent", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("Command Center › Provider");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    app.stdin.write("\r");
+    await settle();
+    expect(app.lastFrame().match(/Provider/g)).toHaveLength(1);
+    expect(app.lastFrame()).toContain("Command Center › Provider");
+    expect(app.lastFrame()).toContain("Codex");
+    expect(app.lastFrame()).toContain("Sign in required");
+    expect(app.lastFrame()).not.toContain("Loading…");
+  }
+  expect(agentsPort.createdInputs).toEqual([]);
 });

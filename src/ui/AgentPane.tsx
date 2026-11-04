@@ -14,6 +14,7 @@ import {
 } from "react";
 import type { TimelineStore } from "./App.js";
 import { agentName } from "./agent-display.js";
+import { nextMode } from "./agent-modes.js";
 import type { Action, Mode, Stroke } from "./input/keymap.js";
 import { PermissionPrompt, permissionLines } from "./PermissionPrompt.js";
 import { PromptInput } from "./PromptInput.js";
@@ -79,6 +80,11 @@ export function AgentPane({
   }
   useImperativeHandle(controls, () => ({
     act(action: Action) {
+      if (action.type === "agent.cycleMode") {
+        const id = nextMode(agent);
+        if (id) void store.setMode(id);
+        return;
+      }
       if (action.type === "stop") {
         void stop();
         return;

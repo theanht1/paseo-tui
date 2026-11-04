@@ -26,6 +26,7 @@ export type Action =
         | "block.toggleAll"
         | "block.expandAll"
         | "block.collapseAll"
+        | "agent.cycleMode"
         | "stop"
         | "palette.open";
     }
@@ -56,6 +57,13 @@ export interface Binding {
   description: string;
 }
 export const BINDINGS: readonly Binding[] = [
+  {
+    keys: "Shift-Tab",
+    modes: ["normal"],
+    context: "pane",
+    action: { type: "agent.cycleMode" },
+    description: "Cycle agent mode",
+  },
   {
     keys: "Ctrl-K",
     modes: ["normal", "insert", "prefix", "search", "palette"],
@@ -326,6 +334,7 @@ export const BINDINGS: readonly Binding[] = [
 ];
 function label(stroke: Stroke): string {
   if (stroke.ctrl) return `Ctrl-${stroke.name.toLowerCase()}`;
+  if (stroke.name === "tab" && stroke.shift) return "Shift-Tab";
   if (stroke.meta) return `Meta-${stroke.name}`;
   const names: Record<string, string> = {
     return: "Enter",

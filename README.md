@@ -33,6 +33,12 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Any mode                   | `Ctrl-C`                                   | Quit                                  |
 | Normal                     | `?`                                        | Help                                  |
 | Normal                     | `Tab`                                      | Switch sidebar/pane                   |
+| Command Center             | `New agent…`                               | Create in an existing workspace       |
+| Command Center             | `Set mode…`                                | Pick an available mode                |
+| Command Center             | `Set model…`                               | Pick a model (with catalog access)    |
+| Command Center             | `Rename…`                                  | Edit the agent title                  |
+| Command Center             | `Archive…`                                 | Confirm with `y` or click Confirm     |
+| Normal pane                | `Shift-Tab`                                | Cycle agent mode                      |
 | Normal                     | `Ctrl-X`                                   | Stop running turn                     |
 | Sidebar                    | `j` / `↓`                                  | Next agent                            |
 | Sidebar                    | `k` / `↑`                                  | Previous agent                        |
@@ -96,7 +102,20 @@ Press `Ctrl-K` in any mode, or `:` in normal mode (also after the prefix),
 to search agents, workspaces, pane actions, view actions and keyboard help.
 Search accepts multiple tokens and fuzzy subsequences. Use arrows or `Ctrl-N` /
 `Ctrl-P` to select, then `Enter` to run; clicking a result also runs it.
-`Esc` or a click outside closes the palette. Opening it from insert mode restores
+`Esc` goes back a step (or closes at the root); a click outside closes the palette. Opening it from insert mode restores
 insert mode on close. Agent commands can open in the focused pane or a new split
 on the right. The focused agent also has stop (while running) and separate Expand all / Collapse all
 commands (`O` still toggles both). Additional command sources can register with the shared registry.
+
+For the focused agent, the Command Center offers **Set mode…**, **Rename…**,
+and **Archive…** (confirm with `y` or click Confirm). **Set model…** appears when
+catalog access is supplied. Mode choices mark the current mode; model choices
+mark current and default models. `Esc` returns from a step, then closes from the
+root. Click a choice to run it, or click outside to close.
+
+With catalog access, **New agent…** picks a provider, model and mode, followed
+by an optional title and first prompt. It uses the focused agent's workspace;
+from an empty pane it first asks for an existing workspace. Default models and
+modes appear first. An empty title lets the daemon name the agent. The focused
+pane shows `Loading…` while waiting up to ten seconds for the new snapshot;
+creation errors appear in the status bar for five seconds.

@@ -1,19 +1,14 @@
 #!/usr/bin/env -S NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import type { PaseoAgent } from "@getpaseo/client";
 import { type CliRendererConfig, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import packageJson from "../package.json" with { type: "json" };
 import { connect } from "./connection/connect.js";
 import { resolveTarget } from "./connection/target.js";
-import { createAgentsStore } from "./state/agents-store.js";
-import { createAgentPort, createAgentsPort } from "./state/ports.js";
-import { createTimelineRegistry } from "./state/timeline-registry.js";
-import { createTimelineStore } from "./state/timeline-store.js";
+import { createSession } from "./state/session.js";
 import { App } from "./ui/App.js";
 import { createCommandRegistry } from "./ui/command-center/registry.js";
-import { watchConnection } from "./ui/connection-status.js";
 import { parsePrefix } from "./ui/input/keymap.js";
 import {
   createSyntaxStyle,
@@ -72,18 +67,8 @@ async function main() {
     process.env,
   );
   const connection = await connect(target);
-  const agents = createAgentsStore(createAgentsPort(connection.api));
-  const status = watchConnection(connection, () => void agents.resync());
-  void agents.load();
-  function openTimeline(agent: PaseoAgent) {
-    return createTimelineStore(
-      createAgentPort(connection.api.agents.ref(agent), () =>
-        connection.cancelAgent(agent.id),
-      ),
-    );
-  }
-
-  const timelines = createTimelineRegistry(openTimeline);
+  const session = createSession(connection);
+  const { agentsPort, agents, status, timelines } = session;
   const commands = createCommandRegistry();
   const renderer = await createCliRenderer(rendererOptions(values));
   const theme = createTheme(process.env);
@@ -101,6 +86,7 @@ async function main() {
           label={connection.label}
           connection={status}
           agents={agents}
+          catalog={agentsPort}
           timelines={timelines}
           commands={commands}
           prefix={prefix}
@@ -114,9 +100,7 @@ async function main() {
     await renderer.closed;
     syntaxStyle.destroy();
     process.off("uncaughtException", uncaught);
-    timelines.close();
-    status.close();
-    await agents.close();
+    await session.close();
     await connection.close();
   }
 }

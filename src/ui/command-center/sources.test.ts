@@ -1,5 +1,7 @@
+import type { PaseoAgent } from "@getpaseo/client";
 import { describe, expect, it } from "vitest";
-import { agent } from "../../state/test-fixtures.js";
+import { agent, page } from "../../state/test-fixtures.js";
+import { createTimelineStore } from "../../state/timeline-store.js";
 import { type Action, BINDINGS } from "../input/keymap.js";
 import {
   assign,
@@ -16,6 +18,7 @@ function setup(status: "running" | "idle" = "idle") {
   const source = builtinSource({
     groups: [{ key: "repo", agents: [value], updatedAt: value.updatedAt }],
     focusedAgent: value,
+    focusedStore: null,
     prefixLabel: "Ctrl-A",
     open() {},
     changeLayout(change) {
@@ -62,4 +65,62 @@ describe("built-in commands", () => {
       expect(row.shortcut).toBe(`Ctrl-A ${binding?.keys}`);
     }
   });
+});
+
+function controls(value: PaseoAgent) {
+  let archived = 0;
+  const store = createTimelineStore({
+    snapshot: () => value,
+    fetchTail: async () => page([]),
+    fetchAfter: async () => page([]),
+    subscribe: () => Object.assign(() => {}, { ready: Promise.resolve() }),
+    send: async () => {},
+    respondToPermission: async () => {},
+    cancel: async () => {},
+    setMode: async () => null,
+    setModel: async () => {},
+    rename: async () => {},
+    archive: async () => {
+      archived++;
+    },
+  });
+  const source = builtinSource({
+    groups: [],
+    focusedAgent: value,
+    focusedStore: store,
+    prefixLabel: "Ctrl-B",
+    open() {},
+    changeLayout() {},
+    workspace() {},
+    act() {},
+  });
+  return { items: source.items(), archived: () => archived };
+}
+it("hides set mode with fewer than two modes", () => {
+  expect(
+    controls(agent("a")).items.some((item) => item.id === "set-mode"),
+  ).toBe(false);
+});
+it("marks the current mode in choices", async () => {
+  const { items } = controls(
+    agent("a", {
+      currentModeId: "ask",
+      availableModes: [
+        { id: "ask", label: "Ask" },
+        { id: "auto", label: "Auto" },
+      ],
+    }),
+  );
+  const step = items.find((item) => item.id === "set-mode")?.run();
+  if (step?.kind !== "choice") throw Error("missing mode choice");
+  expect((await step.items())[0].subtitle).toContain("current");
+  expect((await step.items())[1].subtitle).not.toContain("current");
+});
+it("requires archive confirmation before calling the port", async () => {
+  const result = controls(agent("a"));
+  const step = result.items.find((item) => item.id === "archive")?.run();
+  if (step?.kind !== "confirm") throw Error("missing confirmation");
+  expect(result.archived()).toBe(0);
+  step.confirm();
+  expect(result.archived()).toBe(1);
 });

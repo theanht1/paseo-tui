@@ -21,6 +21,7 @@ interface TimelineContents {
   turn: TurnState;
   pendingPermissions: readonly AgentPermissionRequest[];
   lastActionError: string | null;
+  lastNotice: string | null;
 }
 export type TimelineSnapshot = TimelineContents &
   (
@@ -59,6 +60,7 @@ export function createTimelineStore(port: AgentPort) {
     turn: snapshotTurn(agent),
     pendingPermissions: agent?.pendingPermissions ?? [],
     lastActionError: null,
+    lastNotice: null,
     error: null,
   };
   let phase: "new" | "opening" | "ready" | "error" | "closed" = "new";
@@ -292,6 +294,7 @@ export function createTimelineStore(port: AgentPort) {
   }
   async function action(operation: () => Promise<void>) {
     if (!isActive()) return;
+    publish({ ...snapshot, lastNotice: null });
     try {
       await operation();
       if (isActive()) publish({ ...snapshot, lastActionError: null });
@@ -314,6 +317,21 @@ export function createTimelineStore(port: AgentPort) {
   async function cancel() {
     await action(() => port.cancel());
   }
+  async function setMode(modeId: string) {
+    await action(async () => {
+      const notice = await port.setMode(modeId);
+      if (isActive()) publish({ ...snapshot, lastNotice: notice });
+    });
+  }
+  async function setModel(modelId: string) {
+    await action(() => port.setModel(modelId));
+  }
+  async function rename(name: string) {
+    await action(() => port.rename(name));
+  }
+  async function archive() {
+    await action(() => port.archive());
+  }
   function close() {
     if (phase === "closed") return;
     phase = "closed";
@@ -333,5 +351,9 @@ export function createTimelineStore(port: AgentPort) {
     send,
     respond,
     cancel,
+    setMode,
+    setModel,
+    rename,
+    archive,
   };
 }

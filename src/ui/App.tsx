@@ -2,11 +2,14 @@ import type { ConnectionState, PaseoAgent } from "@getpaseo/client";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentsSnapshot } from "../state/agents-store.js";
+import type { AgentsPort } from "../state/ports.js";
 import type { TimelineRegistry } from "../state/timeline-registry.js";
 import type { createTimelineStore } from "../state/timeline-store.js";
 import { AgentList } from "./AgentList.js";
 import { AgentPane } from "./AgentPane.js";
+import { shortPath } from "./agent-display.js";
 import { CommandCenter } from "./command-center/CommandCenter.js";
+import type { CreateDeps } from "./command-center/create-agent.js";
 import {
   type CommandRegistry,
   createCommandRegistry,
@@ -22,6 +25,7 @@ import {
 import { useKeymap } from "./input/use-keymap.js";
 import {
   assign,
+  clearAgent,
   close,
   computeRects,
   focusDirection,
@@ -49,6 +53,7 @@ export interface AppProps {
   agents: ExternalStore<AgentsSnapshot>;
   timelines: TimelineRegistry;
   prefix?: Stroke;
+  catalog?: Pick<AgentsPort, "providers" | "models" | "modes" | "create">;
   commands?: CommandRegistry;
   onExit(): void;
 }
@@ -60,6 +65,7 @@ export function App({
   prefix = DEFAULT_PREFIX,
   onExit,
   commands,
+  catalog,
 }: AppProps) {
   const registry = useMemo(
     () => commands ?? createCommandRegistry(),
@@ -89,7 +95,51 @@ export function App({
   const [stores, setStores] = useState<ReadonlyMap<string, TimelineStore>>(
     new Map(),
   );
+  const pendingIds = useRef(new Map<string, number>());
+  const [createError, setCreateError] = useState<{ message: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!createError) return;
+    const timer = setTimeout(() => setCreateError(null), 5000);
+    return () => clearTimeout(timer);
+  }, [createError]);
   const all = panes(layout);
+  useEffect(() => {
+    const now = Date.now();
+    const assigned = panes(layout);
+    for (const [id, timestamp] of pendingIds.current) {
+      if (
+        !assigned.some((pane) => pane.agentId === id) ||
+        flat.some((agent) => agent.id === id) ||
+        now - timestamp >= 10_000
+      )
+        pendingIds.current.delete(id);
+    }
+    function clearMissing() {
+      setLayout((previous) => {
+        let next = previous;
+        for (const pane of assigned) {
+          if (
+            pane.agentId &&
+            !flat.some((agent) => agent.id === pane.agentId) &&
+            Date.now() - (pendingIds.current.get(pane.agentId) ?? -Infinity) >=
+              10_000
+          )
+            next = clearAgent(next, pane.agentId);
+        }
+        return next;
+      });
+    }
+    clearMissing();
+    const earliest = Math.min(...pendingIds.current.values());
+    if (!Number.isFinite(earliest)) return;
+    const timer = setTimeout(
+      clearMissing,
+      Math.max(0, earliest + 10_000 - now),
+    );
+    return () => clearTimeout(timer);
+  }, [flat, layout]);
   useEffect(() => {
     for (const pane of panes(layout)) {
       if (!pane.agentId) continue;
@@ -239,9 +289,35 @@ export function App({
         controls.current.get(layout.focusedId)?.act(action);
     }
   }
+  const createAgent: CreateDeps | undefined = catalog
+    ? {
+        providers: () => catalog.providers(),
+        models: (provider) => catalog.models(provider),
+        modes: (provider) => catalog.modes(provider),
+        create: (input) => catalog.create(input),
+        workspaces: groups.flatMap((group) => {
+          const first = group.agents[0];
+          return first
+            ? [{ key: group.key, cwd: first.cwd, label: shortPath(first.cwd) }]
+            : [];
+        }),
+        defaultCwd:
+          flat.find((agent) => agent.id === current?.agentId)?.cwd ?? null,
+        opened(agent) {
+          pendingIds.current.set(agent.id, Date.now());
+          open(agent);
+        },
+        failed(message) {
+          setCreateError({ message });
+        },
+      }
+    : undefined;
   const sourceContext = useRef({
+    createAgent,
     groups,
     focusedAgent: flat.find((a) => a.id === current?.agentId),
+    focusedStore: timeline,
+    models: catalog?.models,
     prefixLabel: prefixLabel(prefix),
     open,
     changeLayout: setLayout,
@@ -254,8 +330,11 @@ export function App({
   });
   sourceContext.current = {
     ...sourceContext.current,
+    createAgent,
     groups,
     focusedAgent: flat.find((a) => a.id === current?.agentId),
+    focusedStore: timeline,
+    models: catalog?.models,
     prefixLabel: prefixLabel(prefix),
     open,
     act,
@@ -392,7 +471,9 @@ export function App({
                   />
                 ) : (
                   <text fg={foregroundProp(theme.fg)}>
-                    No agent. Pick one in the sidebar (Tab) or Ctrl-K.
+                    {pane.agentId
+                      ? "Loading…"
+                      : "No agent. Pick one in the sidebar (Tab) or Ctrl-K."}
                   </text>
                 )}
               </box>
@@ -450,7 +531,7 @@ export function App({
         <text fg={foregroundProp(theme.error)}>Agent list error: {error}</text>
       ) : null}
       <StatusBar
-        label={label}
+        label={createError ? `! ${createError.message} · ${label}` : label}
         connection={connection}
         timeline={timeline}
         mode={mode}

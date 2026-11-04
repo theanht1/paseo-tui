@@ -28,6 +28,26 @@ class FakeAgent implements AgentPort {
   sendError: Error | null = null;
   responded: string[] = [];
   responseResult: Promise<void> = Promise.resolve();
+  modeError: Error | null = null;
+  notice: string | null = null;
+  modes: string[] = [];
+  models: string[] = [];
+  names: string[] = [];
+  archives = 0;
+  async setMode(id: string) {
+    this.modes.push(id);
+    if (this.modeError) throw this.modeError;
+    return this.notice;
+  }
+  async setModel(id: string) {
+    this.models.push(id);
+  }
+  async rename(name: string) {
+    this.names.push(name);
+  }
+  async archive() {
+    this.archives++;
+  }
   cancels = 0;
   released = 0;
   subscribe(handler: (event: PaseoAgentTimelineEvent) => void) {
@@ -428,4 +448,35 @@ describe("timeline store", () => {
     expect(changes).toBe(count);
     expect(port.released).toBe(1);
   });
+});
+
+it("captures mode failures and clears notices on the next action", async () => {
+  const port = new FakeAgent();
+  const store = createTimelineStore(port);
+  await store.open();
+  expect(store.getSnapshot().lastNotice).toBeNull();
+  port.notice = "Changed mode";
+  await store.setMode("ask");
+  expect(store.getSnapshot().lastNotice).toBe("Changed mode");
+  port.modeError = new Error("Mode unavailable");
+  await store.setMode("edit");
+  expect(store.getSnapshot().lastNotice).toBeNull();
+  expect(store.getSnapshot().lastActionError).toBe("Mode unavailable");
+  expect(port.modes).toEqual(["ask", "edit"]);
+  await store.cancel();
+  expect(store.getSnapshot().lastActionError).toBeNull();
+});
+it("forwards model, rename and archive actions", async () => {
+  const port = new FakeAgent();
+  const store = createTimelineStore(port);
+  await store.open();
+  port.notice = "Changed";
+  await store.setMode("ask");
+  await store.setModel("model");
+  expect(store.getSnapshot().lastNotice).toBeNull();
+  await store.rename("Name");
+  await store.archive();
+  expect(port.models).toEqual(["model"]);
+  expect(port.names).toEqual(["Name"]);
+  expect(port.archives).toBe(1);
 });

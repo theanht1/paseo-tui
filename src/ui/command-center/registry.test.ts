@@ -6,7 +6,7 @@ import {
 } from "./registry.js";
 
 function item(id: string, fields: Partial<CommandItem> = {}): CommandItem {
-  return { id, title: id, group: "Agents", run() {}, ...fields };
+  return { id, title: id, group: "Agents", run(): undefined {}, ...fields };
 }
 describe("command ranking", () => {
   it("prefers title prefixes to keyword matches", () => {

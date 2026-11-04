@@ -6,12 +6,13 @@ import {
 } from "@getpaseo/client";
 import { createHostClient, parseHostTarget } from "@getpaseo/client/node";
 import packageJson from "../../package.json" with { type: "json" };
+import { createDaemonAdapter, type DaemonAdapter } from "./daemon-adapter.js";
 import { readLocalCredentialForTarget } from "./local-credential.js";
 import { type HostTarget, resolveListen } from "./target.js";
 
 export interface Connection {
   api: PaseoApi;
-  cancelAgent(agentId: string): Promise<void>;
+  daemon: DaemonAdapter;
   label: string;
   onConnectionState(cb: (state: ConnectionState) => void): () => void;
   close(): Promise<void>;
@@ -71,7 +72,7 @@ export async function connect(target: HostTarget): Promise<Connection> {
   return {
     api: createPaseoApi(daemon),
     label,
-    cancelAgent: (agentId) => daemon.cancelAgent(agentId),
+    daemon: createDaemonAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
     close: () => daemon.close(),
   };

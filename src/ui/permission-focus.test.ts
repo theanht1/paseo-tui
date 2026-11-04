@@ -18,6 +18,10 @@ test("new permissions take focus, removal selects next then timeline, defer stay
     send: async () => {},
     respondToPermission: async () => {},
     cancel: async () => {},
+    setMode: async () => null,
+    setModel: async () => {},
+    rename: async () => {},
+    archive: async () => {},
   };
   // The watcher uses the store boundary's snapshot and subscription only.
   current = agent("a", {

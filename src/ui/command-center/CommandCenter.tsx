@@ -10,7 +10,12 @@ import {
   foregroundProp,
   ThemeContext,
 } from "../render/theme.js";
-import { type CommandRegistry, rankCommands } from "./registry.js";
+import {
+  type CommandItem,
+  type CommandRegistry,
+  rankCommands,
+} from "./registry.js";
+import { back, push, type StackEntry } from "./steps.js";
 export function CommandCenter({
   registry,
   onClose,
@@ -30,12 +35,87 @@ export function CommandCenter({
   if (!context) throw Error("ThemeContext required");
   const { theme } = context;
   const { width, height } = useTerminalDimensions();
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(0);
-  const results = rankCommands(registry.items(), query);
+  const [stack, setStack] = useState<StackEntry[]>([]);
+  const stackRef = useRef(stack);
+  const [root, setRoot] = useState({ query: "", selected: 0 });
+  const rootRef = useRef(root);
+  const entry = stack.at(-1);
+  const step = entry?.step;
+  const query = entry?.query ?? root.query;
+  const selected = entry?.selected ?? root.selected;
+  const [choices, setChoices] = useState<
+    | { kind: "loading" }
+    | { kind: "ready"; items: readonly CommandItem[] }
+    | { kind: "error"; message: string }
+  >({ kind: "ready", items: [] });
+  useEffect(() => {
+    if (step?.kind !== "choice") return;
+    let active = true;
+    setChoices({ kind: "loading" });
+    Promise.resolve()
+      .then(() => step.items())
+      .then(
+        (items) => {
+          if (active) setChoices({ kind: "ready", items });
+        },
+        (error: unknown) => {
+          if (active)
+            setChoices({
+              kind: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+        },
+      );
+    return () => {
+      active = false;
+    };
+  }, [step]);
+  const results = rankCommands(
+    step
+      ? step.kind === "choice" && choices.kind === "ready"
+        ? choices.items
+        : []
+      : registry.items(),
+    query,
+  );
   const index = Math.min(selected, Math.max(0, results.length - 1));
   const selection = useRef(index);
   selection.current = index;
+  function change(query: string, selected: number) {
+    const current = stackRef.current;
+    const last = current.at(-1);
+    if (last) {
+      const next = [...current.slice(0, -1), { ...last, query, selected }];
+      stackRef.current = next;
+      setStack(next);
+    } else {
+      rootRef.current = { query, selected };
+      setRoot(rootRef.current);
+    }
+    selection.current = selected;
+  }
+  function proceed(next: ReturnType<CommandItem["run"]>) {
+    if (!next) {
+      onClose();
+      return;
+    }
+    if (next === stackRef.current.at(-1)?.step) return;
+    const entries = push(stackRef.current, next);
+    stackRef.current = entries;
+    setStack(entries);
+    selection.current = 0;
+    setChoices({ kind: "loading" });
+  }
+  function goBack() {
+    const current = stackRef.current;
+    if (!current.length) {
+      onClose();
+      return;
+    }
+    const next = back(current) ?? [];
+    stackRef.current = next;
+    setStack(next);
+  }
   const boxWidth = Math.max(1, Math.floor(width * 0.6));
   const boxHeight = Math.min(20, height);
   const capacity = Math.max(1, Math.floor((boxHeight - 4) / 3));
@@ -43,8 +123,7 @@ export function CommandCenter({
   function run(at: number) {
     const row = results[at];
     if (!row) return;
-    onClose();
-    row.item.run();
+    proceed(row.item.run());
   }
   useKeyboard((event) => {
     const movement =
@@ -53,17 +132,34 @@ export function CommandCenter({
         : event.name === "up" || (event.ctrl && event.name === "p")
           ? -1
           : 0;
+    if (step?.kind === "confirm") {
+      if (["y", "n", "escape"].includes(event.name)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.name === "y") {
+          step.confirm();
+          onClose();
+        } else goBack();
+      }
+      return;
+    }
     if (event.name === "escape" || event.name === "return" || movement) {
       event.preventDefault();
       event.stopPropagation();
-      if (event.name === "escape") onClose();
-      else if (event.name === "return") run(selection.current);
-      else {
+      if (event.name === "escape") goBack();
+      else if (event.name === "return") {
+        if (step?.kind === "input")
+          proceed(step.submit(stackRef.current.at(-1)?.query ?? ""));
+        else run(selection.current);
+      } else {
         selection.current = Math.max(
           0,
           Math.min(results.length - 1, selection.current + movement),
         );
-        setSelected(selection.current);
+        change(
+          stackRef.current.at(-1)?.query ?? rootRef.current.query,
+          selection.current,
+        );
       }
     }
   });
@@ -91,23 +187,47 @@ export function CommandCenter({
       >
         <text fg={foregroundProp(theme.fg)} height={1}>
           Command Center
+          {stack.map((entry) => ` › ${entry.step.title}`).join("")}
         </text>
-        <input
-          textColor={foregroundProp(theme.fg)}
-          focusedTextColor={foregroundProp(theme.fg)}
-          backgroundColor={backgroundProp(theme.codeBg)}
-          focusedBackgroundColor={backgroundProp(theme.codeBg)}
-          placeholderColor={foregroundProp(theme.muted)}
-          focused
-          placeholder="Search commands…"
-          value={query}
-          onInput={(value) => {
-            setQuery(value);
-            selection.current = 0;
-            setSelected(0);
-          }}
-        />
-        {results.length === 0 ? (
+        {step?.kind === "confirm" ? (
+          <box
+            id="command:confirm"
+            onMouseDown={(event) => {
+              event.stopPropagation();
+              step.confirm();
+              onClose();
+            }}
+          >
+            <text fg={foregroundProp(theme.fg)}>
+              Confirm · y confirm · n/Esc back
+            </text>
+          </box>
+        ) : (
+          <input
+            key={stack.length}
+            textColor={foregroundProp(theme.fg)}
+            focusedTextColor={foregroundProp(theme.fg)}
+            backgroundColor={backgroundProp(theme.codeBg)}
+            focusedBackgroundColor={backgroundProp(theme.codeBg)}
+            placeholderColor={foregroundProp(theme.muted)}
+            focused
+            placeholder={
+              step?.kind === "input" ? step.placeholder : "Search commands…"
+            }
+            value={query}
+            onInput={(value) => {
+              change(value, 0);
+            }}
+          />
+        )}
+        {step?.kind === "choice" && choices.kind === "loading" ? (
+          <text fg={foregroundProp(theme.muted)}>Loading…</text>
+        ) : null}
+        {step?.kind === "choice" && choices.kind === "error" ? (
+          <text fg={foregroundProp(theme.error)}>! {choices.message}</text>
+        ) : null}
+        {(!step || (step.kind === "choice" && choices.kind === "ready")) &&
+        results.length === 0 ? (
           <text fg={foregroundProp(theme.muted)}>No commands match</text>
         ) : null}
         {results.slice(start, start + capacity).map((row, offset) => {

@@ -6,7 +6,13 @@ import {
   scoreMatch,
   tokenizeQuery,
 } from "@getpaseo/protocol/search/text-match";
-export type CommandGroup = "Agents" | "Workspaces" | "Panes" | "View" | "Help";
+export type CommandGroup =
+  | "Agents"
+  | "Agent"
+  | "Workspaces"
+  | "Panes"
+  | "View"
+  | "Help";
 export interface CommandItem {
   id: string;
   group: CommandGroup;
@@ -15,7 +21,7 @@ export interface CommandItem {
   keywords?: readonly string[];
   shortcut?: string;
   recency?: number;
-  run(): void;
+  run(): undefined | CommandStep;
 }
 export interface CommandSource {
   id: string;
@@ -41,6 +47,7 @@ export function createCommandRegistry(): CommandRegistry {
 }
 const GROUPS: readonly CommandGroup[] = [
   "Agents",
+  "Agent",
   "Workspaces",
   "Panes",
   "View",
@@ -121,3 +128,18 @@ export function rankCommands(
     titleRanges: titleRanges(item, tokens),
   }));
 }
+
+export type CommandStep =
+  | {
+      kind: "choice";
+      title: string;
+      items(): readonly CommandItem[] | Promise<readonly CommandItem[]>;
+    }
+  | {
+      kind: "input";
+      title: string;
+      placeholder: string;
+      initial?: string;
+      submit(text: string): undefined | CommandStep;
+    }
+  | { kind: "confirm"; title: string; confirm(): void };

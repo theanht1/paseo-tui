@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@getpaseo/client": "0.15.0",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
+    "@getpaseo/cli": "0.15.0",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "tsx": "^4.0.0",

@@ -5,7 +5,7 @@
 - Never restart or stop the Paseo daemon on port 6767; this client only reads and steers it.
 - Import only public exports: `@getpaseo/client`, `@getpaseo/client/node`, and `@getpaseo/protocol/*`.
 - Never import `@getpaseo/client/internal/*`.
-- Wrap `DaemonClient.cancelAgent` only in `src/connection/connect.ts`.
+- Call `DaemonClient` instance methods only through `src/connection/daemon-adapter.ts`.
 - Tolerate unknown protocol fields and union variants; unknown timeline/stream types render dim `[<type>]` lines without throwing.
 - Gate newer capabilities once on `server_info.features`; use them or ask the user to update the daemon. No fallback paths.
 - Use strict TypeScript, no `any`, casts that bypass errors, or TypeScript suppression directives.

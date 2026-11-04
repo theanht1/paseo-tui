@@ -22,10 +22,15 @@ test("shared acquire opens once and final release closes once", () => {
       turn: { kind: "idle" },
       pendingPermissions: [],
       lastActionError: null,
+      lastNotice: null,
     }),
     send: async () => {},
     respond: async () => {},
     cancel: async () => {},
+    setMode: async () => {},
+    setModel: async () => {},
+    rename: async () => {},
+    archive: async () => {},
   }));
   const a = registry.acquire(agent("a")),
     b = registry.acquire(agent("a"));
@@ -58,10 +63,15 @@ test("reopen replaces failed or closed store and notifies holders", () => {
       turn: { kind: "idle" },
       pendingPermissions: [],
       lastActionError: null,
+      lastNotice: null,
     }),
     send: async () => {},
     respond: async () => {},
     cancel: async () => {},
+    setMode: async () => {},
+    setModel: async () => {},
+    rename: async () => {},
+    archive: async () => {},
   }));
   const holder = registry.acquire(agent("a"));
   const before = holder.store;

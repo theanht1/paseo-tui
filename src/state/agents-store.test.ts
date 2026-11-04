@@ -10,6 +10,18 @@ import type { AgentsList, AgentsPort } from "./ports.js";
 import { agent, listSnapshot } from "./test-fixtures.js";
 
 class FakeAgents implements AgentsPort {
+  async providers() {
+    return [];
+  }
+  async models() {
+    return [];
+  }
+  async modes() {
+    return [];
+  }
+  async create(): Promise<never> {
+    throw new Error("Unexpected create");
+  }
   agents: PaseoAgent[] = [];
   updates = new Set<(update: PaseoAgentUpdate) => void>();
   observers = new Set<
