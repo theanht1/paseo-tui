@@ -1,13 +1,11 @@
 import type { ConnectionState } from "@getpaseo/client";
+import { useTerminalDimensions } from "@opentui/react";
 import { useContext } from "react";
 import type { TimelineSnapshot, TurnState } from "../state/timeline-store.js";
-import { BINDINGS, type Context, type Mode } from "./input/keymap.js";
-import {
-  backgroundProp,
-  foregroundProp,
-  type Theme,
-  ThemeContext,
-} from "./render/theme.js";
+import { BINDINGS } from "./input/bindings.js";
+import type { Context, Mode } from "./input/keymap.js";
+import { foregroundProp, type Theme, ThemeContext } from "./render/theme.js";
+import { statusLine, truncateCells } from "./status-hints.js";
 import { type ExternalStore, useStore } from "./use-store.js";
 
 function connectionText(
@@ -44,22 +42,6 @@ function turnText(turn: TurnState): string {
       return `failed: ${turn.message}`;
   }
 }
-function TurnLabel({
-  store,
-  theme,
-}: {
-  store: ExternalStore<TimelineSnapshot>;
-  theme: Theme;
-}) {
-  const { turn } = useStore(store);
-  return (
-    <span fg={foregroundProp(turn.kind === "failed" ? theme.error : theme.fg)}>
-      {" · turn "}
-      {turnText(turn)}
-    </span>
-  );
-}
-
 export interface StatusBarProps {
   label: string;
   connection: ExternalStore<ConnectionState>;
@@ -67,6 +49,8 @@ export interface StatusBarProps {
   mode: Mode;
   context: Context;
   searchStatus?: string;
+  terminalInput?: boolean;
+  onHelp?(): void;
 }
 
 export function StatusBar({
@@ -76,37 +60,83 @@ export function StatusBar({
   mode,
   context,
   searchStatus,
+  terminalInput = false,
+  onHelp,
 }: StatusBarProps) {
   const contextValue = useContext(ThemeContext);
   if (!contextValue) throw new Error("ThemeContext required");
   const { theme } = contextValue;
   const state = connectionText(useStore(connection), theme);
+  const { width } = useTerminalDimensions();
   const hints = BINDINGS.filter(
     (b) => b.modes.includes(mode.kind) && (!b.context || b.context === context),
-  )
-    .sort((a, b) => Number(Boolean(b.context)) - Number(Boolean(a.context)))
-    .map((b) => `${b.keys} ${b.description}`)
-    .join(" · ");
+  ).map((b) => `${b.keys} ${b.description}`);
+  const prefix = `${terminalInput ? "Terminal input · Ctrl-] TUI shortcuts · " : ""}${label} ${state.text} ${mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}`;
+  return timeline ? (
+    <TimelineStatus
+      store={timeline}
+      width={width}
+      prefix={prefix}
+      hints={hints}
+      searchStatus={searchStatus ?? ""}
+      onHelp={onHelp}
+    />
+  ) : (
+    <StatusText width={width} prefix={prefix} hints={hints} onHelp={onHelp} />
+  );
+}
+function TimelineStatus({
+  store,
+  prefix,
+  searchStatus,
+  ...rest
+}: {
+  store: ExternalStore<TimelineSnapshot>;
+  prefix: string;
+  searchStatus: string;
+  width: number;
+  hints: readonly string[];
+  onHelp?: () => void;
+}) {
+  const { turn } = useStore(store);
   return (
-    <box height={1} flexShrink={0} flexDirection="row" gap={1}>
-      <text wrapMode="none" flexShrink={0} fg={foregroundProp(theme.fg)}>
-        {label} <span fg={foregroundProp(state.color)}>{state.text}</span>
+    <StatusText
+      {...rest}
+      prefix={`${prefix} · turn ${turnText(turn)}${searchStatus ? ` · ${searchStatus}` : ""}`}
+    />
+  );
+}
+function StatusText({
+  width,
+  prefix,
+  hints,
+  onHelp,
+}: {
+  width: number;
+  prefix: string;
+  hints: readonly string[];
+  onHelp?: () => void;
+}) {
+  const context = useContext(ThemeContext);
+  if (!context) throw Error("ThemeContext required");
+  const line = statusLine(width, prefix, hints);
+  const head = truncateCells(prefix, Math.max(0, width - 14));
+  return (
+    <box height={1} flexShrink={0} flexDirection="row">
+      <text wrapMode="none" fg={foregroundProp(context.theme.fg)}>
+        {head}
+      </text>
+      <text wrapMode="none" fg={foregroundProp(context.theme.muted)}>
+        {line.slice(head.length, -11)}
       </text>
       <text
-        flexShrink={0}
-        bg={backgroundProp(theme.selectionBg)}
-        fg={foregroundProp(theme.accent)}
-      >
-        {mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}
-      </text>
-      <text
+        id="status-shortcuts"
         wrapMode="none"
-        flexGrow={1}
-        minWidth={0}
-        fg={foregroundProp(theme.muted)}
+        flexShrink={0}
+        fg={foregroundProp(context.theme.accent)}
+        onMouseDown={onHelp}
       >
-        {timeline ? <TurnLabel store={timeline} theme={theme} /> : null} ·{" "}
-        {searchStatus} {hints}
+        ? shortcuts
       </text>
     </box>
   );

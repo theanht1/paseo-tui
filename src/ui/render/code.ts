@@ -35,7 +35,7 @@ const FILES: Readonly<Record<string, string>> = {
 };
 
 export function languageFile(lang: string): string | null {
-  const language = lang.trim().split(/\s+/)[0].toLowerCase();
+  const language = (lang.trim().split(/\s+/)[0] ?? "").toLowerCase();
   const file = Object.hasOwn(FILES, language) ? FILES[language] : undefined;
   return file && isLanguageSupported(file) ? file : null;
 }

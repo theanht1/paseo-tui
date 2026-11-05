@@ -1,3 +1,4 @@
+import { BINDINGS } from "./bindings.js";
 export interface Stroke {
   name: string;
   ctrl: boolean;
@@ -10,7 +11,9 @@ export type Mode =
   | { kind: "insert" }
   | { kind: "prefix"; returnTo?: "normal" | "insert" }
   | { kind: "search"; query: string }
-  | { kind: "palette" };
+  | { kind: "palette" }
+  | { kind: "copy" }
+  | { kind: "hint" };
 export type Context = "sidebar" | "pane";
 export type Action =
   | {
@@ -28,7 +31,20 @@ export type Action =
         | "block.collapseAll"
         | "agent.cycleMode"
         | "stop"
-        | "palette.open";
+        | "palette.open"
+        | "palette.close"
+        | "copy.start"
+        | "copy.exit"
+        | "hint.start"
+        | "hint.cancel"
+        | "prompt.edit"
+        | "subagents.open"
+        | "workspace.create"
+        | "workspace.rename"
+        | "tab.create"
+        | "tab.createTerminal"
+        | "tab.rename"
+        | "tab.close";
     }
   | { type: "list.move" | "scroll.lines" | "block.move"; delta: number }
   | { type: "list.edge" | "scroll.edge"; edge: "top" | "bottom" }
@@ -46,292 +62,20 @@ export type Action =
         | "search.cancel"
         | "prefix.literal";
     }
+  | { type: "tab.cycle"; delta: number }
   | { type: "pane.select"; index: number }
   | { type: "search.update"; query: string }
-  | { type: "search.next"; dir: 1 | -1 };
+  | { type: "search.next"; dir: 1 | -1 }
+  | { type: "copy.key" | "hint.key"; key: string };
 export interface Binding {
   keys: string;
   modes: Mode["kind"][];
   context?: Context;
   action: Action;
   description: string;
+  /** Documented here for help and hints but handled by the focused input itself. */
+  inert?: true;
 }
-export const BINDINGS: readonly Binding[] = [
-  {
-    keys: "Shift-Tab",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "agent.cycleMode" },
-    description: "Cycle agent mode",
-  },
-  {
-    keys: "Ctrl-K",
-    modes: ["normal", "insert", "prefix", "search", "palette"],
-    action: { type: "palette.open" },
-    description: "Command Center",
-  },
-  {
-    keys: ":",
-    modes: ["normal", "prefix"],
-    action: { type: "palette.open" },
-    description: "Command Center",
-  },
-  {
-    keys: "%",
-    modes: ["prefix"],
-    action: { type: "pane.split", direction: "right" },
-    description: "Split right",
-  },
-  {
-    keys: '"',
-    modes: ["prefix"],
-    action: { type: "pane.split", direction: "down" },
-    description: "Split down",
-  },
-  ...(["left", "down", "up", "right"] as const).map(
-    (direction, i): Binding => ({
-      keys: ["h / Left", "j / Down", "k / Up", "l / Right"][i] ?? "",
-      modes: ["prefix"],
-      action: { type: "pane.focus", direction },
-      description: `Focus ${direction}`,
-    }),
-  ),
-  {
-    keys: "o",
-    modes: ["prefix"],
-    action: { type: "pane.next" },
-    description: "Next pane",
-  },
-  {
-    keys: "x",
-    modes: ["prefix"],
-    action: { type: "pane.close" },
-    description: "Close pane",
-  },
-  {
-    keys: "z",
-    modes: ["prefix"],
-    action: { type: "pane.zoom" },
-    description: "Zoom pane",
-  },
-  {
-    keys: "q",
-    modes: ["prefix"],
-    action: { type: "pane.numbers" },
-    description: "Show pane numbers",
-  },
-  ...Array.from(
-    { length: 10 },
-    (_, index): Binding => ({
-      keys: String(index),
-      modes: ["prefix"],
-      action: { type: "pane.select", index },
-      description: `Select pane ${index}`,
-    }),
-  ),
-  {
-    keys: "?",
-    modes: ["prefix"],
-    action: { type: "help" },
-    description: "Help",
-  },
-  {
-    keys: "/",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "search.start" },
-    description: "Search timeline",
-  },
-  {
-    keys: "n",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "search.next", dir: 1 },
-    description: "Next match",
-  },
-  {
-    keys: "N",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "search.next", dir: -1 },
-    description: "Previous match",
-  },
-  {
-    keys: "\\",
-    modes: ["normal"],
-    action: { type: "sidebar.toggle" },
-    description: "Toggle sidebar",
-  },
-  {
-    keys: "q",
-    modes: ["normal"],
-    action: { type: "quit" },
-    description: "Quit",
-  },
-  {
-    keys: "Ctrl-C",
-    modes: ["normal", "insert"],
-    action: { type: "quit" },
-    description: "Quit",
-  },
-  {
-    keys: "?",
-    modes: ["normal"],
-    action: { type: "help" },
-    description: "Help",
-  },
-  {
-    keys: "Tab",
-    modes: ["normal"],
-    action: { type: "focus.toggleSidebar" },
-    description: "Switch sidebar/pane",
-  },
-  {
-    keys: "Ctrl-X",
-    modes: ["normal"],
-    action: { type: "stop" },
-    description: "Stop running turn",
-  },
-  {
-    keys: "j / Down",
-    modes: ["normal"],
-    context: "sidebar",
-    action: { type: "list.move", delta: 1 },
-    description: "Next agent",
-  },
-  {
-    keys: "k / Up",
-    modes: ["normal"],
-    context: "sidebar",
-    action: { type: "list.move", delta: -1 },
-    description: "Previous agent",
-  },
-  {
-    keys: "g g",
-    modes: ["normal"],
-    context: "sidebar",
-    action: { type: "list.edge", edge: "top" },
-    description: "First agent",
-  },
-  {
-    keys: "G",
-    modes: ["normal"],
-    context: "sidebar",
-    action: { type: "list.edge", edge: "bottom" },
-    description: "Last agent",
-  },
-  {
-    keys: "Enter / l",
-    modes: ["normal"],
-    context: "sidebar",
-    action: { type: "list.open" },
-    description: "Open agent",
-  },
-  {
-    keys: "j / Down",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.lines", delta: 1 },
-    description: "Scroll down",
-  },
-  {
-    keys: "k / Up",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.lines", delta: -1 },
-    description: "Scroll up",
-  },
-  {
-    keys: "Ctrl-d",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.half", dir: 1 },
-    description: "Half page down",
-  },
-  {
-    keys: "Ctrl-u",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.half", dir: -1 },
-    description: "Half page up",
-  },
-  {
-    keys: "Ctrl-f / PgDn",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.page", dir: 1 },
-    description: "Page down",
-  },
-  {
-    keys: "Ctrl-b / PgUp",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.page", dir: -1 },
-    description: "Page up",
-  },
-  {
-    keys: "g g",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.edge", edge: "top" },
-    description: "History top",
-  },
-  {
-    keys: "G",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "scroll.edge", edge: "bottom" },
-    description: "Bottom and follow",
-  },
-  {
-    keys: "{",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "block.move", delta: -1 },
-    description: "Previous block",
-  },
-  {
-    keys: "}",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "block.move", delta: 1 },
-    description: "Next block",
-  },
-  {
-    keys: "o / Enter",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "block.toggle" },
-    description: "Toggle block",
-  },
-  {
-    keys: "O",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "block.toggleAll" },
-    description: "Expand/collapse all",
-  },
-  {
-    keys: "i / a",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "insert" },
-    description: "Edit prompt",
-  },
-  {
-    keys: "Esc",
-    modes: ["normal"],
-    context: "pane",
-    action: { type: "focus.toggleSidebar" },
-    description: "Focus sidebar",
-  },
-  {
-    keys: "Esc",
-    modes: ["insert"],
-    action: { type: "normal" },
-    description: "Leave insert mode",
-  },
-];
 function label(stroke: Stroke): string {
   if (stroke.ctrl) return `Ctrl-${stroke.name.toLowerCase()}`;
   if (stroke.name === "tab" && stroke.shift) return "Shift-Tab";
@@ -363,14 +107,17 @@ export function dispatch(
 ): { mode: Mode; action: Action | null } {
   const key = label(stroke);
   const normal: Mode = { kind: "normal", pending: "" };
-  if (key.toLowerCase() === "ctrl-c")
-    return { mode: normal, action: { type: "quit" } };
+  if (key.toLowerCase() === "ctrl-c") return interrupt(mode);
+  if (key.toLowerCase() === "ctrl-n")
+    return { mode: normal, action: { type: "tab.create" } };
   if (
     key.toLowerCase() === "ctrl-k" ||
     ((mode.kind === "normal" || mode.kind === "prefix") && key === ":")
   )
     return { mode: { kind: "palette" }, action: { type: "palette.open" } };
   if (mode.kind === "palette") return { mode, action: null };
+  if (mode.kind === "copy") return { mode, action: { type: "copy.key", key } };
+  if (mode.kind === "hint") return { mode, action: { type: "hint.key", key } };
   if (mode.kind === "search") {
     if (key === "Enter")
       return { mode: normal, action: { type: "search.commit" } };
@@ -415,12 +162,26 @@ export function dispatch(
           )?.action ?? null);
     return { mode: normal, action };
   }
+  if (mode.kind === "normal" && key === "Z")
+    return { mode: { kind: "normal", pending: "Z" }, action: null };
+  if (mode.kind === "normal" && mode.pending === "Z" && key === "Q")
+    return { mode: normal, action: { type: "tab.close" } };
   if (mode.kind === "normal" && key === "g" && mode.pending !== "g")
     return { mode: { kind: "normal", pending: "g" }, action: null };
+  if (
+    mode.kind === "normal" &&
+    mode.pending === "g" &&
+    (key === "t" || key === "T")
+  )
+    return {
+      mode: normal,
+      action: { type: "tab.cycle", delta: key === "t" ? 1 : -1 },
+    };
   const candidate =
     mode.kind === "normal" && mode.pending === "g" && key === "g" ? "g g" : key;
   const binding = BINDINGS.find(
     (b) =>
+      !b.inert &&
       b.modes.includes(mode.kind) &&
       (!b.context || b.context === context) &&
       b.keys
@@ -436,26 +197,163 @@ export function dispatch(
     mode:
       action?.type === "search.start"
         ? { kind: "search", query: "" }
-        : action?.type === "insert"
-          ? { kind: "insert" }
-          : action?.type === "normal"
-            ? normal
-            : mode.kind === "prefix" &&
-                mode.returnTo === "insert" &&
-                action?.type !== "pane.numbers"
+        : action?.type === "copy.start"
+          ? { kind: "copy" }
+          : action?.type === "hint.start"
+            ? { kind: "hint" }
+            : action?.type === "insert"
               ? { kind: "insert" }
-              : mode.kind === "insert"
-                ? mode
-                : normal,
+              : action?.type === "normal"
+                ? normal
+                : mode.kind === "prefix" &&
+                    mode.returnTo === "insert" &&
+                    action?.type !== "pane.numbers"
+                  ? { kind: "insert" }
+                  : mode.kind === "insert"
+                    ? mode
+                    : normal,
     action,
   };
 }
+/** Ctrl-C leaves whatever input or transient mode is active; only normal mode arms quit. */
+/** The mode the Command Center restores when it closes. */
+export function paletteReturnMode(mode: Mode): Mode {
+  if (mode.kind === "prefix")
+    return mode.returnTo === "insert"
+      ? { kind: "insert" }
+      : { kind: "normal", pending: "" };
+  if (mode.kind === "copy") return { kind: "normal", pending: "" };
+  return mode;
+}
+export function interrupt(mode: Mode): { mode: Mode; action: Action | null } {
+  const normal: Mode = { kind: "normal", pending: "" };
+  switch (mode.kind) {
+    case "normal":
+      return { mode: normal, action: { type: "quit" } };
+    case "insert":
+      return { mode: normal, action: { type: "normal" } };
+    case "search":
+      return { mode: normal, action: { type: "search.cancel" } };
+    case "copy":
+      return { mode: normal, action: { type: "copy.exit" } };
+    case "hint":
+      return { mode: normal, action: { type: "hint.cancel" } };
+    case "palette":
+      return { mode: normal, action: { type: "palette.close" } };
+    case "prefix":
+      return {
+        mode: normal,
+        action: mode.returnTo === "insert" ? { type: "normal" } : null,
+      };
+  }
+}
+/**
+ * Actions that only make sense as in-context keystrokes, never as Command Center entries.
+ * File hints label what is on screen, which the Command Center covers; it lists the chat's
+ * files itself ("Open file from this chat…").
+ */
+const KEYSTROKE_ONLY: ReadonlySet<Action["type"]> = new Set([
+  "quit",
+  "insert",
+  "normal",
+  "palette.open",
+  "palette.close",
+  "copy.exit",
+  "copy.key",
+  "hint.start",
+  "hint.key",
+  "hint.cancel",
+  "list.move",
+  "list.edge",
+  "list.open",
+  "scroll.lines",
+  "scroll.edge",
+  "scroll.half",
+  "scroll.page",
+  "block.move",
+  "block.toggle",
+  "search.start",
+  "search.update",
+  "search.commit",
+  "search.cancel",
+  "search.next",
+  "prefix.literal",
+  "pane.select",
+]);
+export interface PaletteAction {
+  action: Action;
+  title: string;
+  shortcut: string;
+}
+/** Command Center actions derived from BINDINGS, one per distinct action with all of its shortcuts. */
+export function paletteActions(prefixLabel: string): PaletteAction[] {
+  const entries = new Map<string, PaletteAction>();
+  for (const binding of BINDINGS) {
+    if (KEYSTROKE_ONLY.has(binding.action.type)) continue;
+    const shortcut = binding.modes.includes("prefix")
+      ? `${prefixLabel} ${binding.keys}`
+      : binding.keys;
+    const key = JSON.stringify(binding.action);
+    const entry = entries.get(key);
+    if (entry) entry.shortcut = `${entry.shortcut} / ${shortcut}`;
+    else
+      entries.set(key, {
+        action: binding.action,
+        title: binding.description,
+        shortcut,
+      });
+  }
+  return [...entries.values()];
+}
+export function bindingSection(binding: Binding, prefixLabel: string) {
+  if (binding.modes.includes("prefix")) return prefixLabel;
+  if (binding.modes.every((mode) => mode === "copy")) return "copy mode";
+  return binding.context ?? "any";
+}
 export function helpRows(prefixLabel: string) {
-  return BINDINGS.map((b) => ({
-    section: b.modes.includes("prefix") ? prefixLabel : (b.context ?? "any"),
-    keys: b.keys,
-    description: b.description,
-  }));
+  return [
+    {
+      section: "terminal input",
+      keys: "Ctrl-]",
+      description: "Return to TUI shortcuts (all other keys go to shell)",
+    },
+    {
+      section: "agent question",
+      keys: "↑↓ / j k · 1-9",
+      description: "Move / pick an option (Other opens a text answer)",
+    },
+    {
+      section: "agent question",
+      keys: "Space · Tab / ←→",
+      description: "Toggle a multi-select option · switch question",
+    },
+    {
+      section: "agent question",
+      keys: "Enter · Esc",
+      description: "Next question or submit · cancel (deny) the question",
+    },
+    ...BINDINGS.map((b) => ({
+      section: bindingSection(b, prefixLabel),
+      keys: b.keys,
+      description: b.description,
+    })),
+    { section: "input popups", keys: "Esc", description: "Back / close popup" },
+    {
+      section: "shortcut search",
+      keys: "Esc",
+      description: "Clear search, then close",
+    },
+    {
+      section: "shortcut search",
+      keys: "Tab",
+      description: "Focus search / results",
+    },
+    {
+      section: "shortcut search",
+      keys: "q",
+      description: "Close on empty results focus",
+    },
+  ];
 }
 
 export function parsePrefix(value: string): Stroke {

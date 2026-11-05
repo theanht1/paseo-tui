@@ -1,7 +1,13 @@
 import { extname } from "node:path";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
+import {
+  type BoxRenderable,
+  type CliRenderer,
+  type ScrollBoxRenderable,
+  TextAttributes,
+} from "@opentui/core";
+import { useRenderer } from "@opentui/react";
 import { createTwoFilesPatch } from "diff";
 import {
   type Ref,
@@ -13,8 +19,32 @@ import {
   useRef,
   useState,
 } from "react";
-import type { TimelineStore } from "../App.js";
-import { agentName, shortPath } from "../agent-display.js";
+import type { TimelineStore } from "../../state/timeline-store.js";
+import { agentName, shortPath } from "../agent/agent-display.js";
+import { WorkingIndicator } from "../agent/WorkingIndicator.js";
+import {
+  type CopyEffect,
+  type CopyState,
+  copyKey,
+  documentLines,
+  startCopy,
+} from "../copy/copy-mode.js";
+import { FileLinksContext } from "../file-links/context.js";
+import { mentionAt } from "../file-links/detect.js";
+import {
+  assignHints,
+  type HintState,
+  hintKey,
+  screenSpots,
+} from "../file-links/hints.js";
+import {
+  type FileLink,
+  type FileResolver,
+  fileResolver,
+  linkifyMarkdown,
+  timelineLinks,
+} from "../file-links/links.js";
+import type { PathVerifier } from "../file-links/verify.js";
 import type { Action } from "../input/keymap.js";
 import { Markdown } from "../render/markdown.js";
 import {
@@ -24,7 +54,8 @@ import {
   ThemeContext,
 } from "../render/theme.js";
 import { useStore } from "../use-store.js";
-import { type Block, toBlocks } from "./blocks.js";
+import { type Block, blockText, toBlocks } from "./blocks.js";
+import { CopyView } from "./CopyView.js";
 import { setAll, toggle } from "./expansion.js";
 import { findMatches, nextMatch } from "./search.js";
 
@@ -112,6 +143,13 @@ function ToolDetail({ detail }: { detail: ToolCallDetail }) {
       return null;
   }
 }
+function filePath(detail: ToolCallDetail): string | null {
+  return detail.type === "read" ||
+    detail.type === "edit" ||
+    detail.type === "write"
+    ? detail.filePath
+    : null;
+}
 function summary(detail: ToolCallDetail): string {
   switch (detail.type) {
     case "shell":
@@ -134,31 +172,54 @@ function summary(detail: ToolCallDetail): string {
       return "";
   }
 }
+export function UserMessage({ text }: { text: string }) {
+  const context = useContext(ThemeContext);
+  if (!context) throw Error("ThemeContext required");
+  const { theme } = context;
+  return (
+    <box
+      backgroundColor={backgroundProp(theme.userBg)}
+      paddingLeft={1}
+      paddingRight={1}
+      flexDirection="column"
+    >
+      <text fg={foregroundProp(theme.user)}>
+        <strong>You</strong>
+      </text>
+      <text fg={foregroundProp(theme.user)}>
+        <strong>{text}</strong>
+      </text>
+    </box>
+  );
+}
+
 function BlockBody({
   block,
   expanded,
   streaming,
   onToggle,
+  linkify,
 }: {
   block: Block;
   expanded: boolean;
   streaming: boolean;
-  onToggle(): void;
+  onToggle(event: { x: number; y: number }): void;
+  /** Present when file links are enabled. */
+  linkify: ((text: string) => string) | null;
 }) {
   const context = useContext(ThemeContext);
   if (!context) throw Error("ThemeContext required");
   const { theme } = context;
   switch (block.kind) {
     case "assistant":
-      return <Markdown text={block.text} streaming={streaming} />;
-    case "user":
       return (
-        <box backgroundColor={backgroundProp(theme.selectionBg)}>
-          <text fg={foregroundProp(theme.user)}>
-            <strong>› {block.text}</strong>
-          </text>
-        </box>
+        <Markdown
+          text={linkify ? linkify(block.text) : block.text}
+          streaming={streaming}
+        />
       );
+    case "user":
+      return <UserMessage text={block.text} />;
     case "reasoning":
       return (
         <box flexDirection="column">
@@ -192,7 +253,17 @@ function BlockBody({
                 : status === "failed"
                   ? "✗"
                   : "·"}{" "}
-            {block.call.name} {summary(block.call.detail).replace(/\s+/g, " ")}
+            {block.call.name}{" "}
+            {linkify && filePath(block.call.detail) ? (
+              <span
+                fg={foregroundProp(theme.accent)}
+                attributes={TextAttributes.UNDERLINE}
+              >
+                {filePath(block.call.detail)}
+              </span>
+            ) : (
+              summary(block.call.detail).replace(/\s+/g, " ")
+            )}
           </text>
           {expanded ? <ToolDetail detail={block.call.detail} /> : null}
         </box>
@@ -227,23 +298,95 @@ function BlockBody({
 export interface TimelineControls {
   act(action: Action): void;
 }
+/** Header fields; a provider subagent supplies them from its descriptor. */
+export type TimelineAgent = Pick<
+  PaseoAgent,
+  | "id"
+  | "title"
+  | "provider"
+  | "model"
+  | "availableModes"
+  | "currentModeId"
+  | "status"
+  | "cwd"
+  | "activeTurn"
+>;
 export function TimelineView({
   store,
   agent,
   focused,
+  paneFocused,
   controls,
   onSearchStatus,
+  copying = false,
+  onCopy = () => {},
+  hinting = false,
+  onHintDone = () => {},
 }: {
   store: TimelineStore;
-  agent: PaseoAgent;
+  agent: TimelineAgent;
   focused: boolean;
+  paneFocused: boolean;
   controls: Ref<TimelineControls>;
   onSearchStatus: (status: string) => void;
+  copying?: boolean;
+  onCopy?(effect: Exclude<CopyEffect, { kind: "none" | "file" }>): void;
+  /** File-hint mode is active for this pane. */
+  hinting?: boolean;
+  onHintDone?(): void;
 }) {
   const context = useContext(ThemeContext);
   if (!context) throw Error("ThemeContext required");
+  const renderer = useRenderer();
+  const files = useContext(FileLinksContext);
   const snapshot = useStore(store);
   const blocks = useMemo(() => toBlocks(snapshot.rows), [snapshot.rows]);
+  const links = useMemo(
+    () => timelineLinks(blocks, agent.cwd),
+    [blocks, agent.cwd],
+  );
+  useEffect(() => {
+    files?.verifier.request(
+      links.filter((link) => link.source === "text").map((link) => link.path),
+    );
+  }, [files, links]);
+  const verified = useStore(files?.verifier ?? NO_VERIFIER);
+  const resolver = useMemo(
+    () =>
+      files
+        ? fileResolver(
+            links,
+            agent.cwd,
+            (path) => verified >= 0 && files.verifier.status(path) === "file",
+          )
+        : null,
+    [files, links, agent.cwd, verified],
+  );
+  const root = useRef<BoxRenderable>(null);
+  const [hint, setHint] = useState<HintState<FileLink> | null>(null);
+  const hintRef = useRef(hint);
+  hintRef.current = hint;
+  const resolverRef = useRef(resolver);
+  resolverRef.current = resolver;
+  const onHintDoneRef = useRef(onHintDone);
+  onHintDoneRef.current = onHintDone;
+  useEffect(() => {
+    if (!hinting) setHint(null);
+  }, [hinting]);
+  function open(link: FileLink) {
+    files?.open(agent.id, link);
+  }
+  const openRef = useRef(open);
+  openRef.current = open;
+  /** Opens the link drawn at a screen cell; false when there is none. */
+  function openAt(x: number, y: number): boolean {
+    const row = screenRows(renderer)[y];
+    if (!resolver || row === undefined) return false;
+    const mention = mentionAt(row, Array.from(row).slice(0, x).join("").length);
+    const link = mention ? resolver.resolve(mention) : null;
+    if (link) open(link);
+    return link !== null;
+  }
   const scroll = useRef<ScrollBoxRenderable>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selectedKey, select] = useState<string | null>(null);
@@ -272,6 +415,14 @@ export function TimelineView({
     setExpanded(value);
   }, []);
   const draft = useRef("");
+  const [copy, setCopy] = useState<CopyState | null>(null);
+  const copyRef = useRef(copy);
+  copyRef.current = copy;
+  const onCopyRef = useRef(onCopy);
+  onCopyRef.current = onCopy;
+  useEffect(() => {
+    if (!copying) setCopy(null);
+  }, [copying]);
   useEffect(() => {
     onSearchStatus(
       query
@@ -295,6 +446,69 @@ export function TimelineView({
         const box = scroll.current;
         if (!box) return;
         switch (action.type) {
+          case "copy.start": {
+            const next = startCopy(
+              documentLines(
+                blocks.flatMap((block, index) => [
+                  ...(index ? [""] : []),
+                  ...blockText(block).split("\n"),
+                ]),
+                Math.max(1, box.viewport.width - 1),
+              ),
+              Math.max(1, box.viewport.height),
+            );
+            copyRef.current = next;
+            setCopy(next);
+            break;
+          }
+          case "copy.key": {
+            const state = copyRef.current;
+            if (!state) break;
+            const result = copyKey(state, action.key);
+            copyRef.current = result.state;
+            setCopy(result.state);
+            if (result.effect.kind === "file") {
+              const { text, col } = result.effect;
+              const mention = mentionAt(
+                text,
+                Array.from(text).slice(0, col).join("").length,
+              );
+              const link = mention
+                ? (resolverRef.current?.resolve(mention) ?? null)
+                : null;
+              if (link) {
+                openRef.current(link);
+                onCopyRef.current({ kind: "exit" });
+              } else files?.notify("No file path under the cursor");
+            } else if (result.effect.kind !== "none")
+              onCopyRef.current(result.effect);
+            break;
+          }
+          case "hint.start": {
+            const targets = resolverRef.current
+              ? assignHints(visibleSpots(renderer, box, resolverRef.current))
+              : [];
+            if (targets.length) setHint({ targets, typed: "" });
+            else {
+              files?.notify("No file paths on screen");
+              onHintDoneRef.current();
+            }
+            break;
+          }
+          case "hint.key": {
+            const state = hintRef.current;
+            if (!state) break;
+            const result = hintKey(state, action.key);
+            hintRef.current = result.state;
+            setHint(result.state);
+            if (result.effect.kind === "open")
+              openRef.current(result.effect.value);
+            if (result.effect.kind !== "none") {
+              setHint(null);
+              onHintDoneRef.current();
+            }
+            break;
+          }
           case "search.start":
             draft.current = "";
             break;
@@ -381,19 +595,33 @@ export function TimelineView({
         }
       },
     }),
-    [expandCurrent, selectCurrent],
+    [expandCurrent, selectCurrent, files, renderer],
   );
+  const linkify = useMemo(
+    () =>
+      resolver
+        ? (text: string) => linkifyMarkdown(text, agent.cwd, resolver.isFile)
+        : null,
+    [resolver, agent.cwd],
+  );
+  const origin = root.current;
   const modeLabel = agent.availableModes.find(
     (mode) => mode.id === agent.currentModeId,
   )?.label;
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={1}>
+    <box ref={root} flexDirection="column" flexGrow={1} minHeight={1}>
       <text
-        fg={foregroundProp(context.theme.fg)}
+        fg={foregroundProp(
+          paneFocused ? context.theme.accent : context.theme.faint,
+        )}
         wrapMode="none"
         flexShrink={0}
       >
-        <strong>{agentName(agent)}</strong> {agent.provider}
+        <strong>{agentName(agent)}</strong>{" "}
+        {snapshot.turn.kind === "running" || agent.status === "initializing" ? (
+          <WorkingIndicator />
+        ) : null}{" "}
+        {agent.provider}
         {agent.model ? `/${agent.model}` : ""}
         {modeLabel ? ` · ${modeLabel}` : ""} · {agent.status} ·{" "}
         {shortPath(agent.cwd)}
@@ -416,7 +644,9 @@ export function TimelineView({
           {snapshot.lastNotice}
         </text>
       ) : null}
+      {copy ? <CopyView state={copy} /> : null}
       <scrollbox
+        visible={!copy}
         scrollbarOptions={scrollbarOptions(context.theme)}
         ref={scroll}
         flexGrow={1}
@@ -433,6 +663,9 @@ export function TimelineView({
             flexDirection="row"
             marginBottom={1}
             flexShrink={0}
+            onMouseDown={(event) => {
+              if (openAt(event.x, event.y)) event.stopPropagation();
+            }}
           >
             <text fg={foregroundProp(context.theme.fg)} width={1}>
               {selectedKey === block.key ? "▌" : " "}
@@ -444,7 +677,9 @@ export function TimelineView({
                 streaming={
                   i === blocks.length - 1 && snapshot.turn.kind === "running"
                 }
-                onToggle={() => {
+                linkify={linkify}
+                onToggle={(event) => {
+                  if (resolver && linkAt(renderer, resolver, event)) return;
                   selectCurrent(block.key);
                   expandCurrent(toggle(current.current.expanded, block.key));
                 }}
@@ -452,7 +687,90 @@ export function TimelineView({
             </box>
           </box>
         ))}
+        {snapshot.turn.kind === "running" ? (
+          <text
+            id={`timeline-working:${agent.id}`}
+            height={1}
+            flexShrink={0}
+            fg={foregroundProp(context.theme.muted)}
+          >
+            <WorkingIndicator
+              key={snapshot.turn.turnId ?? "running"}
+              showElapsed
+              startedAt={
+                agent.activeTurn?.startedAt &&
+                agent.activeTurn.turnId === snapshot.turn.turnId
+                  ? Date.parse(agent.activeTurn.startedAt)
+                  : undefined
+              }
+            />
+          </text>
+        ) : null}
       </scrollbox>
+      {hint && origin
+        ? hint.targets
+            .filter((target) => target.label.startsWith(hint.typed))
+            .map((target) => (
+              <text
+                key={`hint:${target.row}:${target.col}`}
+                id={`file-hint:${target.label}`}
+                position="absolute"
+                left={Math.max(0, target.col - origin.x - target.label.length)}
+                top={target.row - origin.y}
+                height={1}
+                wrapMode="none"
+                bg={backgroundProp(context.theme.accent)}
+                fg={foregroundProp(context.theme.cursorFg)}
+                attributes={
+                  context.theme.accent
+                    ? TextAttributes.BOLD
+                    : TextAttributes.BOLD | TextAttributes.INVERSE
+                }
+              >
+                {target.label}
+              </text>
+            ))
+        : null}
     </box>
+  );
+}
+const NO_VERIFIER: Pick<PathVerifier, "subscribe" | "getSnapshot"> = {
+  subscribe: () => () => {},
+  getSnapshot: () => 0,
+};
+/** The last drawn frame as text rows (what the user sees). */
+function screenRows(renderer: CliRenderer): string[] {
+  return new TextDecoder()
+    .decode(renderer.currentRenderBuffer.getRealCharBytes(true))
+    .split("\n");
+}
+function linkAt(
+  renderer: CliRenderer,
+  resolver: FileResolver,
+  point: { x: number; y: number },
+): boolean {
+  const row = screenRows(renderer)[point.y];
+  if (row === undefined) return false;
+  const mention = mentionAt(
+    row,
+    Array.from(row).slice(0, point.x).join("").length,
+  );
+  return mention !== null && resolver.resolve(mention) !== null;
+}
+function visibleSpots(
+  renderer: CliRenderer,
+  box: ScrollBoxRenderable,
+  resolver: FileResolver,
+) {
+  const width = box.viewport.width;
+  const rows = screenRows(renderer)
+    .slice(box.y, box.y + box.viewport.height)
+    .map((row) =>
+      Array.from(row)
+        .slice(box.x, box.x + width)
+        .join(""),
+    );
+  return screenSpots(rows, { x: box.x, y: box.y }, (mention) =>
+    resolver.resolve(mention),
   );
 }

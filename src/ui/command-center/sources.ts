@@ -1,14 +1,18 @@
+import { posix } from "node:path";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { WorkspaceGroup } from "../../state/agents-store.js";
 import type { CatalogModel } from "../../state/ports.js";
-import type { TimelineStore } from "../App.js";
-import { agentName, shortPath } from "../agent-display.js";
-import { type Action, BINDINGS, helpRows } from "../input/keymap.js";
+import type { TimelineStore } from "../../state/timeline-store.js";
+import { agentName, shortPath } from "../agent/agent-display.js";
+import type { FileLink } from "../file-links/links.js";
+import { type Action, paletteActions } from "../input/keymap.js";
 import { assign, type Layout, split } from "../layout/split-tree.js";
+import type { WorkspaceRow } from "../workspace/workspaces.js";
 import { type CreateDeps, createAgentStep } from "./create-agent.js";
 import type { CommandItem, CommandSource } from "./registry.js";
 export interface BuiltinContext {
   groups: readonly WorkspaceGroup[];
+  workspaces: readonly WorkspaceRow[];
   focusedAgent: PaseoAgent | undefined;
   prefixLabel: string;
   focusedStore: TimelineStore | null;
@@ -16,8 +20,10 @@ export interface BuiltinContext {
   models?(provider: string): Promise<CatalogModel[]>;
   open(agent: PaseoAgent): void;
   changeLayout(change: (layout: Layout) => Layout): void;
-  workspace(agentId: string): void;
+  workspace(workspace: WorkspaceRow): void;
   act(action: Action): void;
+  /** Files mentioned in the focused chat, most recent first. */
+  files?: { list(): readonly FileLink[]; open(link: FileLink): void };
 }
 export function builtinSource(context: BuiltinContext): CommandSource {
   return {
@@ -50,17 +56,17 @@ export function builtinSource(context: BuiltinContext): CommandSource {
             },
           });
         }
-        const first = group.agents[0];
-        if (first)
-          items.push({
-            id: `workspace:${group.key}`,
-            group: "Workspaces",
-            title: shortPath(first.cwd),
-            subtitle: group.key,
-            run(): undefined {
-              context.workspace(first.id);
-            },
-          });
+      }
+      for (const workspace of context.workspaces) {
+        items.push({
+          id: `workspace:${workspace.id}`,
+          group: "Workspaces",
+          title: workspace.title || workspace.name,
+          subtitle: workspace.workspaceDirectory ?? workspace.projectRootPath,
+          run(): undefined {
+            context.workspace(workspace);
+          },
+        });
       }
       const createAgent = context.createAgent;
       if (createAgent)
@@ -71,53 +77,18 @@ export function builtinSource(context: BuiltinContext): CommandSource {
           keywords: ["create", "new"],
           run: () => createAgentStep(createAgent),
         });
-      items.push(...agentCommands(context));
-      for (const binding of BINDINGS) {
-        if (
-          binding.modes.includes("prefix") &&
-          ["pane.split", "pane.close", "pane.zoom", "pane.next"].includes(
-            binding.action.type,
-          )
-        )
-          items.push({
-            id: `pane:${binding.keys}`,
-            group: "Panes",
-            title: binding.description,
-            shortcut: `${context.prefixLabel} ${binding.keys}`,
-            run(): undefined {
-              context.act(binding.action);
-            },
-          });
-      }
-      items.push(
-        {
-          id: "sidebar",
-          group: "View",
-          title: "Toggle sidebar",
+      items.push(...agentCommands(context), ...fileCommands(context));
+      for (const entry of paletteActions(context.prefixLabel))
+        items.push({
+          id: `action:${JSON.stringify(entry.action)}`,
+          group: "Actions",
+          title: entry.title,
+          shortcut: entry.shortcut,
           run(): undefined {
-            context.act({ type: "sidebar.toggle" });
+            context.act(entry.action);
           },
-        },
-        {
-          id: "help",
-          group: "View",
-          title: "Keyboard shortcuts",
-          run(): undefined {
-            context.act({ type: "help" });
-          },
-        },
-      );
+        });
       if (context.focusedAgent) {
-        if (context.focusedAgent.status === "running")
-          items.push({
-            id: "stop",
-            group: "View",
-            title: "Stop turn",
-            shortcut: "Ctrl-X",
-            run(): undefined {
-              context.act({ type: "stop" });
-            },
-          });
         items.push(
           {
             id: "expand-all",
@@ -137,17 +108,6 @@ export function builtinSource(context: BuiltinContext): CommandSource {
           },
         );
       }
-      for (const [index, row] of helpRows(context.prefixLabel).entries())
-        items.push({
-          id: `help:${index}`,
-          group: "Help",
-          title: row.description,
-          subtitle: row.section,
-          shortcut: row.keys,
-          run(): undefined {
-            context.act({ type: "help" });
-          },
-        });
       return items;
     },
   };
@@ -241,4 +201,40 @@ function agentCommands(context: BuiltinContext): CommandItem[] {
     );
   }
   return items;
+}
+
+function fileTitle(link: FileLink, cwd: string) {
+  const relative = posix.relative(cwd, link.path);
+  const name =
+    relative && !relative.startsWith("..") && !posix.isAbsolute(relative)
+      ? relative
+      : shortPath(link.path);
+  return link.line === null ? name : `${name}:${link.line}`;
+}
+function fileCommands(context: BuiltinContext): CommandItem[] {
+  const { files, focusedAgent: agent } = context;
+  if (!files || !agent) return [];
+  return [
+    {
+      id: "open-chat-file",
+      group: "Agent",
+      title: "Open file from this chat…",
+      keywords: ["vim", "edit", "path"],
+      shortcut: "F",
+      run: () => ({
+        kind: "choice",
+        title: "Open file",
+        items: () =>
+          files.list().map((link, index) => ({
+            id: `chat-file:${index}:${link.path}:${link.line ?? ""}`,
+            group: "Agent",
+            title: fileTitle(link, agent.cwd),
+            subtitle: link.path,
+            run(): undefined {
+              files.open(link);
+            },
+          })),
+      }),
+    },
+  ];
 }

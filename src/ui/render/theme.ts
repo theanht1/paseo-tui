@@ -15,6 +15,7 @@ export interface Theme {
   faint: string;
   accent: string;
   user: string;
+  userBg: string;
   assistant: string;
   tool: string;
   reasoning: string;
@@ -24,8 +25,18 @@ export interface Theme {
   border: string;
   borderFocused: string;
   selectionBg: string;
+  cursorBg: string;
+  cursorFg: string;
   codeBg: string;
-  status: Record<"running" | "idle" | "error" | "attention", string>;
+  /** tmux `mode-style`: copy-mode selection and the copy cursor on top of it. */
+  copySelectionBg: string;
+  copySelectionFg: string;
+  copyCursorBg: string;
+  copyCursorFg: string;
+  status: Record<
+    "running" | "idle" | "error" | "attention" | "question",
+    string
+  >;
   syntax: Record<HighlightStyle, string>;
   heading: [string, string, string];
 }
@@ -63,7 +74,8 @@ export function createTheme(env: NodeJS.ProcessEnv): Theme {
     muted: color("#9a9a9a"),
     faint: color("#707070"),
     accent: color("#82aaff"),
-    user: color("#82aaff"),
+    user: color("#c8dcff"),
+    userBg: color("#35496a"),
     assistant: color("#d4d4d4"),
     tool: color("#89ddff"),
     reasoning: color("#b0a0c0"),
@@ -73,12 +85,19 @@ export function createTheme(env: NodeJS.ProcessEnv): Theme {
     border: color("#454545"),
     borderFocused: color("#82aaff"),
     selectionBg: color("#283142"),
+    cursorBg: color("#82aaff"),
+    cursorFg: color("#101820"),
     codeBg: color("#20242c"),
+    copySelectionBg: color("#ffd700"),
+    copySelectionFg: color("#000000"),
+    copyCursorBg: color("#ffffff"),
+    copyCursorFg: color("#000000"),
     status: {
       running: color("#82aaff"),
       idle: color("#c3e88d"),
       error: color("#f07178"),
       attention: color("#ffcb6b"),
+      question: color("#c792ea"),
     },
     syntax: {
       ...darkHighlightColors,
@@ -123,6 +142,7 @@ export function createSyntaxStyle(
       "markup.italic": style(theme.fg, { italic: true }),
       "markup.raw": style(theme.tool),
       "markup.link": style(theme.accent, { underline: true }),
+      "markup.link.label": style(theme.accent, { underline: true }),
       "punctuation.special": style(theme.faint),
       conceal: style(theme.faint),
     },

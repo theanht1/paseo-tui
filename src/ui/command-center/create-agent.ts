@@ -5,12 +5,14 @@ import type {
   CatalogProvider,
   CreateAgentInput,
 } from "../../state/ports.js";
+import type { ThinkingPreference } from "../agent/thinking-preference.js";
 import type { CommandStep } from "./registry.js";
 
 export interface CreateDeps {
   providers(): Promise<CatalogProvider[]>;
   models(provider: string): Promise<CatalogModel[]>;
   modes(provider: string): Promise<CatalogMode[]>;
+  thinkingPreference?: ThinkingPreference;
   workspaces: readonly { key: string; cwd: string; label: string }[];
   defaultCwd: string | null;
   create(input: CreateAgentInput): Promise<PaseoAgent>;
@@ -18,7 +20,14 @@ export interface CreateDeps {
   failed(message: string): void;
 }
 
-export function createAgentStep(deps: CreateDeps): CommandStep {
+export function agentConfigurationStep(
+  deps: Pick<
+    CreateDeps,
+    "providers" | "models" | "modes" | "thinkingPreference"
+  >,
+  cwd: string,
+  onSubmit: (input: CreateAgentInput) => void,
+): CommandStep {
   function providerStep(cwd: string): CommandStep {
     const step: CommandStep = {
       kind: "choice",
@@ -48,20 +57,30 @@ export function createAgentStep(deps: CreateDeps): CommandStep {
             subtitle: [model.description, model.isDefault ? "default" : null]
               .filter(Boolean)
               .join(" · "),
-            run: () => modeStep(cwd, provider, model.id),
+            run: () => modeStep(cwd, provider, model),
           })),
     };
   }
   function modeStep(
     cwd: string,
     provider: CatalogProvider,
-    model: string,
+    model: CatalogModel,
   ): CommandStep {
     return {
       kind: "choice",
       title: "Mode",
-      items: async () =>
-        (await deps.modes(provider.id))
+      items: async () => {
+        const modes = await deps.modes(provider.id);
+        if (!modes.length)
+          return [
+            {
+              id: "mode:default",
+              group: "Agents",
+              title: "Provider default",
+              run: () => thinkingStep(cwd, provider.id, model, null),
+            },
+          ];
+        return modes
           .toSorted(
             (a, b) =>
               Number(b.id === provider.defaultModeId) -
@@ -77,15 +96,53 @@ export function createAgentStep(deps: CreateDeps): CommandStep {
             ]
               .filter(Boolean)
               .join(" · "),
-            run: () => titleStep(cwd, provider.id, model, mode.id),
-          })),
+            run: () => thinkingStep(cwd, provider.id, model, mode.id),
+          }));
+      },
+    };
+  }
+  function thinkingStep(
+    cwd: string,
+    provider: string,
+    model: CatalogModel,
+    modeId: string | null,
+  ): CommandStep {
+    const thinking = model.thinking;
+    if (!thinking) return titleStep(cwd, provider, model.id, modeId);
+    return {
+      kind: "choice",
+      title: "Thinking",
+      items: () => {
+        if (thinking.kind === "unsupported") throw Error(thinking.message);
+        const preferred = deps.thinkingPreference?.get() ?? "medium";
+        return [...thinking.options]
+          .sort(
+            (a, b) => Number(b.id === preferred) - Number(a.id === preferred),
+          )
+          .map((option) => ({
+            id: `thinking:${option.id}`,
+            group: "Agents",
+            title: option.label,
+            subtitle: [
+              option.description,
+              option.id === preferred ? "default" : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            run: () => {
+              deps.thinkingPreference?.set(option.id);
+              return titleStep(cwd, provider, model.id, modeId, option.id);
+            },
+          }));
+      },
     };
   }
   function titleStep(
     cwd: string,
     provider: string,
     model: string,
-    modeId: string,
+    modeId: string | null,
+    thinkingOptionId?: string,
   ): CommandStep {
     return {
       kind: "input",
@@ -94,27 +151,50 @@ export function createAgentStep(deps: CreateDeps): CommandStep {
       submit: (title) => ({
         kind: "input",
         title: "First prompt",
-        placeholder: "First prompt (optional)",
-        submit(prompt): undefined {
-          void deps
-            .create({
+        placeholder: "First prompt (optional) · / commands · @ files",
+        completion: {
+          source: {
+            kind: "draft",
+            config: {
               provider,
-              model,
-              modeId,
               cwd,
-              title: title.trim() || null,
-              prompt: prompt.trim() ? prompt : null,
-            })
-            .then(deps.opened, (error: unknown) => {
-              deps.failed(
-                error instanceof Error ? error.message : String(error),
-              );
-            });
+              model,
+              ...(modeId ? { modeId } : {}),
+              ...(thinkingOptionId !== undefined ? { thinkingOptionId } : {}),
+            },
+          },
+          cwd,
+        },
+        submit(prompt): undefined {
+          onSubmit({
+            provider,
+            model,
+            modeId,
+            ...(thinkingOptionId !== undefined ? { thinkingOptionId } : {}),
+            cwd,
+            title: title.trim() || null,
+            prompt: prompt.trim() ? prompt : null,
+          });
         },
       }),
     };
   }
-  if (deps.defaultCwd) return providerStep(deps.defaultCwd);
+  return providerStep(cwd);
+}
+export function createAgentStep(deps: CreateDeps): CommandStep {
+  function configured(cwd: string) {
+    return agentConfigurationStep(deps, cwd, (input) => {
+      const create = () => deps.create(input);
+      void (
+        deps.thinkingPreference
+          ? deps.thinkingPreference.flush().then(create)
+          : create()
+      ).then(deps.opened, (error: unknown) =>
+        deps.failed(error instanceof Error ? error.message : String(error)),
+      );
+    });
+  }
+  if (deps.defaultCwd) return configured(deps.defaultCwd);
   return {
     kind: "choice",
     title: "Workspace",
@@ -124,7 +204,7 @@ export function createAgentStep(deps: CreateDeps): CommandStep {
         group: "Workspaces",
         title: workspace.label,
         subtitle: workspace.cwd,
-        run: () => providerStep(workspace.cwd),
+        run: () => configured(workspace.cwd),
       })),
   };
 }

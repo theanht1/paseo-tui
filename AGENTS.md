@@ -1,11 +1,12 @@
 # Development
 
 - Use Node 26.4 or newer (OpenTUI needs `--experimental-ffi`); keep Paseo packages pinned to 0.15.0.
-- Never commit or push unless Anh explicitly asks. Use Graphite to amend a tracked branch's current commit.
+- Never commit or push unless the user explicitly asks. Use Graphite to amend a tracked branch's current commit.
 - Never restart or stop the Paseo daemon on port 6767; this client only reads and steers it.
 - Import only public exports: `@getpaseo/client`, `@getpaseo/client/node`, and `@getpaseo/protocol/*`.
 - Never import `@getpaseo/client/internal/*`.
 - Call `DaemonClient` instance methods only through `src/connection/daemon-adapter.ts`.
+- Layers import downward only: `ui/` → `state/` → `connection/` (Biome enforces it); `src/session.ts` wires them; daemon-facing port types live in `src/connection/ports.ts`.
 - Tolerate unknown protocol fields and union variants; unknown timeline/stream types render dim `[<type>]` lines without throwing.
 - Gate newer capabilities once on `server_info.features`; use them or ask the user to update the daemon. No fallback paths.
 - Use strict TypeScript, no `any`, casts that bypass errors, or TypeScript suppression directives.

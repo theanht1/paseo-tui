@@ -4,8 +4,8 @@ import type {
 } from "@getpaseo/client";
 import { afterEach, beforeEach, expect, inject, it } from "vitest";
 import { type Connection, connect } from "../connection/connect.js";
+import { createSession } from "../session.js";
 import { createAgentPort } from "./ports.js";
-import { createSession } from "./session.js";
 
 let connection: Connection;
 let session: ReturnType<typeof createSession>;

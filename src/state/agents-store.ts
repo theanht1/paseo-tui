@@ -22,29 +22,30 @@ function priority(agent: PaseoAgent): number {
   return active ? 0 : 1;
 }
 function groupAgents(agents: Iterable<PaseoAgent>): WorkspaceGroup[] {
-  const groups = new Map<string, PaseoAgent[]>();
+  const groups = new Map<
+    string,
+    { key: string; agents: PaseoAgent[]; updatedAt: string }
+  >();
   for (const agent of agents) {
     if (agent.archivedAt != null) continue;
     const key = agent.workspaceId ?? agent.cwd;
-    const group = groups.get(key) ?? [];
-    group.push(agent);
-    groups.set(key, group);
+    const group = groups.get(key);
+    if (!group) {
+      groups.set(key, { key, agents: [agent], updatedAt: agent.updatedAt });
+      continue;
+    }
+    group.agents.push(agent);
+    if (Date.parse(agent.updatedAt) > Date.parse(group.updatedAt))
+      group.updatedAt = agent.updatedAt;
   }
-  const view: WorkspaceGroup[] = [];
-  for (const [key, agents] of groups) {
+  const view = [...groups.values()];
+  for (const { agents } of view)
     agents.sort(
       (a, b) =>
         priority(a) - priority(b) ||
         Date.parse(b.updatedAt) - Date.parse(a.updatedAt) ||
         a.id.localeCompare(b.id),
     );
-    let updatedAt = agents[0].updatedAt;
-    for (const agent of agents) {
-      if (Date.parse(agent.updatedAt) > Date.parse(updatedAt))
-        updatedAt = agent.updatedAt;
-    }
-    view.push({ key, agents, updatedAt });
-  }
   return view.sort(
     (a, b) =>
       Date.parse(b.updatedAt) - Date.parse(a.updatedAt) ||

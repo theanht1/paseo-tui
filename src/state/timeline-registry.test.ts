@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { agent } from "./test-fixtures.js";
+import { agent } from "../test/fixtures.js";
 import { createTimelineRegistry } from "./timeline-registry.js";
 import type { TimelineSnapshot } from "./timeline-store.js";
 

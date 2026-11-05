@@ -6,13 +6,29 @@ import {
 } from "@getpaseo/client";
 import { createHostClient, parseHostTarget } from "@getpaseo/client/node";
 import packageJson from "../../package.json" with { type: "json" };
-import { createDaemonAdapter, type DaemonAdapter } from "./daemon-adapter.js";
+import {
+  createCompletionAdapter,
+  createDaemonAdapter,
+  createDirectoryAdapter,
+  createGitAdapter,
+  createManagementAdapter,
+  createSubagentAdapter,
+  createTerminalStreamAdapter,
+  type DaemonAdapter,
+  requireWorkspaceCapabilities,
+} from "./daemon-adapter.js";
 import { readLocalCredentialForTarget } from "./local-credential.js";
 import { type HostTarget, resolveListen } from "./target.js";
 
 export interface Connection {
   api: PaseoApi;
   daemon: DaemonAdapter;
+  management: ReturnType<typeof createManagementAdapter>;
+  terminalStream: ReturnType<typeof createTerminalStreamAdapter>;
+  completions: ReturnType<typeof createCompletionAdapter>;
+  git: ReturnType<typeof createGitAdapter>;
+  directories: ReturnType<typeof createDirectoryAdapter>;
+  subagents: ReturnType<typeof createSubagentAdapter>;
   label: string;
   onConnectionState(cb: (state: ConnectionState) => void): () => void;
   close(): Promise<void>;
@@ -46,6 +62,7 @@ export async function connect(target: HostTarget): Promise<Connection> {
   });
   try {
     await daemon.connect();
+    requireWorkspaceCapabilities(daemon);
   } catch (error) {
     const authFailure = daemon.authFailureReason;
     await daemon.close();
@@ -73,6 +90,12 @@ export async function connect(target: HostTarget): Promise<Connection> {
     api: createPaseoApi(daemon),
     label,
     daemon: createDaemonAdapter(daemon),
+    management: createManagementAdapter(daemon),
+    terminalStream: createTerminalStreamAdapter(daemon),
+    completions: createCompletionAdapter(daemon),
+    git: createGitAdapter(daemon),
+    directories: createDirectoryAdapter(daemon),
+    subagents: createSubagentAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
     close: () => daemon.close(),
   };

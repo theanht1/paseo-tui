@@ -3,7 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot, flushSync } from "@opentui/react";
 import { afterEach, expect, inject, it } from "vitest";
 import { connect } from "../connection/connect.js";
-import { createSession } from "../state/session.js";
+import { createSession } from "../session.js";
 import { App } from "./App.js";
 import {
   createSyntaxStyle,
@@ -50,6 +50,10 @@ async function setup() {
           label={connection.label}
           connection={session.status}
           agents={session.agents}
+          directory={session.directory}
+          terminals={session.terminals}
+          management={session.management}
+          refresh={session.refresh}
           timelines={session.timelines}
           catalog={session.agentsPort}
           onExit={() => renderer.renderer.destroy()}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { at } from "../../test/at.js";
 import {
   type CommandItem,
   createCommandRegistry,
@@ -27,13 +28,16 @@ describe("command ranking", () => {
   });
   it("breaks ties by recency", () => {
     expect(
-      rankCommands(
-        [
-          item("old", { title: "Alpha", recency: 1 }),
-          item("new", { title: "Alpha", recency: 2 }),
-        ],
-        "alpha",
-      )[0].item.id,
+      at(
+        rankCommands(
+          [
+            item("old", { title: "Alpha", recency: 1 }),
+            item("new", { title: "Alpha", recency: 2 }),
+          ],
+          "alpha",
+        ),
+        0,
+      ).item.id,
     ).toBe("new");
   });
   it("unregisters sources", () => {
@@ -50,7 +54,7 @@ describe("command ranking", () => {
     expect(
       rankCommands(
         [
-          item("pane", { group: "Panes" }),
+          item("pane", { group: "Actions" }),
           item("old"),
           item("new", { recency: 1 }),
         ],
@@ -60,7 +64,7 @@ describe("command ranking", () => {
   });
   it("highlights scattered subsequence matches", () => {
     expect(
-      rankCommands([item("paseo-babysit")], "pasbab")[0].titleRanges,
+      at(rankCommands([item("paseo-babysit")], "pasbab"), 0).titleRanges,
     ).toEqual([
       { start: 0, length: 3 },
       { start: 6, length: 3 },

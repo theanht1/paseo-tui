@@ -1,4 +1,5 @@
 #!/usr/bin/env -S NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning
+import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type CliRendererConfig, createCliRenderer } from "@opentui/core";
@@ -6,10 +7,21 @@ import { createRoot } from "@opentui/react";
 import packageJson from "../package.json" with { type: "json" };
 import { connect } from "./connection/connect.js";
 import { resolveTarget } from "./connection/target.js";
-import { createSession } from "./state/session.js";
+import { createSession } from "./session.js";
 import { App } from "./ui/App.js";
+import {
+  filePreferenceStorage,
+  loadThinkingPreference,
+  thinkingPreferencePath,
+} from "./ui/agent/thinking-preference.js";
 import { createCommandRegistry } from "./ui/command-center/registry.js";
+import { nodeClipboardRunner, systemClipboard } from "./ui/copy/clipboard.js";
 import { parsePrefix } from "./ui/input/keymap.js";
+import {
+  editExternally,
+  nodeEditorFiles,
+  nodeEditorSpawn,
+} from "./ui/prompt/external-editor.js";
 import {
   createSyntaxStyle,
   createTheme,
@@ -66,6 +78,9 @@ async function main() {
     { host: values.host, home: values.home },
     process.env,
   );
+  const thinkingPreference = await loadThinkingPreference(
+    filePreferenceStorage(thinkingPreferencePath(process.env, homedir())),
+  );
   const connection = await connect(target);
   const session = createSession(connection);
   const { agentsPort, agents, status, timelines } = session;
@@ -86,10 +101,33 @@ async function main() {
           label={connection.label}
           connection={status}
           agents={agents}
+          directory={session.directory}
+          terminals={session.terminals}
+          terminalStream={session.terminalStream}
+          thinkingPreference={thinkingPreference}
+          management={session.management}
+          clearAttention={session.clearAttention}
+          refresh={session.refresh}
           catalog={agentsPort}
           timelines={timelines}
           commands={commands}
           prefix={prefix}
+          completions={connection.completions}
+          directories={connection.directories}
+          systemClipboard={systemClipboard(
+            process.platform,
+            process.env,
+            nodeClipboardRunner,
+          )}
+          subagents={session.subagents}
+          editPrompt={(text, host) =>
+            editExternally(text, {
+              env: process.env,
+              host,
+              files: nodeEditorFiles(),
+              spawn: nodeEditorSpawn,
+            })
+          }
           onExit={() => renderer.destroy()}
         />
       </ThemeContext>,
@@ -102,10 +140,12 @@ async function main() {
     process.off("uncaughtException", uncaught);
     await session.close();
     await connection.close();
+    await thinkingPreference.flush();
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) {
   main().then(
     () => process.exit(0),
     (error: unknown) => {

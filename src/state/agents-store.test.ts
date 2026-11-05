@@ -5,9 +5,9 @@ import type {
   SubscriptionObserver,
 } from "@getpaseo/client";
 import { describe, expect, it } from "vitest";
+import { agent, listSnapshot } from "../test/fixtures.js";
 import { createAgentsStore } from "./agents-store.js";
 import type { AgentsList, AgentsPort } from "./ports.js";
-import { agent, listSnapshot } from "./test-fixtures.js";
 
 class FakeAgents implements AgentsPort {
   async providers() {

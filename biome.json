@@ -14,5 +14,47 @@
       },
       "a11y": "off"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/connection/**", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/state/**", "**/ui/**", "**/session.js"],
+                    "message": "connection/ is the bottom layer: depend only on @getpaseo/* and node built-ins."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/state/**", "!**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/ui/**", "**/session.js"],
+                    "message": "state/ must not depend on ui/ or the session root; move shared types into state/ or connection/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

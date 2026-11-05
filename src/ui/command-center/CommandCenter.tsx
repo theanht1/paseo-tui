@@ -1,26 +1,44 @@
 import { TextAttributes } from "@opentui/core";
+import { useRenderer, useTerminalDimensions } from "@opentui/react";
 import {
-  useKeyboard,
-  useRenderer,
-  useTerminalDimensions,
-} from "@opentui/react";
-import { Fragment, useContext, useEffect, useRef, useState } from "react";
+  Fragment,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { CompletionPort } from "../../connection/ports.js";
+import { useKeyOwner } from "../input/key-router.js";
+import {
+  CLOSED_COMPLETIONS,
+  createCompletionStore,
+} from "../prompt/prompt-completion.js";
 import {
   backgroundProp,
   foregroundProp,
   ThemeContext,
 } from "../render/theme.js";
+import { useStore } from "../use-store.js";
 import {
   type CommandItem,
   type CommandRegistry,
+  type CommandStep,
   rankCommands,
 } from "./registry.js";
-import { back, push, type StackEntry } from "./steps.js";
+import { back, breadcrumb, push, type StackEntry } from "./steps.js";
 export function CommandCenter({
   registry,
+  initialStep,
+  title = "Command Center",
+  completions,
   onClose,
 }: {
   registry: CommandRegistry;
+  initialStep?: CommandStep;
+  title?: string;
+  /** Serves `/` and `@` suggestions for input steps that ask for them. */
+  completions?: CompletionPort;
   onClose(): void;
 }) {
   const renderer = useRenderer();
@@ -35,7 +53,9 @@ export function CommandCenter({
   if (!context) throw Error("ThemeContext required");
   const { theme } = context;
   const { width, height } = useTerminalDimensions();
-  const [stack, setStack] = useState<StackEntry[]>([]);
+  const [stack, setStack] = useState<StackEntry[]>(() =>
+    initialStep ? push([], initialStep) : [],
+  );
   const stackRef = useRef(stack);
   const [root, setRoot] = useState({ query: "", selected: 0 });
   const rootRef = useRef(root);
@@ -70,14 +90,29 @@ export function CommandCenter({
       active = false;
     };
   }, [step]);
-  const results = rankCommands(
-    step
-      ? step.kind === "choice" && choices.kind === "ready"
-        ? choices.items
-        : []
-      : registry.items(),
-    query,
+  const candidates = step
+    ? step.kind === "choice" && choices.kind === "ready"
+      ? choices.items
+      : []
+    : registry.items();
+  const results = rankCommands(candidates, query);
+  const completion = useMemo(
+    () =>
+      step?.kind === "input" && step.completion && completions
+        ? createCompletionStore(completions, step.completion)
+        : null,
+    [step, completions],
   );
+  useEffect(() => () => completion?.close(), [completion]);
+  const popup = useStore(completion ?? CLOSED_COMPLETIONS);
+  function setInput(value: string) {
+    change(value, 0);
+    completion?.update(value, value.length);
+  }
+  function acceptCompletion(index?: number) {
+    const result = completion?.accept(index);
+    if (result) setInput(result.text);
+  }
   const index = Math.min(selected, Math.max(0, results.length - 1));
   const selection = useRef(index);
   selection.current = index;
@@ -108,7 +143,7 @@ export function CommandCenter({
   }
   function goBack() {
     const current = stackRef.current;
-    if (!current.length) {
+    if (!current.length || (initialStep && current.length === 1)) {
       onClose();
       return;
     }
@@ -121,47 +156,68 @@ export function CommandCenter({
   const capacity = Math.max(1, Math.floor((boxHeight - 4) / 3));
   const start = Math.max(0, index - capacity + 1);
   function run(at: number) {
-    const row = results[at];
+    const latest = stackRef.current.at(-1)?.query ?? rootRef.current.query;
+    const row = (latest === query ? results : rankCommands(candidates, latest))[
+      at
+    ];
     if (!row) return;
     proceed(row.item.run());
   }
-  useKeyboard((event) => {
+  function submitInput() {
+    if (step?.kind === "input")
+      proceed(step.submit(stackRef.current.at(-1)?.query ?? ""));
+  }
+  useKeyOwner(true, (stroke) => {
+    if (completion && popup.kind === "open") {
+      if (stroke.name === "down" || (stroke.ctrl && stroke.name === "n")) {
+        completion.move(1);
+        return true;
+      }
+      if (stroke.name === "up" || (stroke.ctrl && stroke.name === "p")) {
+        completion.move(-1);
+        return true;
+      }
+      if (stroke.name === "escape") {
+        completion.dismiss();
+        return true;
+      }
+      if (
+        (stroke.name === "tab" || stroke.name === "return") &&
+        popup.items.length
+      ) {
+        acceptCompletion();
+        return true;
+      }
+    }
     const movement =
-      event.name === "down" || (event.ctrl && event.name === "n")
+      stroke.name === "down" || (stroke.ctrl && stroke.name === "n")
         ? 1
-        : event.name === "up" || (event.ctrl && event.name === "p")
+        : stroke.name === "up" || (stroke.ctrl && stroke.name === "p")
           ? -1
           : 0;
     if (step?.kind === "confirm") {
-      if (["y", "n", "escape"].includes(event.name)) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.name === "y") {
-          step.confirm();
-          onClose();
-        } else goBack();
-      }
-      return;
+      if (!["y", "n", "escape"].includes(stroke.name)) return false;
+      if (stroke.name === "y") {
+        step.confirm();
+        onClose();
+      } else goBack();
+      return true;
     }
-    if (event.name === "escape" || event.name === "return" || movement) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.name === "escape") goBack();
-      else if (event.name === "return") {
-        if (step?.kind === "input")
-          proceed(step.submit(stackRef.current.at(-1)?.query ?? ""));
-        else run(selection.current);
-      } else {
-        selection.current = Math.max(
-          0,
-          Math.min(results.length - 1, selection.current + movement),
-        );
-        change(
-          stackRef.current.at(-1)?.query ?? rootRef.current.query,
-          selection.current,
-        );
-      }
-    }
+    if (stroke.name === "escape") goBack();
+    else if (stroke.name === "return") {
+      if (step?.kind === "input") submitInput();
+      else run(selection.current);
+    } else if (movement) {
+      selection.current = Math.max(
+        0,
+        Math.min(results.length - 1, selection.current + movement),
+      );
+      change(
+        stackRef.current.at(-1)?.query ?? rootRef.current.query,
+        selection.current,
+      );
+    } else return false;
+    return true;
   });
   return (
     <box
@@ -186,8 +242,11 @@ export function CommandCenter({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <text fg={foregroundProp(theme.fg)} height={1}>
-          Command Center
-          {stack.map((entry) => ` › ${entry.step.title}`).join("")}
+          {breadcrumb(
+            title,
+            stack.map((entry) => entry.step.title),
+            boxWidth - 2,
+          )}
         </text>
         {step?.kind === "confirm" ? (
           <box
@@ -215,11 +274,72 @@ export function CommandCenter({
               step?.kind === "input" ? step.placeholder : "Search commands…"
             }
             value={query}
-            onInput={(value) => {
-              change(value, 0);
-            }}
+            onInput={setInput}
           />
         )}
+        {popup.kind === "open" ? (
+          <box
+            id="command:completions"
+            flexDirection="column"
+            flexShrink={0}
+            border
+            borderColor={foregroundProp(theme.accent)}
+            title={
+              popup.trigger.kind === "slash"
+                ? "Commands · ↑↓ Tab/Enter Esc"
+                : "Files · ↑↓ Tab/Enter Esc"
+            }
+          >
+            {popup.items.length === 0 ? (
+              <text height={1} fg={foregroundProp(theme.muted)}>
+                {popup.error
+                  ? `! ${popup.error}`
+                  : popup.loading
+                    ? "Loading…"
+                    : "No matches"}
+              </text>
+            ) : null}
+            {popup.items.slice(0, 6).map((item, index) => (
+              <text
+                key={item.value}
+                id={`command:completion:${index}`}
+                height={1}
+                wrapMode="none"
+                fg={foregroundProp(
+                  index === popup.index ? theme.accent : theme.fg,
+                )}
+                bg={backgroundProp(
+                  index === popup.index ? theme.selectionBg : theme.codeBg,
+                )}
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                  acceptCompletion(index);
+                }}
+              >
+                {index === popup.index ? "› " : "  "}
+                {item.label}
+                {item.detail ? (
+                  <span fg={foregroundProp(theme.muted)}>
+                    {`  ${item.detail}`}
+                  </span>
+                ) : null}
+              </text>
+            ))}
+          </box>
+        ) : null}
+        {step?.kind === "input" ? (
+          <text
+            id="command:submit"
+            fg={foregroundProp(theme.accent)}
+            onMouseDown={(event) => {
+              event.stopPropagation();
+              submitInput();
+            }}
+          >
+            {" "}
+            [ Apply ]{" "}
+          </text>
+        ) : null}
         {step?.kind === "choice" && choices.kind === "loading" ? (
           <text fg={foregroundProp(theme.muted)}>Loading…</text>
         ) : null}
@@ -234,7 +354,8 @@ export function CommandCenter({
           const at = start + offset;
           return (
             <box key={row.item.id} flexShrink={0} flexDirection="column">
-              {at === start || results[at - 1].item.group !== row.item.group ? (
+              {at === start ||
+              results[at - 1]?.item.group !== row.item.group ? (
                 <text height={1} fg={foregroundProp(theme.muted)}>
                   {row.item.group}
                 </text>
@@ -262,10 +383,7 @@ export function CommandCenter({
                       <Fragment key={`${row.item.id}:${range.start}`}>
                         <span>
                           {row.item.title.slice(
-                            index === 0
-                              ? 0
-                              : row.titleRanges[index - 1].start +
-                                  row.titleRanges[index - 1].length,
+                            rangeEnd(row.titleRanges[index - 1]),
                             range.start,
                           )}
                         </span>
@@ -305,4 +423,8 @@ export function CommandCenter({
       </box>
     </box>
   );
+}
+
+function rangeEnd(range: { start: number; length: number } | undefined) {
+  return range ? range.start + range.length : 0;
 }

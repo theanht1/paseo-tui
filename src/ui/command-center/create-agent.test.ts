@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CreateAgentInput } from "../../state/ports.js";
-import { agent } from "../../state/test-fixtures.js";
+import { at } from "../../test/at.js";
+import { agent } from "../../test/fixtures.js";
 import { type CreateDeps, createAgentStep } from "./create-agent.js";
 import type { CommandItem } from "./registry.js";
 
@@ -59,13 +60,13 @@ function fixture(defaultCwd: string | null = "/repo") {
 }
 async function titleStep(deps: CreateDeps) {
   const providers = await choices(createAgentStep(deps));
-  const models = await choices(providers[1].run());
-  expect(models[0].title).toBe("Best");
-  expect(models[0].subtitle).toContain("default");
-  const modes = await choices(models[0].run());
-  expect(modes[0].title).toBe("Ask");
-  expect(modes[0].subtitle).toContain("default");
-  return modes[0].run();
+  const models = await choices(at(providers, 1).run());
+  expect(at(models, 0).title).toBe("Best");
+  expect(at(models, 0).subtitle).toContain("default");
+  const modes = await choices(at(models, 0).run());
+  expect(at(modes, 0).title).toBe("Ask");
+  expect(at(modes, 0).subtitle).toContain("default");
+  return at(modes, 0).run();
 }
 describe("create agent steps", () => {
   it("skips workspace with a focused cwd, orders defaults first, and opens success with null empty fields", async () => {
@@ -90,15 +91,15 @@ describe("create agent steps", () => {
     const root = createAgentStep(f.deps);
     expect(root.title).toBe("Workspace");
     const workspaces = await choices(root);
-    expect(workspaces[0].title).toBe("Repo");
-    expect(workspaces[0].run()?.title).toBe("Provider");
+    expect(at(workspaces, 0).title).toBe("Repo");
+    expect(at(workspaces, 0).run()?.title).toBe("Provider");
   });
   it("keeps unavailable providers on the provider step", async () => {
     const f = fixture();
     const root = createAgentStep(f.deps);
     const providers = await choices(root);
-    expect(providers[0].subtitle).toBe("Sign in");
-    const next = providers[0].run();
+    expect(at(providers, 0).subtitle).toBe("Sign in");
+    const next = at(providers, 0).run();
     expect(next?.title).toBe("Provider");
     expect(next).toBe(root);
     expect((await choices(next)).map((item) => item.title)).toEqual([
@@ -117,4 +118,61 @@ describe("create agent steps", () => {
     expect(f.failed).toEqual(["Create denied"]);
     expect(f.opened).toEqual([]);
   });
+});
+it("allows the provider default when the provider exposes no selectable modes", async () => {
+  const f = fixture();
+  f.deps.modes = async () => [];
+  const providers = await choices(createAgentStep(f.deps));
+  const models = await choices(at(providers, 1).run());
+  const modes = await choices(at(models, 0).run());
+  expect(modes[0]?.title).toBe("Provider default");
+  submit(submit(at(modes, 0).run(), "Agent"), "hello");
+  await Promise.resolve();
+  expect(f.inputs[0]?.modeId).toBeNull();
+});
+it("selects medium thinking by default, persists a supported choice, and sends the native thinking option", async () => {
+  const { loadThinkingPreference } = await import(
+    "../agent/thinking-preference.js"
+  );
+  let contents: string | null = null;
+  const preference = await loadThinkingPreference({
+    read: async () => contents,
+    write: async (value) => {
+      contents = value;
+    },
+  });
+  const f = fixture();
+  f.deps.thinkingPreference = preference;
+  f.deps.models = async () => [
+    {
+      id: "best",
+      label: "Best",
+      description: null,
+      isDefault: true,
+      thinking: {
+        kind: "options",
+        options: [
+          { id: "low", label: "Low" },
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+      },
+    },
+  ];
+  const providers = await choices(createAgentStep(f.deps));
+  const models = await choices(at(providers, 1).run());
+  const modes = await choices(at(models, 0).run());
+  const thinking = await choices(at(modes, 0).run());
+  expect(at(thinking, 0).title).toBe("Medium");
+  const high = thinking.find((item) => item.title === "High");
+  if (!high) throw Error("No high option");
+  submit(submit(high.run(), "Title"), "Prompt");
+  await preference.flush();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(f.inputs[0]).toMatchObject({ thinkingOptionId: "high" });
+  const restarted = await loadThinkingPreference({
+    read: async () => contents,
+    write: async () => {},
+  });
+  expect(restarted.get()).toBe("high");
 });

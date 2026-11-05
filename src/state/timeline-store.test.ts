@@ -4,8 +4,9 @@ import type {
   AgentPermissionResponse,
 } from "@getpaseo/protocol/agent-types";
 import { describe, expect, it } from "vitest";
-import type { AgentPort, TimelineCursor, TimelinePage } from "./ports.js";
-import { agent, page } from "./test-fixtures.js";
+import type { TimelineCursor } from "../connection/ports.js";
+import { agent, page } from "../test/fixtures.js";
+import type { AgentPort, TimelinePage } from "./ports.js";
 import { createTimelineStore } from "./timeline-store.js";
 
 function deferred<T>() {

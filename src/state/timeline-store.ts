@@ -4,8 +4,9 @@ import type {
   AgentPermissionResponse,
   AgentTimelineItem,
 } from "@getpaseo/protocol/agent-types";
+import type { TimelineCursor } from "../connection/ports.js";
 import { createEmitter } from "./emitter.js";
-import type { AgentPort, TimelineCursor, TimelinePage } from "./ports.js";
+import type { AgentPort, TimelinePage } from "./ports.js";
 
 export interface TimelineRow {
   seq: number;
@@ -50,6 +51,7 @@ function pageRows(page: TimelinePage): TimelineRow[] {
   return rows.sort((a, b) => a.seq - b.seq);
 }
 
+export type TimelineStore = ReturnType<typeof createTimelineStore>;
 export function createTimelineStore(port: AgentPort) {
   const emitter = createEmitter();
   const agent = port.snapshot();

@@ -1,8 +1,7 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { createEmitter } from "./emitter.js";
-import type { createTimelineStore } from "./timeline-store.js";
+import type { TimelineStore } from "./timeline-store.js";
 
-type TimelineStore = ReturnType<typeof createTimelineStore>;
 export interface TimelineRegistry {
   acquire(agent: PaseoAgent): {
     readonly store: TimelineStore;

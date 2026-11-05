@@ -1,300 +1,17 @@
-import type {
-  ConnectionState,
-  PaseoAgent,
-  PaseoAgentTimelineEvent,
-  PaseoAgentUpdate,
-} from "@getpaseo/client";
-import type {
-  AgentPermissionRequest,
-  AgentPermissionResponse,
-  AgentTimelineItem,
-} from "@getpaseo/protocol/agent-types";
-import { createTestRenderer } from "@opentui/core/testing";
-import { createRoot, flushSync } from "@opentui/react";
-import { afterEach, describe, expect, it } from "vitest";
+import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
+import { describe, expect, it } from "vitest";
 import { rendererOptions } from "../cli.js";
-import { createAgentsStore } from "../state/agents-store.js";
-import type {
-  AgentPort,
-  AgentsList,
-  AgentsPort,
-  CreateAgentInput,
-} from "../state/ports.js";
-import { agent, listSnapshot, page } from "../state/test-fixtures.js";
-import { createTimelineRegistry } from "../state/timeline-registry.js";
-import { createTimelineStore } from "../state/timeline-store.js";
-import { App, type AppProps } from "./App.js";
-import { watchConnection } from "./connection-status.js";
 import {
-  createSyntaxStyle,
-  createTheme,
-  ThemeContext,
-} from "./render/theme.js";
-
-const cleanups: (() => Promise<void>)[] = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
-});
-
-class FakeAgents implements AgentsPort {
-  providerAvailable = true;
-  async providers() {
-    return [
-      {
-        id: "codex",
-        label: "Codex",
-        available: this.providerAvailable,
-        error: this.providerAvailable ? null : "Sign in required",
-        defaultModeId: "ask",
-      },
-    ];
-  }
-  async models() {
-    return [{ id: "best", label: "Best", description: null, isDefault: true }];
-  }
-  async modes() {
-    return [{ id: "ask", label: "Ask", description: null }];
-  }
-  createError: Error | null = null;
-  createdInputs: CreateAgentInput[] = [];
-  created = agent("created", { title: "Created agent", cwd: "/repo/one" });
-  async create(input: CreateAgentInput) {
-    this.createdInputs.push(input);
-    if (this.createError) throw this.createError;
-    return this.created;
-  }
-  lists = 0;
-  constructor(public agents: PaseoAgent[]) {}
-  async list(): Promise<AgentsList> {
-    this.lists++;
-    const snapshot = listSnapshot(this.agents);
-    return {
-      ...snapshot,
-      subscription: {
-        release: async () => {},
-        subscribe: (observer) => {
-          observer.snapshot(snapshot);
-          return () => {};
-        },
-      },
-    };
-  }
-  handler: ((update: PaseoAgentUpdate) => void) | null = null;
-  onUpdate(handler: (update: PaseoAgentUpdate) => void) {
-    this.handler = handler;
-    return () => {
-      this.handler = null;
-    };
-  }
-}
-class FakeAgent implements AgentPort {
-  sent: string[] = [];
-  responses: { id: string; response: AgentPermissionResponse }[] = [];
-  canceled = 0;
-  sendError: Error | null = null;
-  responseError: Error | null = null;
-  cancelError: Error | null = null;
-  sendGate: Promise<void> = Promise.resolve();
-  responseGate: Promise<void> = Promise.resolve();
-  cancelGate: Promise<void> = Promise.resolve();
-  handler: ((event: PaseoAgentTimelineEvent) => void) | null = null;
-  released = false;
-  constructor(
-    readonly current: PaseoAgent,
-    readonly items: AgentTimelineItem[],
-  ) {}
-  subscribe(handler: (event: PaseoAgentTimelineEvent) => void) {
-    this.handler = handler;
-    return Object.assign(
-      () => {
-        this.released = true;
-      },
-      { ready: Promise.resolve() },
-    );
-  }
-  async fetchTail() {
-    const seqs = this.items.map((_, index) => index + 1);
-    const tail = page(seqs);
-    return {
-      ...tail,
-      entries: tail.entries.map((entry, index) => ({
-        ...entry,
-        item: this.items[index],
-      })),
-    };
-  }
-  async fetchAfter(): Promise<never> {
-    throw new Error("unexpected catch-up");
-  }
-  async send(text: string) {
-    this.sent.push(text);
-    await this.sendGate;
-    if (this.sendError) throw this.sendError;
-  }
-  async respondToPermission(id: string, response: AgentPermissionResponse) {
-    this.responses.push({ id, response });
-    await this.responseGate;
-    if (this.responseError) throw this.responseError;
-  }
-  async cancel() {
-    this.canceled++;
-    await this.cancelGate;
-    if (this.cancelError) throw this.cancelError;
-  }
-  modes: string[] = [];
-  names: string[] = [];
-  archived = 0;
-  modeError: Error | null = null;
-  modeNotice: string | null = null;
-  async setMode(id: string) {
-    this.modes.push(id);
-    if (this.modeError) throw this.modeError;
-    return this.modeNotice;
-  }
-  models: string[] = [];
-  async setModel(id: string) {
-    this.models.push(id);
-  }
-  async rename(name: string) {
-    this.names.push(name);
-  }
-  async archive() {
-    this.archived++;
-  }
-  snapshot() {
-    return this.current;
-  }
-  requestPermission(request: AgentPermissionRequest) {
-    this.handler?.({
-      agentId: this.current.id,
-      timestamp: "2026-11-03T00:00:00Z",
-      event: { type: "permission_requested", provider: "codex", request },
-    });
-  }
-  pushAssistant(seq: number, text: string) {
-    this.handler?.({
-      agentId: this.current.id,
-      epoch: "epoch",
-      seq,
-      timestamp: "2026-11-03T00:00:00Z",
-      event: {
-        type: "timeline",
-        provider: "codex",
-        item: { type: "assistant_message", text },
-      },
-    });
-  }
-}
-class FakeConnection {
-  listeners = new Set<(state: ConnectionState) => void>();
-  onConnectionState(cb: (state: ConnectionState) => void) {
-    this.listeners.add(cb);
-    return () => {
-      this.listeners.delete(cb);
-    };
-  }
-  emit(state: ConnectionState) {
-    for (const listener of this.listeners) listener(state);
-  }
-}
-const renders: (() => Promise<void>)[] = [];
-async function settle() {
-  for (let i = 0; i < 5; i++) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    for (const render of renders) await render();
-  }
-}
-
-const agents = [
-  agent("alpha", {
-    title: "Alpha agent",
-    cwd: "/repo/one",
-    workspaceId: "one",
-    updatedAt: "2026-11-03T00:00:02Z",
-  }),
-  agent("beta", {
-    title: "Beta agent",
-    cwd: "/repo/one",
-    workspaceId: "one",
-    updatedAt: "2026-11-03T00:00:01Z",
-  }),
-  agent("gamma", {
-    title: "Gamma agent",
-    cwd: "/repo/two",
-    workspaceId: "two",
-    status: "running",
-    updatedAt: "2026-11-03T00:00:00Z",
-  }),
-];
-
-async function setup(
-  currentAgents = agents,
-  height = 24,
-  kittyKeyboard = false,
-  env: NodeJS.ProcessEnv = {},
-  catalog?: AppProps["catalog"] | "agents",
-) {
-  const agentsPort = new FakeAgents(currentAgents);
-  const store = createAgentsStore(agentsPort);
-  await store.load();
-  const ports = new Map<string, FakeAgent>();
-  const connection = new FakeConnection();
-  const status = watchConnection(connection, () => void store.resync());
-  const test = await createTestRenderer({ width: 120, height, kittyKeyboard });
-  renders.push(test.waitForVisualIdle);
-  cleanups.push(async () => {
-    renders.splice(renders.indexOf(test.waitForVisualIdle), 1);
-  });
-  const theme = createTheme(env);
-  const syntaxStyle = createSyntaxStyle(test.renderer, theme);
-  const root = createRoot(test.renderer);
-  cleanups.push(async () => {
-    await test.dispose();
-    syntaxStyle.destroy();
-    timelines.close();
-    status.close();
-    await store.close();
-  });
-  const timelines = createTimelineRegistry((value) => {
-    const port = new FakeAgent(value, [
-      { type: "user_message", text: `hello ${value.id}` },
-      { type: "assistant_message", text: "Hi " },
-      { type: "assistant_message", text: "there" },
-    ]);
-    ports.set(value.id, port);
-    return createTimelineStore(port);
-  });
-  flushSync(() =>
-    root.render(
-      <ThemeContext value={{ theme, syntaxStyle }}>
-        <App
-          label="local (127.0.0.1:6767)"
-          connection={status}
-          agents={store}
-          onExit={() => test.renderer.destroy()}
-          timelines={timelines}
-          catalog={catalog === "agents" ? agentsPort : catalog}
-        />
-      </ThemeContext>,
-    ),
-  );
-  const app = {
-    stdin: {
-      write(input: string) {
-        if (input.startsWith("\u001b[200~"))
-          void test.mockInput.pasteBracketedText(input.slice(6, -6));
-        else test.mockInput.pressKey(input);
-      },
-    },
-    lastFrame: () => test.captureCharFrame(),
-  };
-  await settle();
-  await test.renderOnce();
-  return { app, ports, agentsPort, connection, test };
-}
+  agents,
+  rowText,
+  settle,
+  settleUntil,
+  setup,
+} from "../test/app-harness.js";
+import { agent } from "../test/fixtures.js";
 
 describe("App", () => {
-  it("keeps q and ? editable and quits with Ctrl-C from the prompt", async () => {
+  it("keeps q and ? editable, leaves the prompt on Ctrl-C, then quits with double Ctrl-C", async () => {
     const { app, ports } = await setup();
     for (const input of ["\r", "i", "q", "?"]) {
       app.stdin.write(input);
@@ -305,6 +22,15 @@ describe("App", () => {
     expect(app.lastFrame()).toContain("q?");
     expect(app.lastFrame()).not.toContain("Keyboard shortcuts");
     expect(port.released).toBe(false);
+    app.stdin.write("\u0003");
+    await settle();
+    expect(app.lastFrame()).not.toContain("Press Ctrl+C again to quit");
+    expect(app.lastFrame()).toContain("NORMAL");
+    expect(port.released).toBe(false);
+    app.stdin.write("\u0003");
+    await settle();
+    expect(port.released).toBe(false);
+    expect(app.lastFrame()).toContain("Press Ctrl+C again to quit");
     app.stdin.write("\u0003");
     await settle();
     expect(port.released).toBe(true);
@@ -487,7 +213,12 @@ describe("App", () => {
     app.stdin.write("\r");
     await settle();
     expect([...ports.keys()]).toEqual([]);
-    app.stdin.write("?");
+    app.stdin.write("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await settle();
+    expect(app.lastFrame()).toContain("Keyboard shortcuts");
+    app.stdin.write("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 40));
     await settle();
     expect(app.lastFrame()).not.toContain("Keyboard shortcuts");
     app.stdin.write("\r");
@@ -669,7 +400,9 @@ describe("App", () => {
     const { app, ports, test } = await setup();
     app.stdin.write("\r");
     await settle();
-    await expect.poll(() => app.lastFrame()).toContain("Message Alpha agent");
+    await expect
+      .poll(() => app.lastFrame())
+      .toContain("Press i or a to message Alpha agent");
     await expect.poll(() => app.lastFrame()).toContain("turn idle");
     app.stdin.write("i");
     await settle();
@@ -682,7 +415,7 @@ describe("App", () => {
     expect(ports.get("alpha")?.sent).toEqual(["show tools"]);
   });
 
-  it("opens the prompt, sends typed text once, ignores empty input, and cancels with Esc", async () => {
+  it("opens the prompt, sends typed text once, ignores empty input, and leaves with Esc without sending", async () => {
     const { app, ports } = await setup();
     app.stdin.write("\r");
     await settle();
@@ -700,20 +433,22 @@ describe("App", () => {
     expect(port.sent).toEqual(["say done"]);
     app.stdin.write("i");
     await settle();
-    app.stdin.write("discard me");
+    app.stdin.write("not yet");
     await settle();
     app.stdin.write("\u001b");
     await settle();
-    await expect.poll(() => app.lastFrame()).not.toContain("discard me");
+    await expect.poll(() => app.lastFrame()).toContain("NORMAL");
+    expect(app.lastFrame()).toContain("not yet");
     expect(port.sent).toEqual(["say done"]);
   });
-  it("groups agents by workspace and opens the second agent with j then Enter", async () => {
+  it("groups workspaces by project and opens the next workspace with j then Enter", async () => {
     const { app, ports } = await setup();
     const list = app.lastFrame() ?? "";
     expect(list).toContain("/repo/one");
     expect(list).toContain("/repo/two");
-    expect(list.indexOf("/repo/one")).toBeLessThan(list.indexOf("Alpha agent"));
-    expect(list.indexOf("Beta agent")).toBeLessThan(list.indexOf("/repo/two"));
+    expect(list).toContain("Repo");
+    expect(list).toContain("Alpha agent");
+    expect(list).toContain("Beta agent");
     expect(list).toContain("local (127.0.0.1:6767) connected");
 
     app.stdin.write("j");
@@ -721,19 +456,20 @@ describe("App", () => {
     app.stdin.write("\r");
     await settle();
 
-    expect([...ports.keys()]).toEqual(["beta"]);
+    expect([...ports.keys()]).toEqual(["gamma"]);
     const frame = app.lastFrame() ?? "";
-    expect(frame).toContain("› hello beta");
+    expect(frame).toContain("You");
+    expect(frame).toContain("hello gamma");
     await expect
       .poll(async () => {
         await settle();
         return app.lastFrame();
       })
       .toContain("Hi there");
-    expect(frame).toContain("turn idle");
+    expect(frame).toContain("turn running");
   });
 
-  it("re-renders when a live event arrives and closes the timeline on q", async () => {
+  it("re-renders when a live event arrives and keeps the timeline open on q", async () => {
     const { app, ports } = await setup();
     app.stdin.write("\r");
     await settle();
@@ -751,7 +487,7 @@ describe("App", () => {
 
     app.stdin.write("q");
     await settle();
-    expect(port.released).toBe(true);
+    expect(port.released).toBe(false);
   });
 
   it("shows reconnecting and resyncs the agent list when the connection returns", async () => {
@@ -777,9 +513,11 @@ describe("App", () => {
 it("disables mouse through rendererOptions", () => {
   expect(rendererOptions({ mouse: false }).useMouse).toBe(false);
 });
-it("opens the selected agent by clicking its row", async () => {
+it("opens the selected workspace by clicking its row", async () => {
   const { test, ports } = await setup();
-  await test.mockMouse.click(4, 1);
+  const row = test.renderer.root.findDescendantById("workspace:one");
+  if (!row) throw Error("Missing workspace row");
+  await test.mockMouse.click(row.x + 2, row.y);
   await settle();
   expect(ports.has("alpha")).toBe(true);
 });
@@ -790,7 +528,7 @@ it("renders markdown and expands shell output with o", async () => {
   const port = ports.get("alpha");
   if (!port) throw new Error("missing port");
   port.pushAssistant(4, "\n# Heading\n\n**bold**");
-  await settle();
+  await settleUntil(() => app.lastFrame(), "Heading");
   expect(app.lastFrame()).toContain("Heading");
   expect(app.lastFrame()).not.toContain("**bold**");
   port.handler?.({
@@ -825,7 +563,8 @@ it("renders markdown and expands shell output with o", async () => {
   app.stdin.write("?");
   await settle();
   expect(app.lastFrame()).toContain("Keyboard shortcuts");
-  app.stdin.write("?");
+  app.stdin.write("\u001b");
+  await new Promise((resolve) => setTimeout(resolve, 40));
   await settle();
   expect(app.lastFrame()).toContain("secret output");
 });
@@ -876,12 +615,12 @@ it("uses terminal foreground colors throughout the shell with NO_COLOR", async (
   expect(colors.size).toBe(1);
 });
 
-it("keeps the selected agent visible when navigating beyond the sidebar viewport", async () => {
+it("keeps the selected workspace visible when navigating beyond the sidebar viewport", async () => {
   const many = Array.from({ length: 40 }, (_, index) =>
     agent(`agent-${index}`, {
       title: `Agent ${index.toString().padStart(2, "0")}`,
-      cwd: "/repo/one",
-      workspaceId: "one",
+      cwd: `/repo/workspace-${index.toString().padStart(2, "0")}`,
+      workspaceId: `workspace-${index}`,
       updatedAt: new Date(
         Date.UTC(2026, 10, 4, 0, 0, 40 - index),
       ).toISOString(),
@@ -890,12 +629,12 @@ it("keeps the selected agent visible when navigating beyond the sidebar viewport
   const { app } = await setup(many);
   app.stdin.write("G");
   await settle();
-  expect(app.lastFrame()).toContain("Agent 39");
+  expect(app.lastFrame()).toContain("workspace-39");
   app.stdin.write("g");
   await settle();
   app.stdin.write("g");
   await settle();
-  expect(app.lastFrame()).toContain("Agent 00");
+  expect(app.lastFrame()).toContain("workspace-00");
 });
 
 it("splits, shares stream rows, assigns independently and focuses by click", async () => {
@@ -913,13 +652,13 @@ it("splits, shares stream rows, assigns independently and focuses by click", asy
       return app.lastFrame().split("shared stream").length - 1;
     })
     .toBe(2);
-  for (const key of ["\t", "j", "\r"]) {
+  for (const key of ["g", "t"]) {
     app.stdin.write(key);
     await settle();
   }
   expect(app.lastFrame()).toContain("hello alpha");
   expect(app.lastFrame()).toContain("hello beta");
-  await test.mockMouse.click(40, 1);
+  await test.mockMouse.click(40, 2);
   await settle();
   app.stdin.write("i");
   await settle();
@@ -929,6 +668,42 @@ it("splits, shares stream rows, assigns independently and focuses by click", asy
   await settle();
   expect(ports.get("alpha")?.sent).toEqual(["first pane"]);
   expect(ports.get("beta")?.sent).toEqual([]);
+});
+it("gives each split pane its own tab strip on top and opens clicked tabs in that pane", async () => {
+  const { app, test } = await setup();
+  for (const key of ["\r", "\u0002", "%"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  for (const key of ["g", "t"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  const root = test.renderer.root;
+  const left = root.findDescendantById("pane:0");
+  const right = root.findDescendantById("pane:1");
+  const leftTabs = root.findDescendantById("pane-tabs:0");
+  const rightTabs = root.findDescendantById("pane-tabs:1");
+  if (!left || !right || !leftTabs || !rightTabs) throw Error("Missing panes");
+  expect([leftTabs.x, leftTabs.y, leftTabs.width]).toEqual([
+    left.x,
+    left.y,
+    left.width,
+  ]);
+  expect([rightTabs.x, rightTabs.y, rightTabs.width]).toEqual([
+    right.x,
+    right.y,
+    right.width,
+  ]);
+  expect(rowText(test, "pane-tabs:1")).toContain("Beta agent");
+  expect(rowText(test, "pane-tabs:1")).toContain("+");
+  expect(app.lastFrame().split("hello beta").length - 1).toBe(1);
+  const leftBeta = root.findDescendantById("tab:0:agent:beta");
+  if (!leftBeta) throw Error("Missing left pane beta tab");
+  await test.mockMouse.click(leftBeta.x + 1, leftBeta.y);
+  await settle();
+  expect(app.lastFrame().split("hello beta").length - 1).toBe(2);
+  expect(app.lastFrame()).not.toContain("hello alpha");
 });
 it("search commits select and scroll to a matching block", async () => {
   const { app, ports } = await setup();
@@ -970,542 +745,4 @@ it("pane header includes provider and model", async () => {
   app.stdin.write("\r");
   await settle();
   expect(app.lastFrame()).toContain("codex/gpt-6");
-});
-
-describe("Command Center", () => {
-  it("opens a matching agent in the focused pane with Ctrl-K", async () => {
-    const { app, ports } = await setup();
-    app.stdin.write("\u000b");
-    await settle();
-    expect(app.lastFrame()).toContain("Command Center");
-    app.stdin.write("Beta");
-    await settle();
-    app.stdin.write("\r");
-    await settle();
-    expect(app.lastFrame()).toContain("hello beta");
-    expect(ports.has("beta")).toBe(true);
-    expect(app.lastFrame()).not.toContain("Command Center");
-  });
-  it("opens with colon in normal mode and closes with Esc", async () => {
-    const { app } = await setup();
-    app.stdin.write(":");
-    await settle();
-    expect(app.lastFrame()).toContain("Command Center");
-    app.stdin.write("\u001b");
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    await settle();
-    expect(app.lastFrame()).not.toContain("Command Center");
-  });
-  it("keeps colon editable and restores insert mode after closing", async () => {
-    const { app, ports } = await setup();
-    for (const key of ["\r", "i", ":", "\u000b"]) {
-      app.stdin.write(key);
-      await settle();
-    }
-    expect(app.lastFrame()).toContain("Command Center");
-    app.stdin.write("\u001b");
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    await settle();
-    app.stdin.write("after");
-    await settle();
-    app.stdin.write("\r");
-    await settle();
-    expect(ports.get("alpha")?.sent).toEqual([":after"]);
-  });
-  it("runs a clicked result and closes on an outside click", async () => {
-    const { app, test } = await setup();
-    app.stdin.write(":");
-    await settle();
-    app.stdin.write("Beta");
-    await settle();
-    const row = test.renderer.root.findDescendantById("command:agent:beta");
-    expect(row).toBeDefined();
-    if (!row) throw Error("missing result");
-    await test.mockMouse.click(row.x + 1, row.y);
-    await settle();
-    expect(app.lastFrame()).toContain("hello beta");
-    app.stdin.write(":");
-    await settle();
-    await test.mockMouse.click(0, 0);
-    await settle();
-    expect(app.lastFrame()).not.toContain("Command Center");
-  });
-});
-
-it("expands and collapses all idempotently from the palette, keeping O as a toggle", async () => {
-  const { app, ports } = await setup();
-  app.stdin.write("\r");
-  await settle();
-  const port = ports.get("alpha");
-  if (!port) throw Error("missing port");
-  port.handler?.({
-    agentId: "alpha",
-    epoch: "epoch",
-    seq: 4,
-    timestamp: "2026-11-03T00:00:00Z",
-    event: {
-      type: "timeline",
-      provider: "codex",
-      item: {
-        type: "tool_call",
-        callId: "s",
-        name: "shell",
-        status: "completed",
-        error: null,
-        detail: {
-          type: "shell",
-          command: "echo secret",
-          output: "secret output",
-        },
-      },
-    },
-  });
-  await settle();
-  for (const query of [
-    "Expand all",
-    "Expand all",
-    "Collapse all",
-    "Collapse all",
-  ]) {
-    app.stdin.write("\u000b");
-    await settle();
-    app.stdin.write(query);
-    await settle();
-    app.stdin.write("\r");
-    await settle();
-    if (query === "Expand all")
-      expect(app.lastFrame()).toContain("secret output");
-    else expect(app.lastFrame()).not.toContain("secret output");
-  }
-  app.stdin.write("O");
-  await settle();
-  expect(app.lastFrame()).toContain("secret output");
-  app.stdin.write("O");
-  await settle();
-  expect(app.lastFrame()).not.toContain("secret output");
-});
-
-it("search selects and expands a completed shell tool", async () => {
-  const { app, ports, test } = await setup();
-  app.stdin.write("\r");
-  await settle();
-  const port = ports.get("alpha");
-  if (!port) throw Error("missing port");
-  port.handler?.({
-    agentId: "alpha",
-    epoch: "epoch",
-    seq: 4,
-    timestamp: "2026-11-03T00:00:00Z",
-    event: {
-      type: "timeline",
-      provider: "codex",
-      item: {
-        type: "tool_call",
-        callId: "shell-search",
-        name: "bash",
-        status: "completed",
-        error: null,
-        detail: {
-          type: "shell",
-          command: "run unique-command",
-          output: "shell result",
-        },
-      },
-    },
-  });
-  await settle();
-  app.stdin.write("/");
-  await settle();
-  await test.mockInput.typeText("unique-command");
-  await settle();
-  app.stdin.write("\r");
-  await settle();
-  expect(app.lastFrame()).toContain("▌✓ bash");
-  expect(app.lastFrame()).toContain("shell result");
-});
-
-it("keeps the full search query from a key burst", async () => {
-  const { app, ports } = await setup();
-  app.stdin.write("\r");
-  await settle();
-  ports.get("alpha")?.pushAssistant(4, "\nheader needle");
-  await settle();
-  app.stdin.write("/header");
-  await settle();
-  expect(app.lastFrame()).toContain("/header");
-  app.stdin.write("\r");
-  await settle();
-  expect(app.lastFrame()).toContain("match 1/1");
-  expect(app.lastFrame()).toContain("header needle");
-});
-
-it("expands the newly selected block within a key burst", async () => {
-  const { app, ports } = await setup();
-  app.stdin.write("\r");
-  await settle();
-  const port = ports.get("alpha");
-  if (!port) throw Error("missing port");
-  for (const [index, text] of ["first detail", "second detail"].entries()) {
-    port.handler?.({
-      agentId: "alpha",
-      epoch: "epoch",
-      seq: 4 + index,
-      timestamp: "2026-11-03T00:00:00Z",
-      event: {
-        type: "timeline",
-        provider: "codex",
-        item: {
-          type: "tool_call",
-          callId: `shell-${index}`,
-          name: "shell",
-          status: "completed",
-          error: null,
-          detail: { type: "shell", command: "echo", output: text },
-        },
-      },
-    });
-  }
-  await settle();
-  app.stdin.write("}");
-  await settle();
-  app.stdin.write("}");
-  app.stdin.write("o");
-  await settle();
-  expect(app.lastFrame()).toContain("second detail");
-  expect(app.lastFrame()).not.toContain("first detail");
-});
-
-it("runs the second Command Center result after Down and Enter in a burst", async () => {
-  const { app, test, ports } = await setup();
-  app.stdin.write(":");
-  await settle();
-  test.mockInput.pressArrow("down");
-  test.mockInput.pressEnter();
-  await settle();
-  expect(ports.has("beta")).toBe(true);
-  expect(ports.has("alpha")).toBe(false);
-});
-
-it("omits scrollbar colours in every NO_COLOR scrollbox", async () => {
-  const many = Array.from({ length: 40 }, (_, index) =>
-    agent(`agent-${index}`),
-  );
-  const { app, test } = await setup(many, 24, false, { NO_COLOR: "1" });
-  function expectNoScrollbarColors() {
-    for (const line of test.captureSpans().lines) {
-      for (const span of line.spans) {
-        for (const color of [span.fg, span.bg]) {
-          expect(color.toInts().slice(0, 3)).not.toEqual([37, 37, 39]);
-          expect(color.toInts().slice(0, 3)).not.toEqual([154, 158, 163]);
-        }
-      }
-    }
-  }
-  expectNoScrollbarColors();
-  app.stdin.write("\r");
-  await settle();
-  expectNoScrollbarColors();
-  app.stdin.write("?");
-  await settle();
-  expectNoScrollbarColors();
-});
-
-it("uses terminal default foreground and background intent for NO_COLOR text", async () => {
-  const { app, test } = await setup(agents, 24, false, { NO_COLOR: "1" });
-  function expectDefaultForeground() {
-    for (const line of test.captureSpans().lines) {
-      for (const span of line.spans) {
-        if (span.text.trim()) {
-          expect(span.fg.intent, span.text).toBe("default");
-          expect(span.bg.intent, span.text).toBe("default");
-        }
-      }
-    }
-  }
-  expectDefaultForeground();
-  for (const key of ["\r", "i", "hello", "\u000b", "Beta"]) {
-    app.stdin.write(key);
-    await settle();
-    expectDefaultForeground();
-  }
-});
-
-const controlAgent = agent("alpha", {
-  title: "Alpha agent",
-  currentModeId: "ask",
-  availableModes: [
-    { id: "ask", label: "Ask" },
-    { id: "auto", label: "Auto" },
-  ],
-});
-async function controlSetup(command: string) {
-  const result = await setup([controlAgent]);
-  for (const key of ["\r", "\u000b", command, "\r"]) {
-    result.app.stdin.write(key);
-    await settle();
-  }
-  const port = result.ports.get("alpha");
-  if (!port) throw Error("missing port");
-  return { ...result, port };
-}
-it("chooses the second mode and returns from steps with Esc", async () => {
-  const { app, port, test } = await controlSetup("set mode");
-  expect(app.lastFrame()).toContain("Command Center › Set mode");
-  test.mockInput.pressArrow("down");
-  test.mockInput.pressEnter();
-  await settle();
-  expect(port.modes).toEqual(["auto"]);
-  for (const key of ["\u000b", "set mode", "\r", "\u001b"]) {
-    app.stdin.write(key);
-    if (key === "\u001b")
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    await settle();
-  }
-  expect(app.lastFrame()).toContain("Command Center");
-  expect(app.lastFrame()).not.toContain("› Set mode");
-  app.stdin.write("\u001b");
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  await settle();
-  expect(app.lastFrame()).not.toContain("Command Center");
-});
-it("prefills rename and submits burst input", async () => {
-  const { app, port } = await controlSetup("rename");
-  expect(app.lastFrame()).toContain("Alpha agent");
-  app.stdin.write("\u0015");
-  app.stdin.write("New name");
-  app.stdin.write("\r");
-  await settle();
-  expect(port.names).toEqual(["New name"]);
-});
-it("archives and releases the removed agent's pane", async () => {
-  const { app, port, agentsPort } = await controlSetup("archive");
-  expect(app.lastFrame()).toContain("y confirm");
-  app.stdin.write("y");
-  await settle();
-  expect(port.archived).toBe(1);
-  agentsPort.handler?.({ kind: "remove", agentId: "alpha" });
-  await settle();
-  expect(app.lastFrame()).toContain("No agent");
-  expect(port.released).toBe(true);
-});
-it("cycles mode with Shift-Tab and renders a rejected action", async () => {
-  const { app, ports, test } = await setup([controlAgent]);
-  app.stdin.write("\r");
-  await settle();
-  const port = ports.get("alpha");
-  if (!port) throw Error("missing port");
-  port.modeError = Error("Mode denied");
-  test.mockInput.pressTab({ shift: true });
-  await settle();
-  expect(port.modes).toEqual(["auto"]);
-  expect(app.lastFrame()).toContain("Mode denied");
-});
-it("runs a clicked mode choice", async () => {
-  const { port, test } = await controlSetup("set mode");
-  const row = test.renderer.root.findDescendantById("command:mode:auto");
-  if (!row) throw Error("missing choice");
-  await test.mockMouse.click(row.x + 1, row.y);
-  await settle();
-  expect(port.modes).toEqual(["auto"]);
-});
-
-it("loads models asynchronously, marks current/default, and applies a clicked choice", async () => {
-  const requested: string[] = [];
-  let resolveModels: (
-    models: Awaited<ReturnType<NonNullable<AppProps["catalog"]>["models"]>>,
-  ) => void = () => {};
-  const pending = new Promise<
-    Awaited<ReturnType<NonNullable<AppProps["catalog"]>["models"]>>
-  >((resolve) => {
-    resolveModels = resolve;
-  });
-  const { app, ports, test } = await setup(
-    [agent("alpha", { ...controlAgent, model: "old" })],
-    24,
-    false,
-    {},
-    {
-      providers: async () => [],
-      modes: async () => [],
-      create: async () => {
-        throw Error("Unexpected create");
-      },
-      models(provider) {
-        requested.push(provider);
-        return pending;
-      },
-    },
-  );
-  for (const key of ["\r", "\u000b", "set model", "\r"]) {
-    app.stdin.write(key);
-    await settle();
-  }
-  expect(app.lastFrame()).toContain("Loading…");
-  expect(requested).toEqual(["codex"]);
-  resolveModels([
-    { id: "old", label: "Old model", description: null, isDefault: true },
-    { id: "new", label: "New model", description: null, isDefault: false },
-  ]);
-  await settle();
-  expect(app.lastFrame()).toContain("current · default");
-  const row = test.renderer.root.findDescendantById("command:model:new");
-  if (!row) throw Error("missing model row");
-  await test.mockMouse.click(row.x + 1, row.y);
-  await settle();
-  expect(ports.get("alpha")?.models).toEqual(["new"]);
-});
-it("shows catalog failures and returns to the preserved root query", async () => {
-  const { app, test } = await setup(
-    [controlAgent],
-    24,
-    false,
-    {},
-    {
-      providers: async () => [],
-      modes: async () => [],
-      create: async () => {
-        throw Error("Unexpected create");
-      },
-      models: async () => {
-        throw Error("Catalog unavailable");
-      },
-    },
-  );
-  for (const key of ["\r", "\u000b", "set model", "\r"]) {
-    app.stdin.write(key);
-    await settle();
-  }
-  expect(app.lastFrame()).toContain("! Catalog unavailable");
-  test.mockInput.pressEscape();
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  await settle();
-  expect(app.lastFrame()).not.toContain("Catalog unavailable");
-  expect(app.lastFrame()).toContain("set model");
-});
-
-it("shows the mode label and provider notice until the next action", async () => {
-  const { app, ports, test } = await setup([controlAgent]);
-  app.stdin.write("\r");
-  await settle();
-  expect(app.lastFrame()).toContain("codex · Ask · idle");
-  const port = ports.get("alpha");
-  if (!port) throw Error("missing port");
-  port.modeNotice = "Mode applies on next turn";
-  test.mockInput.pressTab({ shift: true });
-  await settle();
-  expect(app.lastFrame()).toContain("Mode applies on next turn");
-  port.modeNotice = null;
-  test.mockInput.pressTab({ shift: true });
-  await settle();
-  expect(app.lastFrame()).not.toContain("Mode applies on next turn");
-});
-
-it("creates from the focused workspace and keeps the assigned pane pending until subscription delivery", async () => {
-  const { app, agentsPort, ports } = await setup(
-    agents,
-    24,
-    false,
-    {},
-    "agents",
-  );
-  for (const key of [
-    "\r",
-    "\u000b",
-    "new agent",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-    "hi",
-    "\r",
-  ]) {
-    app.stdin.write(key);
-    await settle();
-  }
-  expect(agentsPort.createdInputs).toEqual([
-    {
-      provider: "codex",
-      model: "best",
-      modeId: "ask",
-      cwd: "/repo/one",
-      title: null,
-      prompt: "hi",
-    },
-  ]);
-  expect(app.lastFrame()).toContain("Loading…");
-  // A list update before the new snapshot must not clear the pending assignment.
-  agentsPort.handler?.({ kind: "upsert", agent: agents[0] });
-  await settle();
-  expect(app.lastFrame()).toContain("Loading…");
-  agentsPort.handler?.({ kind: "upsert", agent: agentsPort.created });
-  await settle();
-  expect(ports.has("created")).toBe(true);
-  expect(app.lastFrame()).toContain("hello created");
-});
-
-it("clears a pending creation after ten seconds without a snapshot", async () => {
-  const { app } = await setup(agents, 24, false, {}, "agents");
-  for (const key of [
-    "\r",
-    "\u000b",
-    "new agent",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-  ]) {
-    app.stdin.write(key);
-    await settle();
-  }
-  expect(app.lastFrame()).toContain("Loading…");
-  await new Promise((resolve) => setTimeout(resolve, 10_050));
-  await settle();
-  expect(app.lastFrame()).toContain("No agent.");
-}, 15_000);
-
-it("shows create errors in the status bar for five seconds", async () => {
-  const { app, agentsPort } = await setup(agents, 24, false, {}, "agents");
-  agentsPort.createError = Error("Create denied");
-  for (const key of [
-    "\r",
-    "\u000b",
-    "new agent",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-    "\r",
-  ]) {
-    app.stdin.write(key);
-    await settle();
-  }
-  expect(app.lastFrame()).toContain("! Create denied");
-  await new Promise((resolve) => setTimeout(resolve, 5050));
-  await settle();
-  expect(app.lastFrame()).not.toContain("Create denied");
-  expect(app.lastFrame()).toContain("hello alpha");
-}, 8000);
-
-it("keeps one Provider breadcrumb and the overlay open when an unavailable provider is picked", async () => {
-  const { app, agentsPort } = await setup(agents, 24, false, {}, "agents");
-  agentsPort.providerAvailable = false;
-  for (const key of ["\r", "\u000b", "new agent", "\r"]) {
-    app.stdin.write(key);
-    await settle();
-  }
-  expect(app.lastFrame()).toContain("Command Center › Provider");
-  for (let attempt = 0; attempt < 2; attempt++) {
-    app.stdin.write("\r");
-    await settle();
-    expect(app.lastFrame().match(/Provider/g)).toHaveLength(1);
-    expect(app.lastFrame()).toContain("Command Center › Provider");
-    expect(app.lastFrame()).toContain("Codex");
-    expect(app.lastFrame()).toContain("Sign in required");
-    expect(app.lastFrame()).not.toContain("Loading…");
-  }
-  expect(agentsPort.createdInputs).toEqual([]);
 });

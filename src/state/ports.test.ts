@@ -5,10 +5,14 @@ import type {
   PaseoProviderSnapshotResult,
 } from "@getpaseo/client";
 import { expect, expectTypeOf, test } from "vitest";
+import { at } from "../test/at.js";
+import { agent } from "../test/fixtures.js";
 import { type CreateAgentInput, createAgentsPort } from "./ports.js";
-import { agent } from "./test-fixtures.js";
 
-function setup() {
+function setup(
+  thinkingSupported = false,
+  thinkingOptions?: { id: string; label: string }[],
+) {
   const created: PaseoAgentCreateOptions[] = [];
   let current: PaseoAgent | null = agent("created");
   const available: PaseoProviderAvailabilityResult = {
@@ -68,6 +72,7 @@ function setup() {
               id: "m",
               label: "Model",
               isDefault: true,
+              ...(thinkingOptions ? { thinkingOptions } : {}),
               metadata: { ignored: true },
             },
             { provider, id: "n", label: "Next", description: "Details" },
@@ -87,7 +92,7 @@ function setup() {
     },
   };
   return {
-    port: createAgentsPort(api),
+    port: createAgentsPort(api, thinkingSupported),
     created,
     clear: () => {
       current = null;
@@ -173,4 +178,27 @@ test("rejects a creation without a snapshot", async () => {
 
 test("requires a concrete model when creating an agent", () => {
   expectTypeOf<CreateAgentInput["model"]>().toEqualTypeOf<string>();
+});
+test("preserves model thinking options and sends thinkingOptionId only with daemon support", async () => {
+  const supported = setup(true, [
+    { id: "medium", label: "Medium" },
+    { id: "high", label: "High" },
+  ]);
+  expect(at(await supported.port.models("codex"), 0).thinking).toMatchObject({
+    kind: "options",
+    options: [
+      { id: "medium", label: "Medium" },
+      { id: "high", label: "High" },
+    ],
+  });
+  await supported.port.create({ ...input, thinkingOptionId: "high" });
+  expect(at(supported.created, 0).config.thinkingOptionId).toBe("high");
+  const unsupported = setup(false, [{ id: "medium", label: "Medium" }]);
+  expect(at(await unsupported.port.models("codex"), 0).thinking).toMatchObject({
+    kind: "unsupported",
+  });
+  await expect(
+    unsupported.port.create({ ...input, thinkingOptionId: "medium" }),
+  ).rejects.toThrow(/Update/);
+  expect(unsupported.created).toEqual([]);
 });

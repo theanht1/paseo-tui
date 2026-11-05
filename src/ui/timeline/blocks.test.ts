@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { at } from "../../test/at.js";
 import { blockText, toBlocks } from "./blocks.js";
 
 function rows(...items: Parameters<typeof toBlocks>[0][number]["item"][]) {
@@ -21,7 +22,9 @@ test("merges assistant chunks, preserves boundaries and stable keys", () => {
       ),
     ]).map(blockText),
   ).toEqual(["hello", "next", "reply"]);
-  expect(toBlocks(input.slice(0, 1))[0].key).toBe(toBlocks(input)[0].key);
+  expect(at(toBlocks(input.slice(0, 1)), 0).key).toBe(
+    at(toBlocks(input), 0).key,
+  );
 });
 test("merges reasoning and leaves wide text to the renderer", () => {
   expect(

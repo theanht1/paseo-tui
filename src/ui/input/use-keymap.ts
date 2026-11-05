@@ -30,7 +30,7 @@ export function useKeymap(
     return () => clearTimeout(timer);
   }, [mode, onMode]);
   useKeyboard((event) => {
-    if (!enabled) return;
+    if (!enabled || (event.ctrl && event.name === "c")) return;
     const current = modeRef.current;
     const result = dispatch(current, context, event, prefix);
     if (

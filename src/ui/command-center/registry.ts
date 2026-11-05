@@ -6,13 +6,13 @@ import {
   scoreMatch,
   tokenizeQuery,
 } from "@getpaseo/protocol/search/text-match";
+import type { CommandListSource } from "../../connection/ports.js";
 export type CommandGroup =
   | "Agents"
   | "Agent"
   | "Workspaces"
-  | "Panes"
-  | "View"
-  | "Help";
+  | "Actions"
+  | "View";
 export interface CommandItem {
   id: string;
   group: CommandGroup;
@@ -49,9 +49,8 @@ const GROUPS: readonly CommandGroup[] = [
   "Agents",
   "Agent",
   "Workspaces",
-  "Panes",
+  "Actions",
   "View",
-  "Help",
 ];
 interface TokenMatch {
   field: number;
@@ -108,11 +107,10 @@ export function rankCommands(
         a.matches.reduce((sum, m) => sum + m.field, 0) -
         b.matches.reduce((sum, m) => sum + m.field, 0);
       if (fields) return fields;
-      for (let i = 0; i < a.matches.length; i++) {
-        const score = compareMatchScores(
-          a.matches[i].score,
-          b.matches[i].score,
-        );
+      for (const [i, match] of a.matches.entries()) {
+        const other = b.matches[i];
+        if (!other) break;
+        const score = compareMatchScores(match.score, other.score);
         if (score) return score;
       }
       const recent = (b.item.recency ?? 0) - (a.item.recency ?? 0);
@@ -140,6 +138,8 @@ export type CommandStep =
       title: string;
       placeholder: string;
       initial?: string;
+      /** Offers `/` command and `@` file completions while typing. */
+      completion?: { source: CommandListSource; cwd: string };
       submit(text: string): undefined | CommandStep;
     }
   | { kind: "confirm"; title: string; confirm(): void };

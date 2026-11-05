@@ -8,13 +8,31 @@ import type {
   PaseoAgentUpdate,
   PaseoApi,
 } from "@getpaseo/client";
-import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
+import type {
+  AgentPermissionResponse,
+  AgentSelectOption,
+} from "@getpaseo/protocol/agent-types";
 import type { DaemonAdapter } from "../connection/daemon-adapter.js";
+import type { AgentTimelinePage, TimelineCursor } from "../connection/ports.js";
 
-export type TimelinePage = Awaited<
-  ReturnType<PaseoAgentHandle["timeline"]["refetch"]>
->;
-export type TimelineCursor = NonNullable<TimelinePage["endCursor"]>;
+/** The timeline fields the store reads; agent and provider-subagent pages both provide them. */
+export type TimelinePage = Pick<
+  AgentTimelinePage,
+  | "epoch"
+  | "error"
+  | "endCursor"
+  | "reset"
+  | "staleCursor"
+  | "gap"
+  | "hasNewer"
+  | "agent"
+> & {
+  window: Pick<AgentTimelinePage["window"], "maxSeq">;
+  entries: readonly Pick<
+    AgentTimelinePage["entries"][number],
+    "seqEnd" | "timestamp" | "item"
+  >[];
+};
 export interface AgentsList extends Omit<PaseoAgentListResult, "subscription"> {
   subscription: Pick<
     OwnedSubscription<PaseoAgentListResult>,
@@ -33,6 +51,9 @@ export interface CatalogModel {
   label: string;
   description: string | null;
   isDefault: boolean;
+  thinking?:
+    | { kind: "options"; options: readonly AgentSelectOption[] }
+    | { kind: "unsupported"; message: string };
 }
 export interface CatalogMode {
   id: string;
@@ -43,6 +64,7 @@ export interface CreateAgentInput {
   provider: string;
   model: string;
   modeId: string | null;
+  thinkingOptionId?: string;
   cwd: string;
   title: string | null;
   prompt: string | null;
@@ -85,7 +107,10 @@ export interface AgentPort {
   snapshot(): PaseoAgent | null;
 }
 
-export function createAgentsPort(api: AgentsApi): AgentsPort {
+export function createAgentsPort(
+  api: AgentsApi,
+  thinkingSupported = false,
+): AgentsPort {
   return {
     async providers() {
       const [available, snapshot] = await Promise.all([
@@ -119,6 +144,17 @@ export function createAgentsPort(api: AgentsApi): AgentsPort {
         description:
           typeof model.description === "string" ? model.description : null,
         isDefault: model.isDefault === true,
+        ...(model.thinkingOptions?.length
+          ? {
+              thinking: thinkingSupported
+                ? { kind: "options" as const, options: model.thinkingOptions }
+                : {
+                    kind: "unsupported" as const,
+                    message:
+                      "Update the Paseo daemon to configure thinking (agentThinkingUpdate required).",
+                  },
+            }
+          : {}),
       }));
     },
     async modes(provider) {
@@ -138,6 +174,13 @@ export function createAgentsPort(api: AgentsApi): AgentsPort {
         },
         cwd: input.cwd,
       };
+      if (input.thinkingOptionId !== undefined) {
+        if (!thinkingSupported)
+          throw Error(
+            "Update the Paseo daemon to configure thinking (agentThinkingUpdate required).",
+          );
+        options.config.thinkingOptionId = input.thinkingOptionId;
+      }
       if (input.modeId !== null) options.config.modeId = input.modeId;
       if (input.title !== null) options.title = input.title;
       if (input.prompt !== null) options.prompt = input.prompt;
