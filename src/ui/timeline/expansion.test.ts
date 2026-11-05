@@ -17,3 +17,20 @@ test("all expands only tools and reasoning, or collapses", () => {
   expect([...setAll(b, true)]).toEqual(["reasoning:1"]);
   expect(setAll(b, false).size).toBe(0);
 });
+test("plans are expandable blocks", () => {
+  const b = toBlocks([
+    {
+      seq: 1,
+      item: {
+        type: "tool_call",
+        callId: "p",
+        name: "plan_approval",
+        status: "completed",
+        error: null,
+        detail: { type: "plan", text: "plan" },
+        metadata: { approved: false },
+      },
+    },
+  ]);
+  expect([...setAll(b, true)]).toEqual(["plan:p"]);
+});

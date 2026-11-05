@@ -102,3 +102,45 @@ test("unknown types and all other variants remain readable", () => {
     "[plugin]",
   ]);
 });
+test("plans keep their proposal position and show the daemon's outcome", () => {
+  const proposal = {
+    type: "tool_call",
+    callId: "plan-1",
+    name: "ExitPlanMode",
+    status: "running",
+    error: null,
+    detail: { type: "plan", text: "# Steps\n1. Edit README" },
+  } as const;
+  const rejected = {
+    ...proposal,
+    name: "plan_approval",
+    status: "completed",
+    metadata: { approved: false },
+  } as const;
+  // The approval card owns a pending plan; the timeline hides it until it resolves.
+  expect(toBlocks(rows(proposal))).toEqual([]);
+  const resolved = toBlocks(
+    rows(proposal, { type: "user_message", text: "do X instead" }, rejected),
+  );
+  expect(resolved).toEqual([
+    {
+      kind: "plan",
+      key: "plan:plan-1",
+      outcome: "rejected",
+      text: "# Steps\n1. Edit README",
+    },
+    { kind: "user", key: "user:2", text: "do X instead" },
+  ]);
+  expect(blockText(at(resolved, 0))).toBe(
+    "Rejected plan\n# Steps\n1. Edit README",
+  );
+  expect(
+    toBlocks(
+      rows(
+        { ...rejected, callId: "a", metadata: { approved: true } },
+        { ...rejected, callId: "b", status: "canceled", metadata: {} },
+        { ...rejected, callId: "c", metadata: {} },
+      ),
+    ).map((b) => (b.kind === "plan" ? b.outcome : b.kind)),
+  ).toEqual(["approved", "canceled", "proposed"]);
+});

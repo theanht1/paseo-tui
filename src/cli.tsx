@@ -15,8 +15,18 @@ import {
   thinkingPreferencePath,
 } from "./ui/agent/thinking-preference.js";
 import { createCommandRegistry } from "./ui/command-center/registry.js";
+import { loadUserConfig, userConfigPath } from "./ui/config/user-config.js";
 import { nodeClipboardRunner, systemClipboard } from "./ui/copy/clipboard.js";
 import { parsePrefix } from "./ui/input/keymap.js";
+import {
+  layoutsPath,
+  loadLayoutMemory,
+  timerSchedule,
+} from "./ui/layout/layout-memory.js";
+import {
+  notificationSequence,
+  parseNotifyStyle,
+} from "./ui/notify/terminal-notification.js";
 import {
   editExternally,
   nodeEditorFiles,
@@ -27,6 +37,7 @@ import {
   createTheme,
   ThemeContext,
 } from "./ui/render/theme.js";
+import { resolveDiffTool } from "./ui/workspace/diff-tool.js";
 
 const HELP = `Usage: paseo-tui [options]
 
@@ -35,10 +46,19 @@ Terminal client for a Paseo daemon.
 Options:
   --host <target>  Daemon address or SSH target (default: PASEO_HOST, or the local daemon)
   --home <dir>     Paseo home of the local daemon (default: PASEO_HOME or ~/.paseo)
-  --prefix <key>  Pane prefix, C-<letter> (default: C-b)
-  --no-mouse      Disable mouse input
+  --config <path>  Config file (default: $XDG_CONFIG_HOME/paseo-tui/config.json,
+                   else ~/.config/paseo-tui/config.json)
+  --prefix <key>   Pane prefix, C-<letter> (default: config prefix, else C-b)
+  --no-mouse       Disable mouse input
+  --notify <how>   Alert when an agent needs you: osc9, osc777, bell, or off
+                   (default: config notify, else osc9)
+  --diff-tool <cmd> Command g d runs in a workspace tab
+                   (default: PASEO_TUI_DIFF_TOOL or lazygit)
   -h, --help       Show help
   -v, --version    Show version
+
+Config keys: "keys" (rebind actions), "theme" (hex color overrides), "prefix",
+"notify". Layouts are saved in $XDG_STATE_HOME/paseo-tui/layouts.json.
 `;
 
 export function rendererOptions(values: {
@@ -56,10 +76,13 @@ async function main() {
   const { values } = parseArgs({
     allowNegative: true,
     options: {
-      prefix: { type: "string", default: "C-b" },
+      prefix: { type: "string" },
+      config: { type: "string" },
       mouse: { type: "boolean", default: true },
       host: { type: "string" },
       home: { type: "string" },
+      notify: { type: "string" },
+      "diff-tool": { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -73,7 +96,19 @@ async function main() {
     return;
   }
 
-  const prefix = parsePrefix(values.prefix);
+  const configFile = values.config ?? userConfigPath(process.env, homedir());
+  const config = await loadUserConfig(
+    filePreferenceStorage(configFile),
+    configFile,
+    values.config !== undefined,
+  );
+  const prefix = parsePrefix(values.prefix ?? config.prefix ?? "C-b");
+  const notifyStyle = parseNotifyStyle(values.notify ?? config.notify);
+  const layouts = await loadLayoutMemory(
+    filePreferenceStorage(layoutsPath(process.env, homedir())),
+    { schedule: timerSchedule },
+  );
+  const diffTool = resolveDiffTool(values["diff-tool"], process.env);
   const target = resolveTarget(
     { host: values.host, home: values.home },
     process.env,
@@ -86,7 +121,7 @@ async function main() {
   const { agentsPort, agents, status, timelines } = session;
   const commands = createCommandRegistry();
   const renderer = await createCliRenderer(rendererOptions(values));
-  const theme = createTheme(process.env);
+  const theme = createTheme(process.env, config.theme);
   const syntaxStyle = createSyntaxStyle(renderer, theme);
   function uncaught(error: Error) {
     renderer.destroy();
@@ -112,6 +147,8 @@ async function main() {
           timelines={timelines}
           commands={commands}
           prefix={prefix}
+          bindings={config.bindings}
+          layouts={layouts}
           completions={connection.completions}
           directories={connection.directories}
           systemClipboard={systemClipboard(
@@ -120,6 +157,22 @@ async function main() {
             nodeClipboardRunner,
           )}
           subagents={session.subagents}
+          diffTool={diffTool}
+          usage={session.usage}
+          schedules={session.schedules}
+          notify={
+            notifyStyle === "off"
+              ? undefined
+              : (notification) => {
+                  process.stdout.write(
+                    notificationSequence(
+                      notifyStyle,
+                      notification,
+                      process.env,
+                    ),
+                  );
+                }
+          }
           editPrompt={(text, host) =>
             editExternally(text, {
               env: process.env,
@@ -141,6 +194,7 @@ async function main() {
     await session.close();
     await connection.close();
     await thinkingPreference.flush();
+    await layouts.flush();
   }
 }
 

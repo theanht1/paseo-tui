@@ -116,12 +116,18 @@ export function timelineStore(
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
     send: async () => {},
+    steer: async () => {},
     respond: async () => {},
     cancel: async () => {},
     setMode: async () => {},
     setModel: async () => {},
     rename: async () => {},
     archive: async () => {},
+    search: null,
+    prompts: null,
+    rewind: null,
+    fork: null,
+    setThinking: null,
     ...overrides,
   };
 }

@@ -7,28 +7,37 @@ import {
 import { createHostClient, parseHostTarget } from "@getpaseo/client/node";
 import packageJson from "../../package.json" with { type: "json" };
 import {
+  createAgentFeaturesAdapter,
   createCompletionAdapter,
   createDaemonAdapter,
   createDirectoryAdapter,
   createGitAdapter,
   createManagementAdapter,
+  createScheduleAdapter,
   createSubagentAdapter,
+  createTerminalListAdapter,
   createTerminalStreamAdapter,
+  createUsageAdapter,
   type DaemonAdapter,
   requireWorkspaceCapabilities,
 } from "./daemon-adapter.js";
 import { readLocalCredentialForTarget } from "./local-credential.js";
+import type { AgentFeaturesPort } from "./ports.js";
 import { type HostTarget, resolveListen } from "./target.js";
 
 export interface Connection {
   api: PaseoApi;
   daemon: DaemonAdapter;
+  agentFeatures: AgentFeaturesPort;
   management: ReturnType<typeof createManagementAdapter>;
   terminalStream: ReturnType<typeof createTerminalStreamAdapter>;
   completions: ReturnType<typeof createCompletionAdapter>;
   git: ReturnType<typeof createGitAdapter>;
   directories: ReturnType<typeof createDirectoryAdapter>;
   subagents: ReturnType<typeof createSubagentAdapter>;
+  usage: ReturnType<typeof createUsageAdapter>;
+  schedules: ReturnType<typeof createScheduleAdapter>;
+  terminalList: ReturnType<typeof createTerminalListAdapter>;
   label: string;
   onConnectionState(cb: (state: ConnectionState) => void): () => void;
   close(): Promise<void>;
@@ -90,12 +99,16 @@ export async function connect(target: HostTarget): Promise<Connection> {
     api: createPaseoApi(daemon),
     label,
     daemon: createDaemonAdapter(daemon),
+    agentFeatures: createAgentFeaturesAdapter(daemon),
     management: createManagementAdapter(daemon),
     terminalStream: createTerminalStreamAdapter(daemon),
     completions: createCompletionAdapter(daemon),
     git: createGitAdapter(daemon),
     directories: createDirectoryAdapter(daemon),
     subagents: createSubagentAdapter(daemon),
+    usage: createUsageAdapter(daemon),
+    schedules: createScheduleAdapter(daemon),
+    terminalList: createTerminalListAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
     close: () => daemon.close(),
   };

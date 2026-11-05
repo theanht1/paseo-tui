@@ -20,13 +20,29 @@ export interface CreateDeps {
   failed(message: string): void;
 }
 
+export type ConfigurationDeps = Pick<
+  CreateDeps,
+  "providers" | "models" | "modes" | "thinkingPreference"
+>;
 export function agentConfigurationStep(
-  deps: Pick<
-    CreateDeps,
-    "providers" | "models" | "modes" | "thinkingPreference"
-  >,
+  deps: ConfigurationDeps,
   cwd: string,
   onSubmit: (input: CreateAgentInput) => void,
+): CommandStep {
+  return agentConfigurationFlow(deps, cwd, (input) => {
+    onSubmit(input);
+    return undefined;
+  });
+}
+/** Provider › Model › Mode › Thinking › Title › prompt; `finish` may continue with another step. */
+export function agentConfigurationFlow(
+  deps: ConfigurationDeps,
+  cwd: string,
+  finish: (input: CreateAgentInput) => undefined | CommandStep,
+  prompt = {
+    title: "First prompt",
+    placeholder: "First prompt (optional) · / commands · @ files",
+  },
 ): CommandStep {
   function providerStep(cwd: string): CommandStep {
     const step: CommandStep = {
@@ -150,8 +166,8 @@ export function agentConfigurationStep(
       placeholder: "Agent title (optional)",
       submit: (title) => ({
         kind: "input",
-        title: "First prompt",
-        placeholder: "First prompt (optional) · / commands · @ files",
+        title: prompt.title,
+        placeholder: prompt.placeholder,
         completion: {
           source: {
             kind: "draft",
@@ -165,17 +181,16 @@ export function agentConfigurationStep(
           },
           cwd,
         },
-        submit(prompt): undefined {
-          onSubmit({
+        submit: (text) =>
+          finish({
             provider,
             model,
             modeId,
             ...(thinkingOptionId !== undefined ? { thinkingOptionId } : {}),
             cwd,
             title: title.trim() || null,
-            prompt: prompt.trim() ? prompt : null,
-          });
-        },
+            prompt: text.trim() ? text : null,
+          }),
       }),
     };
   }

@@ -2,11 +2,19 @@ import type { ConnectionState } from "@getpaseo/client";
 import { useTerminalDimensions } from "@opentui/react";
 import { useContext } from "react";
 import type { TimelineSnapshot, TurnState } from "../state/timeline-store.js";
+import type { UsageSnapshot } from "../state/usage-store.js";
 import { BINDINGS } from "./input/bindings.js";
-import type { Context, Mode } from "./input/keymap.js";
+import type { Binding, Context, Mode } from "./input/keymap.js";
 import { foregroundProp, type Theme, ThemeContext } from "./render/theme.js";
 import { statusLine, truncateCells } from "./status-hints.js";
+import { usageMeters } from "./usage/usage-meters.js";
 import { type ExternalStore, useStore } from "./use-store.js";
+
+const NO_USAGE_SNAPSHOT: UsageSnapshot = { kind: "ready", reports: [] };
+const NO_USAGE: ExternalStore<UsageSnapshot> = {
+  subscribe: () => () => {},
+  getSnapshot: () => NO_USAGE_SNAPSHOT,
+};
 
 function connectionText(
   state: ConnectionState,
@@ -50,7 +58,10 @@ export interface StatusBarProps {
   context: Context;
   searchStatus?: string;
   terminalInput?: boolean;
+  /** Provider usage meters; absent when the daemon reports no usage. */
+  usage?: ExternalStore<UsageSnapshot>;
   onHelp?(): void;
+  bindings?: readonly Binding[];
 }
 
 export function StatusBar({
@@ -61,38 +72,57 @@ export function StatusBar({
   context,
   searchStatus,
   terminalInput = false,
+  usage = NO_USAGE,
   onHelp,
+  bindings = BINDINGS,
 }: StatusBarProps) {
   const contextValue = useContext(ThemeContext);
   if (!contextValue) throw new Error("ThemeContext required");
   const { theme } = contextValue;
   const state = connectionText(useStore(connection), theme);
   const { width } = useTerminalDimensions();
-  const hints = BINDINGS.filter(
-    (b) => b.modes.includes(mode.kind) && (!b.context || b.context === context),
-  ).map((b) => `${b.keys} ${b.description}`);
+  const hints = bindings
+    .filter(
+      (b) =>
+        b.modes.includes(mode.kind) && (!b.context || b.context === context),
+    )
+    .map((b) => `${b.keys} ${b.description}`);
+  const usageSnapshot = useStore(usage);
+  const meters =
+    usageSnapshot.kind === "loading"
+      ? ""
+      : usageMeters(usageSnapshot.reports, Date.now());
   const prefix = `${terminalInput ? "Terminal input · Ctrl-] TUI shortcuts · " : ""}${label} ${state.text} ${mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}`;
+  const suffix = meters ? ` · ${meters}` : "";
   return timeline ? (
     <TimelineStatus
       store={timeline}
       width={width}
       prefix={prefix}
+      suffix={suffix}
       hints={hints}
       searchStatus={searchStatus ?? ""}
       onHelp={onHelp}
     />
   ) : (
-    <StatusText width={width} prefix={prefix} hints={hints} onHelp={onHelp} />
+    <StatusText
+      width={width}
+      prefix={`${prefix}${suffix}`}
+      hints={hints}
+      onHelp={onHelp}
+    />
   );
 }
 function TimelineStatus({
   store,
   prefix,
+  suffix,
   searchStatus,
   ...rest
 }: {
   store: ExternalStore<TimelineSnapshot>;
   prefix: string;
+  suffix: string;
   searchStatus: string;
   width: number;
   hints: readonly string[];
@@ -102,7 +132,7 @@ function TimelineStatus({
   return (
     <StatusText
       {...rest}
-      prefix={`${prefix} · turn ${turnText(turn)}${searchStatus ? ` · ${searchStatus}` : ""}`}
+      prefix={`${prefix} · turn ${turnText(turn)}${searchStatus ? ` · ${searchStatus}` : ""}${suffix}`}
     />
   );
 }

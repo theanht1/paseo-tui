@@ -54,10 +54,24 @@ import {
   ThemeContext,
 } from "../render/theme.js";
 import { useStore } from "../use-store.js";
-import { type Block, blockText, toBlocks } from "./blocks.js";
+import {
+  type Block,
+  blockText,
+  isExpandable,
+  planLabel,
+  toBlocks,
+} from "./blocks.js";
 import { CopyView } from "./CopyView.js";
 import { setAll, toggle } from "./expansion.js";
-import { findMatches, nextMatch } from "./search.js";
+import {
+  combineMatches,
+  createHistorySearch,
+  nextTarget,
+  type SearchTarget,
+  searchStatus,
+  targetIndex,
+} from "./history-search.js";
+import { findMatches } from "./search.js";
 
 function code(text: string, lang = "") {
   const fence = "`".repeat(
@@ -269,6 +283,25 @@ function BlockBody({
         </box>
       );
     }
+    case "plan":
+      return (
+        <box flexDirection="column">
+          <text
+            wrapMode="none"
+            fg={foregroundProp(
+              block.outcome === "approved"
+                ? theme.success
+                : block.outcome === "proposed"
+                  ? theme.accent
+                  : theme.muted,
+            )}
+            onMouseDown={onToggle}
+          >
+            {expanded ? "▾" : "▸"} {planLabel(block.outcome)}
+          </text>
+          {expanded ? <Markdown text={block.text} /> : null}
+        </box>
+      );
     case "todo":
       return (
         <box flexDirection="column">
@@ -340,7 +373,15 @@ export function TimelineView({
   const renderer = useRenderer();
   const files = useContext(FileLinksContext);
   const snapshot = useStore(store);
-  const blocks = useMemo(() => toBlocks(snapshot.rows), [snapshot.rows]);
+  const { blocks, owners } = useMemo(() => {
+    const owners = new Map<number, string>();
+    return { blocks: toBlocks(snapshot.rows, owners), owners };
+  }, [snapshot.rows]);
+  const historySearch = useMemo(
+    () => createHistorySearch(store.search),
+    [store],
+  );
+  const searched = useStore(historySearch);
   const links = useMemo(
     () => timelineLinks(blocks, agent.cwd),
     [blocks, agent.cwd],
@@ -391,19 +432,72 @@ export function TimelineView({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selectedKey, select] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const matches = useMemo(() => findMatches(blocks, query), [blocks, query]);
+  const targets = useMemo(
+    () =>
+      combineMatches({
+        blocks,
+        owners,
+        rows: snapshot.rows,
+        epoch: snapshot.epoch,
+        local: findMatches(blocks, query),
+        history: searched.history,
+      }),
+    [blocks, owners, snapshot.rows, snapshot.epoch, query, searched.history],
+  );
   const current = useRef({
     blocks,
+    owners,
     expanded,
     selectedKey,
-    matches,
+    targets,
+    pending: searched.pending,
   });
   current.current = {
     blocks,
+    owners,
     expanded,
     selectedKey,
-    matches,
+    targets,
+    pending: searched.pending,
   };
+  /** Selects, expands and scrolls to a block. */
+  const jump = useCallback(function jump(key: string) {
+    current.current.selectedKey = key;
+    select(key);
+    const expanded = new Set(current.current.expanded).add(key);
+    current.current.expanded = expanded;
+    setExpanded(expanded);
+    scroll.current?.scrollChildIntoView(key);
+  }, []);
+  /** Jumps to a match, paging older history in first when it is not loaded. */
+  const go = useCallback(
+    function go(target: SearchTarget | null) {
+      if (!target) return;
+      const key =
+        target.kind === "loaded"
+          ? target.key
+          : current.current.owners.get(target.seq);
+      if (key) jump(key);
+      else if (target.kind === "unloaded") historySearch.reveal(target.seq);
+    },
+    [jump, historySearch],
+  );
+  /** Set when a committed search found nothing loaded; the daemon's newest match is used. */
+  const awaitingHistory = useRef(false);
+  useEffect(() => {
+    const pending = searched.pending;
+    const key = pending === null ? undefined : owners.get(pending);
+    if (key) {
+      historySearch.shown();
+      jump(key);
+    }
+  }, [owners, searched.pending, historySearch, jump]);
+  useEffect(() => {
+    if (!awaitingHistory.current || searched.history.kind === "searching")
+      return;
+    awaitingHistory.current = false;
+    go(targets.at(-1) ?? null);
+  }, [searched.history, targets, go]);
   const selectCurrent = useCallback(function selectCurrent(key: string) {
     current.current.selectedKey = key;
     select(key);
@@ -425,24 +519,21 @@ export function TimelineView({
   }, [copying]);
   useEffect(() => {
     onSearchStatus(
-      query
-        ? matches.length
-          ? `match ${Math.max(0, matches.indexOf(selectedKey ?? "")) + 1}/${matches.length}`
-          : "no match"
-        : "",
+      searchStatus({
+        query,
+        targets,
+        index: targetIndex(targets, selectedKey, searched.pending),
+        history: searched.history,
+        notice: searched.notice,
+      }),
     );
-  }, [matches, query, selectedKey, onSearchStatus]);
+  }, [targets, query, selectedKey, searched, onSearchStatus]);
   useImperativeHandle(
     controls,
     () => ({
       act(action) {
-        const { blocks, expanded, selectedKey, matches } = current.current;
-        function jump(key: string | null) {
-          if (!key) return;
-          selectCurrent(key);
-          expandCurrent(new Set(current.current.expanded).add(key));
-          scroll.current?.scrollChildIntoView(key);
-        }
+        const { blocks, expanded, selectedKey, targets, pending } =
+          current.current;
         const box = scroll.current;
         if (!box) return;
         switch (action.type) {
@@ -520,19 +611,25 @@ export function TimelineView({
             break;
           case "search.commit": {
             setQuery(draft.current);
+            historySearch.run(draft.current);
             const found = findMatches(blocks, draft.current);
             const start = blocks.findIndex((b) => b.key === selectedKey);
-            jump(
+            const key =
               blocks
                 .slice(Math.max(0, start))
-                .find((b) => found.includes(b.key))?.key ??
-                found[0] ??
-                null,
-            );
+                .find((b) => found.includes(b.key))?.key ?? found[0];
+            awaitingHistory.current = key === undefined;
+            if (key) jump(key);
             break;
           }
           case "search.next":
-            jump(nextMatch(matches, selectedKey, action.dir));
+            go(
+              nextTarget(
+                targets,
+                targetIndex(targets, selectedKey, pending),
+                action.dir,
+              ),
+            );
             break;
           case "scroll.lines":
             box.scrollBy(action.delta);
@@ -549,9 +646,7 @@ export function TimelineView({
             box.scrollTo(action.edge === "top" ? 0 : Infinity);
             break;
           case "block.move": {
-            const candidates = blocks.filter(
-              (b) => b.kind === "tool" || b.kind === "reasoning",
-            );
+            const candidates = blocks.filter(isExpandable);
             const index = candidates.findIndex((b) => b.key === selectedKey);
             const next =
               candidates[
@@ -584,18 +679,14 @@ export function TimelineView({
             expandCurrent(
               setAll(
                 blocks,
-                blocks.some(
-                  (b) =>
-                    (b.kind === "tool" || b.kind === "reasoning") &&
-                    !expanded.has(b.key),
-                ),
+                blocks.some((b) => isExpandable(b) && !expanded.has(b.key)),
               ),
             );
             break;
         }
       },
     }),
-    [expandCurrent, selectCurrent, files, renderer],
+    [expandCurrent, selectCurrent, files, renderer, historySearch, jump, go],
   );
   const linkify = useMemo(
     () =>

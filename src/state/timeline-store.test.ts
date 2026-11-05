@@ -75,6 +75,11 @@ class FakeAgent implements AgentPort {
     if (this.sendError) throw this.sendError;
     this.sent.push(text);
   }
+  steered: string[] = [];
+  async steer(text: string) {
+    if (this.sendError) throw this.sendError;
+    this.steered.push(text);
+  }
   async respondToPermission(id: string, _response: AgentPermissionResponse) {
     await this.responseResult;
     this.responded.push(id);
@@ -351,6 +356,32 @@ describe("timeline store", () => {
     port.sendError = null;
     await store.send("retry");
     expect(store.getSnapshot().lastActionError).toBeNull();
+  });
+  it("steers into the turn and leaves the permission to the daemon's resolution", async () => {
+    const port = new FakeAgent();
+    port.current = agent("a", { pendingPermissions: [permission] });
+    const store = createTimelineStore(port);
+    await store.open();
+    await store.steer("   ");
+    await store.steer(" do X instead ");
+    expect(port.steered).toEqual(["do X instead"]);
+    expect(port.sent).toEqual([]);
+    expect(store.getSnapshot().pendingPermissions).toEqual([permission]);
+    port.push({
+      agentId: "a",
+      timestamp: "2026-11-03T00:00:00Z",
+      event: {
+        type: "permission_resolved",
+        provider: "codex",
+        requestId: "p",
+        resolution: { behavior: "deny" },
+      },
+    });
+    await settle();
+    expect(store.getSnapshot().pendingPermissions).toEqual([]);
+    port.sendError = new Error("offline");
+    await store.steer("again");
+    expect(store.getSnapshot().lastActionError).toBe("offline");
   });
   it("removes a permission only after a successful response and records action errors", async () => {
     const port = new FakeAgent();

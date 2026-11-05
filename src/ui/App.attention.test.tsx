@@ -52,7 +52,7 @@ it("prefixes a workspace and its tab with ? for a pending question, above permis
       pendingPermissions: [tool],
     }),
   ]);
-  expect(rowText(test, "workspace:one")).toMatch(/^\W*\? /);
+  expect(rowText(test, "workspace:one")).toMatch(/^\W*\?2 /);
   expect(rowText(test, "tab:agent:alpha")).toContain("? Alpha agent");
   expect(rowText(test, "tab:agent:beta")).toContain("! Beta agent");
   expect(rowText(test, "workspace:two")).toContain("!");

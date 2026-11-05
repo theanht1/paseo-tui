@@ -5,16 +5,26 @@ import type { CatalogModel } from "../../state/ports.js";
 import type { TimelineStore } from "../../state/timeline-store.js";
 import { agentName, shortPath } from "../agent/agent-display.js";
 import type { FileLink } from "../file-links/links.js";
-import { type Action, paletteActions } from "../input/keymap.js";
+import { type Action, type Binding, paletteActions } from "../input/keymap.js";
 import { assign, type Layout, split } from "../layout/split-tree.js";
+import {
+  type ScheduleDeps,
+  scheduleCommands,
+} from "../schedules/schedule-commands.js";
+import { type UsageSource, usageCommands } from "../usage/usage-commands.js";
 import type { WorkspaceRow } from "../workspace/workspaces.js";
+import { historyCommands } from "./agent-history.js";
 import { type CreateDeps, createAgentStep } from "./create-agent.js";
 import type { CommandItem, CommandSource } from "./registry.js";
 export interface BuiltinContext {
   groups: readonly WorkspaceGroup[];
+  /** Agents waiting on you, most urgent first, with what each waits on. */
+  waiting: readonly { agent: PaseoAgent; reason: string }[];
   workspaces: readonly WorkspaceRow[];
   focusedAgent: PaseoAgent | undefined;
   prefixLabel: string;
+  /** The effective key table; defaults to the built-in bindings. */
+  bindings?: readonly Binding[];
   focusedStore: TimelineStore | null;
   createAgent?: CreateDeps;
   models?(provider: string): Promise<CatalogModel[]>;
@@ -24,12 +34,28 @@ export interface BuiltinContext {
   act(action: Action): void;
   /** Files mentioned in the focused chat, most recent first. */
   files?: { list(): readonly FileLink[]; open(link: FileLink): void };
+  /** Daemon schedules: browse, inspect, pause/resume, run, delete, create. */
+  schedules?: ScheduleDeps;
+  /** Provider usage reports; absent when the daemon reports no usage. */
+  usage?: UsageSource;
 }
 export function builtinSource(context: BuiltinContext): CommandSource {
   return {
     id: "builtin",
     items() {
-      const items: CommandItem[] = [];
+      const items: CommandItem[] = context.waiting.map(
+        ({ agent, reason }, index) => ({
+          id: `waiting:${agent.id}`,
+          group: "Needs you",
+          title: agentName(agent),
+          subtitle: `${reason} · ${shortPath(agent.cwd)}`,
+          keywords: ["attention", "inbox", "unread"],
+          recency: context.waiting.length - index,
+          run(): undefined {
+            context.open(agent);
+          },
+        }),
+      );
       for (const group of context.groups) {
         for (const agent of group.agents) {
           const title = agentName(agent);
@@ -78,7 +104,9 @@ export function builtinSource(context: BuiltinContext): CommandSource {
           run: () => createAgentStep(createAgent),
         });
       items.push(...agentCommands(context), ...fileCommands(context));
-      for (const entry of paletteActions(context.prefixLabel))
+      if (context.schedules) items.push(...scheduleCommands(context.schedules));
+      if (context.usage) items.push(...usageCommands(context.usage, Date.now));
+      for (const entry of paletteActions(context.prefixLabel, context.bindings))
         items.push({
           id: `action:${JSON.stringify(entry.action)}`,
           group: "Actions",
@@ -171,6 +199,14 @@ function agentCommands(context: BuiltinContext): CommandItem[] {
             })),
         }),
       });
+    items.push(
+      ...historyCommands({
+        agent,
+        store,
+        models,
+        createAgent: context.createAgent,
+      }),
+    );
     items.push(
       {
         id: "rename",

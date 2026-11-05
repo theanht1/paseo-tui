@@ -19,16 +19,48 @@ npm run dev
 
 Pass options after `--`, for example `npm run dev -- --host <target>`.
 
-| Option            | Description                                                          |
-| ----------------- | -------------------------------------------------------------------- |
-| `--host <target>` | Daemon address or SSH target (default: `PASEO_HOST`, else local)     |
-| `--home <dir>`    | Paseo home of the local daemon (default: `PASEO_HOME` or `~/.paseo`) |
-| `--prefix <key>`  | Pane prefix, `C-<letter>` only (default: `C-b`)                      |
-| `--no-mouse`      | Disable mouse input                                                  |
-| `-h`, `--help`    | Show help                                                            |
-| `-v`, `--version` | Show version                                                         |
+| Option              | Description                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `--host <target>`   | Daemon address or SSH target (default: `PASEO_HOST`, else local)                                        |
+| `--home <dir>`      | Paseo home of the local daemon (default: `PASEO_HOME` or `~/.paseo`)                                    |
+| `--config <path>`   | Config file (default: `$XDG_CONFIG_HOME/paseo-tui/config.json`, else `~/.config/paseo-tui/config.json`) |
+| `--prefix <key>`    | Pane prefix, `C-<letter>` only (default: config `prefix`, else `C-b`)                                   |
+| `--no-mouse`        | Disable mouse input                                                                                     |
+| `--notify <how>`    | Alert when an agent needs you: `osc9`, `osc777`, `bell`, `off` (default: config `notify`, else `osc9`)  |
+| `--diff-tool <cmd>` | Tool `g d` opens (default: `PASEO_TUI_DIFF_TOOL`, else `lazygit`)                                       |
+| `-h`, `--help`      | Show help                                                                                               |
+| `-v`, `--version`   | Show version                                                                                            |
 
 Set `NO_COLOR=1` for terminal-default colors.
+
+### Configuration
+
+The optional config file is JSON. Flags override `prefix` and `notify`; any problem (unknown setting or action, bad key or color, key conflict) stops startup with a list of every issue.
+
+```json
+{
+  "prefix": "C-a",
+  "notify": "bell",
+  "keys": {
+    "sidebar.toggle": "|",
+    "pane.split:right": ["%", "v"],
+    "tab.create": "Ctrl-t",
+    "subagents.open": []
+  },
+  "theme": {
+    "accent": "#ff9e64",
+    "borderFocused": "#ff9e64",
+    "status": { "running": "#7aa2f7" },
+    "syntax": { "keyword": "#bb9af7" },
+    "heading": ["#ff9e64", "#7dcfff", "#9ece6a"]
+  }
+}
+```
+
+- `keys` maps an action to a key or a list of keys, replacing its defaults; `[]` unbinds it. Actions are named by their type plus arguments joined with `:`, for example `help`, `palette.open`, `pane.split:right`, `pane.focus:left`, `pane.select:3`, `tab.select:0`, `workspace.cycle:-1`, `scroll.half:1`, `list.edge:top`; an unknown name prints the full list. Keys use the help popup's format: `x`, `X`, `Ctrl-x`, `Meta-x` (or `Alt-x`), `Enter`, `Esc`, `Tab`, `Shift-Tab`, `Up`, `PgDn`, `F1`. A rebound action keeps its default modes, so prefix actions still follow the prefix and always-on actions (`tab.create`, `palette.open`) need a `Ctrl-` or `Meta-` key. Multi-key chords cannot be bound; `Ctrl-C`, `Z Q`, `g t` / `g T`, `Ctrl-w <dir>`, and `g` / `Z` / `Ctrl-w` in normal mode stay fixed. The help popup, status hints and Command Center show the effective keys.
+- `theme` overrides colors with hex values (`#rgb`, `#rrggbb`, `#rrggbbaa`): top-level fields (`fg`, `muted`, `faint`, `accent`, `user`, `userBg`, `assistant`, `tool`, `reasoning`, `error`, `warn`, `success`, `border`, `borderFocused`, `selectionBg`, `cursorBg`, `cursorFg`, `codeBg`, `copySelectionBg`, `copySelectionFg`, `copyCursorBg`, `copyCursorFg`), `status` (`running`, `idle`, `error`, `attention`, `question`), `syntax` (highlight styles such as `keyword`, `string`, `comment`) and up to three `heading` levels. `NO_COLOR` still wins.
+
+Each workspace remembers its split layout, the agent in each pane, zoom and the selected tab when you leave it, and again after a restart. Layouts are saved to `$XDG_STATE_HOME/paseo-tui/layouts.json` (else `~/.local/state/paseo-tui/layouts.json`); panes whose agents no longer exist are dropped on restore.
 
 ## Development
 
@@ -73,10 +105,19 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Command Center             | `New agent…`                               | Create in an existing workspace       |
 | Command Center             | `Set mode…`                                | Pick an available mode                |
 | Command Center             | `Set model…`                               | Pick a model (with catalog access)    |
+| Command Center             | `Set thinking…`                            | Pick a thinking option                |
+| Command Center             | `Rewind to prompt…`                        | Undo back to before a prompt          |
+| Command Center             | `Fork from prompt…`                        | New agent from earlier history        |
 | Command Center             | `Rename…`                                  | Edit the agent title                  |
 | Command Center             | `Archive…`                                 | Confirm with `y` or click Confirm     |
 | Normal pane                | `Shift-Tab`                                | Cycle agent mode                      |
 | Normal                     | `Ctrl-X`                                   | Stop running turn                     |
+| Normal                     | `U`                                        | Jump to next agent that needs you     |
+| Normal                     | `S`                                        | Group sidebar by project / status     |
+| Normal                     | `]` / `[`                                  | Next / previous workspace             |
+| Normal                     | `1`–`9`                                    | Select tab by position                |
+| Normal                     | `g d`                                      | Open changes in lazygit (a tab)       |
+| Normal or insert           | `Alt-1`–`Alt-9`                            | Open workspace by sidebar position    |
 | Sidebar                    | `j` / `↓`                                  | Next agent                            |
 | Sidebar                    | `k` / `↑`                                  | Previous agent                        |
 | Sidebar                    | `g g`                                      | First agent                           |
@@ -101,10 +142,21 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Permission with actions    | `1`–`9`                                    | Choose action                         |
 | Permission without actions | `y` / `n`                                  | Allow / deny                          |
 | Question without actions   | `n`                                        | Deny; answer in the app               |
+| Permission or question     | `m`, type, `Enter`                         | Steer: reply with a message instead   |
 | Permission                 | `Esc`                                      | Defer; reopen the agent to return     |
 | Help                       | `?` / `Esc`                                | Close help                            |
 
-New permissions for the open agent take focus automatically. In insert mode, shortcuts such as `q` and `?` are text. Shift-Enter requires a terminal that reports modified keys; Ctrl-J also inserts a newline.
+Plan approvals show the proposed plan as markdown (`↑`/`↓` scroll it; `y` implements, `n` rejects). Instead of answering any permission, plan or question, press `m` to type a message: it is sent into the running turn (`activeTurnBehavior: "steer"`), the daemon denies the pending request, and the agent continues with your message, as in the Paseo app. `Esc` or `Ctrl-C` closes the message field. A plan you rejected or steered past stays in the timeline as a collapsed "Rejected plan" block (`}` then `o` expands it); this row comes from the daemon, so it survives reloads.
+
+New permissions for the open agent take focus automatically.
+
+`g d` (or **Open changes (lazygit)** in the Command Center) runs the diff tool in a terminal tab in the selected workspace's directory, or focuses its tab if one is already open there. Quitting the tool closes the tab and returns to the tab you came from. Pick another tool with `--diff-tool "tig status"` or `PASEO_TUI_DIFF_TOOL`; the command runs through `sh -c` on the daemon host.
+
+### Agents that need you
+
+Sidebar rows show the most urgent status of their workspace (`?` question, `!` permission with a count when more than one is pending, a spinner while running, `●` for an unread finished or failed turn) and a dim line with the branch, unpushed commits, diff size and PR checks, plus `setup…`, `setup failed` or `setup blocked` while a new worktree's `paseo.json` setup needs a look. `S` regroups the sidebar into Needs input, Failed, Running, Unread and Idle; `U` walks agents waiting on you, most urgent first; the Command Center lists them under **Needs you**.
+
+When an agent starts waiting and you are not looking at it (another agent is open, or the terminal is unfocused), the TUI raises a desktop notification. OSC 9 works in iTerm2, WezTerm, Ghostty, kitty and Windows Terminal; use `--notify osc777` for foot or VTE terminals, or `bell`. Inside tmux, sequences use passthrough, which needs `set -g allow-passthrough on`. In insert mode, shortcuts such as `q` and `?` are text. Shift-Enter requires a terminal that reports modified keys; Ctrl-J also inserts a newline.
 
 ### Mouse
 
@@ -129,13 +181,13 @@ Tool details include shell output (last 200 lines), file content (first 400 line
 | Prefix       | `0`–`9`                       | Select pane by zero-based index                 |
 | Prefix       | `?`                           | Help                                            |
 | Normal       | `Ctrl-w h/j/k/l` / `Ctrl-w w` | Focus direction / next pane                     |
-| Pane, normal | `/`                           | Search loaded timeline blocks                   |
+| Pane, normal | `/`                           | Search the timeline, including unloaded history |
 | Search       | `Enter` / `Esc`               | Commit / cancel query                           |
 | Pane, normal | `n` / `N`                     | Next / previous match, wrapping                 |
 
 Opening an agent assigns it to the focused pane. Click any pane to focus it. Panes showing the same agent share one live timeline subscription, while selection, search and expanded details stay separate. Splits, closing and focus changes clear zoom. Layouts are not persisted.
 
-Search is a case-insensitive substring match over loaded history, including collapsed tool output and reasoning. A jump selects the matching block, expands its detail and scrolls it into view. The status bar shows `match i/n` or `no match`.
+Search is a case-insensitive substring match over loaded history, including collapsed tool output and reasoning. When the daemon advertises `agentHistorySearch`, committing a query also searches the agent's whole chat on the daemon, so messages older than the loaded window count too; `n` / `N` page older history in to reach them, and a query with no loaded match jumps to the newest daemon match. Matches are ordered oldest first. A jump selects the matching block, expands its detail and scrolls it into view. The status bar shows `match i/n` (`n+` when the daemon capped the results, plus `searching history…` while it runs) or `no match`.
 
 ## Command Center
 
@@ -153,8 +205,28 @@ Press `Ctrl-K` in any mode, or `:` in normal mode (also after the prefix), to se
 
 For the focused agent, the Command Center offers **Set mode…**, **Rename…** and **Archive…** (confirm with `y` or click Confirm). **Set model…** appears when catalog access is supplied. Mode choices mark the current mode; model choices mark the current and default models.
 
+These appear only when the daemon advertises their `server_info` features; update the daemon to get the ones that are missing:
+
+- **Set thinking…** (`agentThinkingUpdate`, with catalog access) lists the thinking options of the agent's model, marking the current and default ones.
+- **Rewind to prompt…** (`rewind` and `agentTimelinePromptIndex`) lists earlier prompts, newest first. Pick one, pick conversation, files or both (only the modes the provider supports), then confirm. The agent returns to the state before that prompt.
+- **Fork from prompt…** (`agentForkContext`, `agentForkContextCursor` and `agentTimelinePromptIndex`, for agents with a known model) creates a new agent with the same provider, model, mode, thinking and directory. It gets the chat history before the chosen prompt as context. Type a new prompt, or leave it empty to resend the chosen one.
+
 ### Creating agents
 
 With catalog access, **New agent…** picks a provider, model and mode, followed by an optional title and first prompt. It uses the focused agent's workspace; from an empty pane it first asks for an existing workspace. Default models and modes appear first, and an empty title lets the daemon name the agent.
 
 The focused pane shows `Loading…` for up to ten seconds while it waits for the new agent's snapshot. Creation errors appear in the status bar for five seconds.
+
+### Provider usage
+
+When the daemon reports usage (`usageSources` or `providerUsageList` in `server_info.features`), the status bar ends with a compact meter per provider, such as `claude 62% · resets 3h`: the provider's summary window, or else its most-used window. It refreshes every minute, and the daemon caches reports for five minutes. Providers that report no quota are left out. **Provider usage** in the Command Center lists every window, balance and reset time, plus unavailable or failed reports. **Refresh now** bypasses the daemon cache.
+
+### Schedules
+
+**Schedules…** lists the daemon's schedules with name, cadence, target, next run and paused state. Pick one to **Inspect** it, view **Recent runs** (selecting a run opens its agent), **Pause…** / **Resume…**, **Run now…** or **Delete…**. Each action that changes a schedule waits for `y` before it runs, and its result appears in the status bar.
+
+**New schedule…** asks for a cadence (`5m`, `2h`, `1d`, or a five-field cron such as `0 9 * * 1-5`), then a target: the focused agent, another existing agent, or a new agent in a workspace (provider, model, mode and title, as in **New agent…**). It then asks for the prompt sent on each run and an optional name, and shows a summary to confirm. Intervals are sent as cron expressions, so an interval must divide evenly into an hour or a day (`7m` is rejected). Schedule requests are baseline daemon RPCs, so no feature flag gates them.
+
+### Terminal activity
+
+Terminal tabs show the same dots as agent tabs when the daemon reports terminal activity: a spinner while the terminal's agent works, `!` while it waits for input, and `●` after it finishes, until you open the tab. The daemon reports activity only for terminal agents with Paseo hooks installed ("Enable terminal agent hooks" in the app's host settings); other terminals show no dot. Activity arrives with the terminal list, which refreshes on workspace changes and every three seconds.

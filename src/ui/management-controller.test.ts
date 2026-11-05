@@ -577,3 +577,64 @@ it("opens a file in an editor terminal of the given workspace and asks for termi
   ]);
   expect(opened).toEqual([{ key: "terminal:vim", input: true }]);
 });
+
+it("opens the diff tool in the workspace once and refocuses its open tab", async () => {
+  const workspace = {
+    id: "w",
+    projectId: "p",
+    projectRootPath: "/repo",
+    workspaceDirectory: "/trees/w",
+    name: "W",
+  };
+  const requests: unknown[] = [];
+  const opened: unknown[] = [];
+  const controller = createManagementController(() => ({
+    projects: [],
+    agents: [],
+    workspaces: [workspace],
+    workspace,
+    tab: null,
+    catalog: null,
+    actions: {
+      baseBranches: async () => ({ branches: [], defaultBranch: null }),
+      renameWorkspace: async () => {},
+      renameTab: async () => {},
+      archiveWorkspace: async () => {},
+      closeTab: async () => {},
+      createWorkspace: async () => {
+        throw Error("Unexpected");
+      },
+      createAgent: async () => agent("a"),
+      createTerminal: async () => {
+        throw Error("Unexpected");
+      },
+      openFile: async (target, tool) => {
+        requests.push({ target: target.id, tool });
+        return { id: "lg", name: tool.name, workspaceId: target.id, cwd: "/" };
+      },
+    },
+    refresh: async () => {},
+    opened(result) {
+      opened.push({ key: result.tab?.key, input: result.input });
+    },
+  }));
+  controller.openDiffTool("lazygit", [
+    { id: "elsewhere", name: "lazygit", workspaceId: "x", cwd: "/x" },
+  ]);
+  await controller.settled();
+  expect(requests).toEqual([
+    {
+      target: "w",
+      tool: { name: "lazygit", command: "sh", args: ["-c", "lazygit"] },
+    },
+  ]);
+  controller.openDiffTool("lazygit", [
+    { id: "lg", name: "lazygit", workspaceId: "w", cwd: "/trees/w" },
+  ]);
+  await controller.settled();
+  expect(requests).toHaveLength(1);
+  expect(opened).toEqual([
+    { key: "terminal:lg", input: true },
+    { key: "terminal:lg", input: true },
+  ]);
+});

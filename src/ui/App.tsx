@@ -9,6 +9,7 @@ import type {
   CompletionPort,
   DirectoryPort,
   ProviderSubagent,
+  SchedulePort,
   TerminalStreamPort,
 } from "../connection/ports.js";
 import type { AgentsSnapshot } from "../state/agents-store.js";
@@ -16,13 +17,23 @@ import type { AgentsPort } from "../state/ports.js";
 import type { ProviderSubagentStore } from "../state/provider-subagents.js";
 import type { TimelineRegistry } from "../state/timeline-registry.js";
 import { createTimelineStore } from "../state/timeline-store.js";
+import type { UsageStore } from "../state/usage-store.js";
 import { AgentPane } from "./agent/AgentPane.js";
 import {
   agentIndicator,
+  attentionQueue,
+  attentionWait,
   createAttentionTracker,
   groupIndicator,
+  type Indicator,
+  nextAttention,
+  workspaceBucket,
 } from "./agent/attention.js";
 import { Sidebar } from "./agent/Sidebar.js";
+import {
+  type SidebarGrouping,
+  sidebarSections,
+} from "./agent/sidebar-sections.js";
 import type { ThinkingPreference } from "./agent/thinking-preference.js";
 import { CommandCenter } from "./command-center/CommandCenter.js";
 import type { CreateDeps } from "./command-center/create-agent.js";
@@ -43,9 +54,12 @@ import {
   timelineLinks,
 } from "./file-links/links.js";
 import { createPathVerifier } from "./file-links/verify.js";
+import { BINDINGS } from "./input/bindings.js";
 import { createKeyRouter, KeyRouterContext } from "./input/key-router.js";
 import {
   type Action,
+  type Binding,
+  globalAction,
   interrupt as interruptMode,
   type Mode,
   paletteReturnMode,
@@ -54,6 +68,7 @@ import {
 } from "./input/keymap.js";
 import { confirmQuit } from "./input/quit-confirmation.js";
 import { useKeymap } from "./input/use-keymap.js";
+import type { LayoutMemory } from "./layout/layout-memory.js";
 import { PaneFrame } from "./layout/PaneFrame.js";
 import { createPaneTimelines } from "./layout/pane-timelines.js";
 import { createPendingAgents } from "./layout/pending-agents.js";
@@ -76,6 +91,10 @@ import {
   createManagementController,
   type ManagementContext,
 } from "./management-controller.js";
+import {
+  type AttentionNotification,
+  createAttentionNotifier,
+} from "./notify/attention-notifier.js";
 import { ManagementOverlayView } from "./overlays/ManagementOverlayView.js";
 import { ShortcutPopup } from "./overlays/ShortcutPopup.js";
 import type { Focus } from "./permission/permission-focus.js";
@@ -85,6 +104,7 @@ import {
   ThemeContext,
 } from "./render/theme.js";
 import { StatusBar } from "./StatusBar.js";
+import { scheduleDeps } from "./schedules/schedule-deps.js";
 import { statusLabel } from "./status-hints.js";
 import { SubagentPill } from "./subagents/SubagentPill.js";
 import { SubagentPopup } from "./subagents/SubagentPopup.js";
@@ -98,12 +118,17 @@ import {
 import { createSubagentTimelines } from "./subagents/subagent-timelines.js";
 import { providerHeader } from "./subagents/subagents.js";
 import { TerminalPane } from "./terminal/TerminalPane.js";
+import {
+  createTerminalAttention,
+  terminalIndicator,
+} from "./terminal/terminal-activity.js";
 import { toBlocks } from "./timeline/blocks.js";
 import {
   type TimelineControls,
   TimelineView,
 } from "./timeline/TimelineView.js";
 import { type ExternalStore, useStore } from "./use-store.js";
+import { DEFAULT_DIFF_TOOL } from "./workspace/diff-tool.js";
 import { WorkspaceTabs } from "./workspace/WorkspaceTabs.js";
 import type { WorkspaceActions } from "./workspace/workspace-actions.js";
 import type { DirectorySnapshot } from "./workspace/workspace-directory.js";
@@ -150,6 +175,18 @@ export interface AppProps {
   systemClipboard?: SystemClipboard;
   /** Provider-owned subagents; absent when the daemon lacks `providerSubagents`. */
   subagents?: ProviderSubagentStore;
+  /** Desktop notification for an agent that starts waiting while you look elsewhere. */
+  notify?(notification: AttentionNotification): void;
+  /** Shell command the diff tab runs in the workspace (`g d`). */
+  diffTool?: string;
+  /** The effective key table (defaults plus config `keys`). */
+  bindings?: readonly Binding[];
+  /** Per-workspace split layouts and tabs, kept across restarts. */
+  layouts?: LayoutMemory;
+  /** Provider usage meters; absent when the daemon reports no usage. */
+  usage?: UsageStore;
+  /** Daemon schedules for the Command Center's Schedules view. */
+  schedules?: SchedulePort;
   onExit(): void;
 }
 export function App({
@@ -174,6 +211,12 @@ export function App({
   clipboard,
   systemClipboard,
   subagents,
+  notify,
+  diffTool = DEFAULT_DIFF_TOOL,
+  bindings = BINDINGS,
+  layouts,
+  usage,
+  schedules,
 }: AppProps) {
   const renderer = useRenderer();
   const router = useMemo(() => createKeyRouter(), []);
@@ -243,7 +286,10 @@ export function App({
     () => projects.flatMap((project) => project.workspaces),
     [projects],
   );
-  const navigation = useMemo(() => createWorkspaceNavigation(), []);
+  const navigation = useMemo(
+    () => createWorkspaceNavigation(layouts?.tabs()),
+    [layouts],
+  );
   const navigationState = useStore(navigation);
   const cursorWorkspace = navigationState.cursorId;
   const activeWorkspace = navigationState.workspaceId;
@@ -416,6 +462,27 @@ export function App({
     subagentTabs,
     current?.agentId,
   ]);
+  /** The workspace whose layout is on screen; switching swaps in its remembered layout. */
+  const layoutOwner = useRef<string | null>(null);
+  const openWorkspaceId = navigationState.workspaceId;
+  const openTabKey = navigationState.tab?.key ?? null;
+  useEffect(() => {
+    if (!layouts) return;
+    if (layoutOwner.current === openWorkspaceId) {
+      if (openWorkspaceId) layouts.record(openWorkspaceId, layout, openTabKey);
+      return;
+    }
+    layoutOwner.current = openWorkspaceId;
+    if (!openWorkspaceId) return;
+    const tab = navigation.getSnapshot().tab;
+    const restored = layouts.restore(openWorkspaceId, {
+      agentIds: new Set(flat.map((agent) => agent.id)),
+      tabAgentId: tab?.kind === "agent" ? tab.agent.id : null,
+    });
+    if (!restored) return;
+    setProviderViews(new Map());
+    setLayout(restored);
+  }, [layouts, navigation, openWorkspaceId, openTabKey, layout, flat]);
   const timeline = current
     ? (stores.get(`${current.id}:${current.agentId}`) ?? null)
     : null;
@@ -433,6 +500,68 @@ export function App({
   useEffect(() => {
     if (viewedAgent) attention.view(viewedAgent);
   }, [attention, viewedAgent]);
+  const terminalAttention = useMemo(() => createTerminalAttention(), []);
+  const viewedTerminals = useStore(terminalAttention);
+  const viewedTerminal = directoryState.terminals.find(
+    (terminal) => terminal.id === terminalId,
+  );
+  useEffect(() => {
+    if (viewedTerminal)
+      terminalAttention.view({
+        id: viewedTerminal.id,
+        activity: viewedTerminal.activity ?? null,
+      });
+  }, [terminalAttention, viewedTerminal]);
+  const terminalFocused = useRef(true);
+  useEffect(() => {
+    const focused = () => {
+      terminalFocused.current = true;
+    };
+    const blurred = () => {
+      terminalFocused.current = false;
+    };
+    renderer.on("focus", focused);
+    renderer.on("blur", blurred);
+    return () => {
+      renderer.off("focus", focused);
+      renderer.off("blur", blurred);
+    };
+  }, [renderer]);
+  const notifier = useMemo(() => createAttentionNotifier(), []);
+  const liveAgents = useMemo(
+    () => flat.filter((agent) => agent.archivedAt == null),
+    [flat],
+  );
+  const viewedAgentId = viewedAgent?.id;
+  useEffect(() => {
+    if (!notify) return;
+    for (const notification of notifier.update(
+      liveAgents,
+      acknowledged,
+      (agentId) => terminalFocused.current && agentId === viewedAgentId,
+    ))
+      notify(notification);
+  }, [notify, notifier, liveAgents, acknowledged, viewedAgentId]);
+  const [grouping, setGrouping] = useState<SidebarGrouping>("project");
+  const sections = sidebarSections(
+    projects,
+    new Map(
+      workspaces.map((workspace) => [
+        workspace.id,
+        workspaceBucket(
+          liveAgents.filter((agent) => agent.workspaceId === workspace.id),
+          acknowledged,
+        ),
+      ]),
+    ),
+    grouping,
+  );
+  /** Workspaces in sidebar order: what j/k, [ ] and Alt-digits walk. */
+  const sidebarOrder = sections.flatMap((section) => section.workspaces);
+  const waiting = attentionQueue(liveAgents, acknowledged).map((agent) => ({
+    agent,
+    reason: attentionWait(agent, acknowledged)?.body ?? "",
+  }));
   function clearProviderView(paneId: string) {
     setProviderViews((previous) => {
       if (!previous.has(paneId)) return previous;
@@ -500,12 +629,19 @@ export function App({
     height: Math.max(0, height - 1 - (error || directoryState.error ? 1 : 0)),
   };
   const rects = computeRects(layout, area);
-  const tabIndicators = new Map(
-    flat.map((agent) => [
+  const tabIndicators = new Map<string, Indicator>([
+    ...flat.map((agent): [string, Indicator] => [
       `agent:${agent.id}`,
       agentIndicator(agent, acknowledged),
     ]),
-  );
+    ...directoryState.terminals.map((terminal): [string, Indicator] => [
+      `terminal:${terminal.id}`,
+      terminalIndicator(
+        { id: terminal.id, activity: terminal.activity ?? null },
+        viewedTerminals,
+      ),
+    ]),
+  ]);
   const descriptors = useStore(subagents ?? NO_SUBAGENTS);
   const [subagentPopup, setSubagentPopup] = useState<string | null>(null);
   /** The provider subagent a pane shows instead of its agent, while still valid. */
@@ -701,6 +837,10 @@ export function App({
       case "tab.rename":
         manager.renameCurrentTab();
         break;
+      case "diff.open":
+        setHelp(false);
+        manager.openDiffTool(diffTool, visibleTerminals);
+        break;
       case "palette.open":
         manager.close();
         setHelp(false);
@@ -745,6 +885,43 @@ export function App({
         if (tab) openTab(tab);
         break;
       }
+      case "tab.select": {
+        const tab = tabs[action.index];
+        if (tab) openTab(tab);
+        break;
+      }
+      case "workspace.select": {
+        const workspace = sidebarOrder[action.index];
+        if (workspace) openWorkspace(workspace);
+        break;
+      }
+      case "workspace.cycle": {
+        const count = sidebarOrder.length;
+        const index = sidebarOrder.findIndex(
+          (workspace) => workspace.id === activeWorkspace,
+        );
+        const workspace =
+          sidebarOrder[
+            index < 0
+              ? action.delta > 0
+                ? 0
+                : count - 1
+              : (index + action.delta + count) % count
+          ];
+        if (workspace) openWorkspace(workspace);
+        break;
+      }
+      case "attention.next": {
+        const agent = nextAttention(
+          waiting.map((entry) => entry.agent),
+          terminalId ? null : (current?.agentId ?? null),
+        );
+        if (agent) open(agent);
+        break;
+      }
+      case "sidebar.toggleGrouping":
+        setGrouping((value) => (value === "project" ? "status" : "project"));
+        break;
       case "help":
         setHelp((v) => !v);
         break;
@@ -765,10 +942,11 @@ export function App({
         setFocus({ pane: "timeline" });
         break;
       case "list.move":
-        navigation.moveCursor(workspaces, action.delta);
+        navigation.moveCursor(sidebarOrder, action.delta);
         break;
       case "list.edge": {
-        const next = action.edge === "top" ? workspaces[0] : workspaces.at(-1);
+        const next =
+          action.edge === "top" ? sidebarOrder[0] : sidebarOrder.at(-1);
         if (next) navigation.cursor(next.id);
         break;
       }
@@ -857,6 +1035,7 @@ export function App({
     files: chatFiles,
     createAgent,
     groups,
+    waiting,
     workspaces,
     focusedAgent: terminalId
       ? undefined
@@ -864,6 +1043,17 @@ export function App({
     focusedStore: terminalId ? null : timeline,
     models: catalog?.models,
     prefixLabel: prefixLabel(prefix),
+    bindings,
+    schedules:
+      schedules &&
+      scheduleDeps(schedules, {
+        notify: (text) => setNotice({ text }),
+        agents: flat,
+        focusedAgent,
+        open,
+        createAgent,
+      }),
+    usage,
     open,
     changeLayout: setLayout,
     workspace(workspace: WorkspaceRow) {
@@ -877,6 +1067,7 @@ export function App({
     files: chatFiles,
     createAgent,
     groups,
+    waiting,
     workspaces,
     focusedAgent: terminalId
       ? undefined
@@ -884,6 +1075,17 @@ export function App({
     focusedStore: terminalId ? null : timeline,
     models: catalog?.models,
     prefixLabel: prefixLabel(prefix),
+    bindings,
+    schedules:
+      schedules &&
+      scheduleDeps(schedules, {
+        notify: (text) => setNotice({ text }),
+        agents: flat,
+        focusedAgent,
+        open,
+        createAgent,
+      }),
+    usage,
     open,
     workspace(workspace: WorkspaceRow) {
       setSidebarVisible(true);
@@ -924,16 +1126,11 @@ export function App({
       managementState.overlay.kind === "confirm-archive"
     )
       return;
-    if (event.ctrl && event.name === "n") {
+    const always = globalAction(event, bindings);
+    if (always) {
       event.preventDefault();
       event.stopPropagation();
-      act({ type: "tab.create" });
-      return;
-    }
-    if (event.ctrl && event.name === "k") {
-      event.preventDefault();
-      event.stopPropagation();
-      act({ type: "palette.open" });
+      act(always);
       return;
     }
     if (event.ctrl && event.name === "c") {
@@ -962,6 +1159,7 @@ export function App({
       mode.kind !== "palette" &&
       focus.pane !== "permission",
     prefix,
+    bindings,
   );
   return (
     <FileLinksContext value={fileLinks}>
@@ -978,7 +1176,20 @@ export function App({
                 width={sidebarWidth}
                 focused={focus.pane === "list" && !overlayOpen}
                 onResize={setRequestedWidth}
-                projects={projects}
+                sections={sections}
+                pending={
+                  new Map(
+                    workspaces.map((workspace) => [
+                      workspace.id,
+                      liveAgents
+                        .filter((agent) => agent.workspaceId === workspace.id)
+                        .reduce(
+                          (sum, agent) => sum + agent.pendingPermissions.length,
+                          0,
+                        ),
+                    ]),
+                  )
+                }
                 indicators={
                   new Map(
                     workspaces.map((workspace) => [
@@ -1204,6 +1415,7 @@ export function App({
           {help ? (
             <ShortcutPopup
               prefix={prefixLabel(prefix)}
+              bindings={bindings}
               onClose={() => setHelp(false)}
             />
           ) : null}
@@ -1241,11 +1453,13 @@ export function App({
               createError: createError?.message ?? null,
             })}
             connection={connection}
+            usage={usage}
             timeline={terminalId ? null : timeline}
             mode={mode}
             terminalInput={terminalInput}
             context={focus.pane === "list" ? "sidebar" : "pane"}
             searchStatus={searchStatuses.get(layout.focusedId) ?? ""}
+            bindings={bindings}
           />
         </box>
       </KeyRouterContext>

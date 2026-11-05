@@ -65,50 +65,101 @@ export function scrollbarOptions(
   };
 }
 
-export function createTheme(env: NodeJS.ProcessEnv): Theme {
+type ColorField = {
+  [K in keyof Theme]: Theme[K] extends string ? K : never;
+}[keyof Theme];
+/** Top-level theme colors a config may override. */
+export const THEME_COLOR_FIELDS: readonly ColorField[] = [
+  "fg",
+  "muted",
+  "faint",
+  "accent",
+  "user",
+  "userBg",
+  "assistant",
+  "tool",
+  "reasoning",
+  "error",
+  "warn",
+  "success",
+  "border",
+  "borderFocused",
+  "selectionBg",
+  "cursorBg",
+  "cursorFg",
+  "codeBg",
+  "copySelectionBg",
+  "copySelectionFg",
+  "copyCursorBg",
+  "copyCursorFg",
+];
+export const THEME_STATUS_FIELDS: readonly (keyof Theme["status"])[] = [
+  "running",
+  "idle",
+  "error",
+  "attention",
+  "question",
+];
+export function isHighlightStyle(key: string): key is HighlightStyle {
+  return Object.hasOwn(darkHighlightColors, key);
+}
+/** User colors merged over the defaults; `heading` replaces levels from the first. */
+export type ThemeOverrides = Partial<Pick<Theme, ColorField>> & {
+  status?: Partial<Theme["status"]>;
+  syntax?: Partial<Theme["syntax"]>;
+  heading?: readonly string[];
+};
+
+export function createTheme(
+  env: NodeJS.ProcessEnv,
+  overrides: ThemeOverrides = {},
+): Theme {
   function color(value: string): string {
     return env.NO_COLOR ? "" : value;
   }
   return {
-    fg: color("#d4d4d4"),
-    muted: color("#9a9a9a"),
-    faint: color("#707070"),
-    accent: color("#82aaff"),
-    user: color("#c8dcff"),
-    userBg: color("#35496a"),
-    assistant: color("#d4d4d4"),
-    tool: color("#89ddff"),
-    reasoning: color("#b0a0c0"),
-    error: color("#f07178"),
-    warn: color("#ffcb6b"),
-    success: color("#c3e88d"),
-    border: color("#454545"),
-    borderFocused: color("#82aaff"),
-    selectionBg: color("#283142"),
-    cursorBg: color("#82aaff"),
-    cursorFg: color("#101820"),
-    codeBg: color("#20242c"),
-    copySelectionBg: color("#ffd700"),
-    copySelectionFg: color("#000000"),
-    copyCursorBg: color("#ffffff"),
-    copyCursorFg: color("#000000"),
+    fg: color(overrides.fg ?? "#d4d4d4"),
+    muted: color(overrides.muted ?? "#9a9a9a"),
+    faint: color(overrides.faint ?? "#707070"),
+    accent: color(overrides.accent ?? "#82aaff"),
+    user: color(overrides.user ?? "#c8dcff"),
+    userBg: color(overrides.userBg ?? "#35496a"),
+    assistant: color(overrides.assistant ?? "#d4d4d4"),
+    tool: color(overrides.tool ?? "#89ddff"),
+    reasoning: color(overrides.reasoning ?? "#b0a0c0"),
+    error: color(overrides.error ?? "#f07178"),
+    warn: color(overrides.warn ?? "#ffcb6b"),
+    success: color(overrides.success ?? "#c3e88d"),
+    border: color(overrides.border ?? "#454545"),
+    borderFocused: color(overrides.borderFocused ?? "#82aaff"),
+    selectionBg: color(overrides.selectionBg ?? "#283142"),
+    cursorBg: color(overrides.cursorBg ?? "#82aaff"),
+    cursorFg: color(overrides.cursorFg ?? "#101820"),
+    codeBg: color(overrides.codeBg ?? "#20242c"),
+    copySelectionBg: color(overrides.copySelectionBg ?? "#ffd700"),
+    copySelectionFg: color(overrides.copySelectionFg ?? "#000000"),
+    copyCursorBg: color(overrides.copyCursorBg ?? "#ffffff"),
+    copyCursorFg: color(overrides.copyCursorFg ?? "#000000"),
     status: {
-      running: color("#82aaff"),
-      idle: color("#c3e88d"),
-      error: color("#f07178"),
-      attention: color("#ffcb6b"),
-      question: color("#c792ea"),
+      running: color(overrides.status?.running ?? "#82aaff"),
+      idle: color(overrides.status?.idle ?? "#c3e88d"),
+      error: color(overrides.status?.error ?? "#f07178"),
+      attention: color(overrides.status?.attention ?? "#ffcb6b"),
+      question: color(overrides.status?.question ?? "#c792ea"),
     },
     syntax: {
       ...darkHighlightColors,
       ...Object.fromEntries(
-        Object.entries(darkHighlightColors).map(([key, value]) => [
-          key,
-          color(value),
-        ]),
+        Object.entries({ ...darkHighlightColors, ...overrides.syntax }).map(
+          ([key, value]) => [key, color(value)],
+        ),
       ),
     },
-    heading: [color("#82aaff"), color("#89ddff"), color("#c3e88d")],
+    heading: [
+      color(overrides.heading?.[0] ?? "#82aaff"),
+      color(overrides.heading?.[1] ?? "#89ddff"),
+      color(overrides.heading?.[2] ?? "#c3e88d"),
+    ],
   };
 }
 

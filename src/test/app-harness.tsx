@@ -15,6 +15,7 @@ import { createRoot, flushSync } from "@opentui/react";
 import { afterEach } from "vitest";
 import { createAgentsStore } from "../state/agents-store.js";
 import type {
+  AgentHistoryPort,
   AgentPort,
   AgentsList,
   AgentsPort,
@@ -33,6 +34,8 @@ import {
   createTheme,
   ThemeContext,
 } from "../ui/render/theme.js";
+import type { DirectorySnapshot } from "../ui/workspace/workspace-directory.js";
+import type { WorkspaceRow } from "../ui/workspace/workspaces.js";
 
 export const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -99,6 +102,13 @@ export class FakeAgents implements AgentsPort {
     };
   }
 }
+/** Daemon-side history for a fake agent; omitted means a daemon without those features. */
+export interface FakeHistoryOptions {
+  /** Rows the tail fetch returns; older ones page in through `fetchBefore`. */
+  tail: number;
+  /** Whether the daemon advertises `agentHistorySearch`. */
+  search: boolean;
+}
 export class FakeAgent implements AgentPort {
   sent: string[] = [];
   responses: { id: string; response: AgentPermissionResponse }[] = [];
@@ -111,10 +121,53 @@ export class FakeAgent implements AgentPort {
   cancelGate: Promise<void> = Promise.resolve();
   handler: ((event: PaseoAgentTimelineEvent) => void) | null = null;
   released = false;
+  readonly history?: AgentHistoryPort;
   constructor(
     readonly current: PaseoAgent,
     readonly items: AgentTimelineItem[],
-  ) {}
+    options?: FakeHistoryOptions,
+  ) {
+    if (options) {
+      this.tailSize = options.tail;
+      this.history = {
+        fetchBefore: async (cursor, limit) => {
+          const seqs = this.items
+            .map((_, index) => index + 1)
+            .filter((seq) => seq < cursor.seq)
+            .slice(-limit);
+          return { ...this.rows(seqs), hasOlder: (seqs[0] ?? 1) > 1 };
+        },
+        search: options.search
+          ? async (query) => ({
+              epoch: "epoch",
+              seqs: this.items.flatMap((item, index) =>
+                (item.type === "user_message" ||
+                  item.type === "assistant_message") &&
+                item.text.toLowerCase().includes(query.toLowerCase())
+                  ? [index + 1]
+                  : [],
+              ),
+              truncated: false,
+            })
+          : null,
+        prompts: null,
+        rewind: null,
+        forkContext: null,
+        setThinking: null,
+      };
+    }
+  }
+  private tailSize: number | null = null;
+  private rows(seqs: number[]) {
+    const rows = page(seqs);
+    return {
+      ...rows,
+      entries: rows.entries.map((entry) => ({
+        ...entry,
+        item: at(this.items, entry.seqEnd - 1),
+      })),
+    };
+  }
   subscribe(handler: (event: PaseoAgentTimelineEvent) => void) {
     this.handler = handler;
     return Object.assign(
@@ -126,20 +179,21 @@ export class FakeAgent implements AgentPort {
   }
   async fetchTail() {
     const seqs = this.items.map((_, index) => index + 1);
-    const tail = page(seqs);
-    return {
-      ...tail,
-      entries: tail.entries.map((entry, index) => ({
-        ...entry,
-        item: at(this.items, index),
-      })),
-    };
+    return this.rows(
+      this.tailSize === null ? seqs : seqs.slice(-this.tailSize),
+    );
   }
   async fetchAfter(): Promise<never> {
     throw new Error("unexpected catch-up");
   }
   async send(text: string) {
     this.sent.push(text);
+    await this.sendGate;
+    if (this.sendError) throw this.sendError;
+  }
+  steered: string[] = [];
+  async steer(text: string) {
+    this.steered.push(text);
     await this.sendGate;
     if (this.sendError) throw this.sendError;
   }
@@ -257,11 +311,12 @@ export async function setup(
   thinkingPreference?: ThinkingPreference,
   extra: Partial<AppProps> = {},
   items?: (agentId: string) => AgentTimelineItem[] | null,
+  history?: (agentId: string) => FakeHistoryOptions | undefined,
 ) {
   const workspaceIds = [
     ...new Set(currentAgents.map((agent) => agent.workspaceId ?? agent.cwd)),
   ];
-  let directorySnapshot = {
+  let directorySnapshot: DirectorySnapshot = {
     projects: [
       {
         projectId: "repo",
@@ -329,6 +384,7 @@ export async function setup(
         { type: "assistant_message", text: "Hi " },
         { type: "assistant_message", text: "there" },
       ],
+      history?.(value.id),
     );
     ports.set(value.id, port);
     return createTimelineStore(port);
@@ -418,7 +474,16 @@ export async function setup(
     };
     for (const listener of directoryListeners) listener();
   }
-  function setTerminals(terminals: typeof directorySnapshot.terminals) {
+  function updateWorkspace(id: string, patch: Partial<WorkspaceRow>) {
+    directorySnapshot = {
+      ...directorySnapshot,
+      workspaces: directorySnapshot.workspaces.map((row) =>
+        row.id === id ? { ...row, ...patch } : row,
+      ),
+    };
+    for (const listener of directoryListeners) listener();
+  }
+  function setTerminals(terminals: DirectorySnapshot["terminals"]) {
     directorySnapshot = { ...directorySnapshot, terminals };
     for (const listener of directoryListeners) listener();
   }
@@ -430,6 +495,7 @@ export async function setup(
     test,
     cleared,
     removeWorkspace,
+    updateWorkspace,
     setTerminals,
   };
 }

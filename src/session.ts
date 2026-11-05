@@ -4,6 +4,7 @@ import { createAgentPort, createAgentsPort } from "./state/ports.js";
 import { createProviderSubagentStore } from "./state/provider-subagents.js";
 import { createTimelineRegistry } from "./state/timeline-registry.js";
 import { createTimelineStore } from "./state/timeline-store.js";
+import { createUsageStore } from "./state/usage-store.js";
 import { watchConnection } from "./ui/connection-status.js";
 import {
   createWorkspaceActions,
@@ -25,14 +26,24 @@ export function createSession(connection: Connection) {
     connection.management.capabilities.thinking,
   );
   const agents = createAgentsStore(agentsPort);
-  const directory = createWorkspaceDirectory(connection.api);
+  const directory = createWorkspaceDirectory({
+    ...connection.api,
+    terminals: connection.terminalList,
+  });
+  const usage = connection.usage
+    ? createUsageStore(connection.usage)
+    : undefined;
   const status = watchConnection(connection, () => {
     void agents.resync();
     void directory.resync();
   });
   const timelines = createTimelineRegistry((agent) =>
     createTimelineStore(
-      createAgentPort(connection.api.agents.ref(agent), connection.daemon),
+      createAgentPort(
+        connection.api.agents.ref(agent),
+        connection.daemon,
+        connection.agentFeatures,
+      ),
     ),
   );
   const subagents = connection.subagents
@@ -54,7 +65,10 @@ export function createSession(connection: Connection) {
     status,
     timelines,
     subagents,
+    usage,
+    schedules: connection.schedules,
     async close() {
+      usage?.close();
       subagents?.close();
       timelines.close();
       status.close();

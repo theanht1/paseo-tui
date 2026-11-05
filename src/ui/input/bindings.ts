@@ -52,6 +52,7 @@ export const BINDINGS: readonly Binding[] = [
     modes: ["normal", "insert", "prefix", "search", "palette"],
     action: { type: "tab.create" },
     description: "New tab",
+    global: true,
   },
   {
     keys: "R",
@@ -77,6 +78,7 @@ export const BINDINGS: readonly Binding[] = [
     modes: ["normal", "insert", "prefix", "search", "palette"],
     action: { type: "palette.open" },
     description: "Command Center",
+    global: true,
   },
   {
     keys: ":",
@@ -387,12 +389,60 @@ export const BINDINGS: readonly Binding[] = [
     description: "Previous workspace tab",
   },
   {
+    keys: "g d",
+    modes: ["normal"],
+    action: { type: "diff.open" },
+    description: "Open changes (lazygit)",
+  },
+  {
     keys: "F",
     modes: ["normal"],
     context: "pane",
     action: { type: "hint.start" },
     description: "Open a file path from the chat (hints)",
   },
+  {
+    keys: "U",
+    modes: ["normal"],
+    action: { type: "attention.next" },
+    description: "Jump to next agent that needs you",
+  },
+  {
+    keys: "S",
+    modes: ["normal"],
+    action: { type: "sidebar.toggleGrouping" },
+    description: "Group sidebar by project / status",
+  },
+  {
+    keys: "]",
+    modes: ["normal"],
+    action: { type: "workspace.cycle", delta: 1 },
+    description: "Next workspace",
+  },
+  {
+    keys: "[",
+    modes: ["normal"],
+    action: { type: "workspace.cycle", delta: -1 },
+    description: "Previous workspace",
+  },
+  ...Array.from(
+    { length: 9 },
+    (_, index): Binding => ({
+      keys: String(index + 1),
+      modes: ["normal"],
+      action: { type: "tab.select", index },
+      description: `Select tab ${index + 1}`,
+    }),
+  ),
+  ...Array.from(
+    { length: 9 },
+    (_, index): Binding => ({
+      keys: `Meta-${index + 1}`,
+      modes: ["normal", "insert"],
+      action: { type: "workspace.select", index },
+      description: `Open workspace ${index + 1}`,
+    }),
+  ),
   ...COPY_BINDINGS,
   ...HINT_BINDINGS,
 ];

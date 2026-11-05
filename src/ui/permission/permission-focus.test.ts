@@ -16,6 +16,7 @@ test("new permissions take focus, removal selects next then timeline, defer stay
       throw Error("unused");
     },
     send: async () => {},
+    steer: async () => {},
     respondToPermission: async () => {},
     cancel: async () => {},
     setMode: async () => null,

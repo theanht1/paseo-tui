@@ -4,9 +4,13 @@ import type {
   AgentPermissionResponse,
   AgentTimelineItem,
 } from "@getpaseo/protocol/agent-types";
-import type { TimelineCursor } from "../connection/ports.js";
+import type {
+  ForkAttachment,
+  RewindMode,
+  TimelineCursor,
+} from "../connection/ports.js";
 import { createEmitter } from "./emitter.js";
-import type { AgentPort, TimelinePage } from "./ports.js";
+import type { AgentHistoryPort, AgentPort, TimelinePage } from "./ports.js";
 
 export interface TimelineRow {
   seq: number;
@@ -51,6 +55,16 @@ function pageRows(page: TimelinePage): TimelineRow[] {
   return rows.sort((a, b) => a.seq - b.seq);
 }
 
+const MAX_LIVE_ROWS = 500;
+const OLDER_PAGE = 200;
+const GONE = "That message is no longer in the history";
+export interface ForkSeed {
+  /** The chosen prompt's full text. */
+  text: string;
+  /** Chat history before the prompt; null when forking from the first prompt. */
+  attachment: ForkAttachment | null;
+}
+
 export type TimelineStore = ReturnType<typeof createTimelineStore>;
 export function createTimelineStore(port: AgentPort) {
   const emitter = createEmitter();
@@ -71,6 +85,14 @@ export function createTimelineStore(port: AgentPort) {
   let buffered: PaseoAgentTimelineEvent[] | null = [];
   let queue = Promise.resolve();
   let opening: Promise<void> | null = null;
+  /** Oldest sequence paged in by `reveal`; rows from it on survive the live-row cap. */
+  let floor: number | null = null;
+  function cap(rows: TimelineRow[]) {
+    const start = floor;
+    return start === null
+      ? rows.slice(-MAX_LIVE_ROWS)
+      : rows.filter((row) => row.seq >= start);
+  }
 
   function isActive() {
     return phase !== "closed" && phase !== "error";
@@ -107,7 +129,8 @@ export function createTimelineStore(port: AgentPort) {
     const page = await port.fetchTail(200);
     if (!isActive()) return;
     if (page.error) throw new Error(page.error);
-    const rows = pageRows(page).slice(-500);
+    floor = null;
+    const rows = cap(pageRows(page));
     cursor = {
       epoch: page.epoch,
       seq: page.endCursor?.seq ?? page.window.maxSeq,
@@ -131,7 +154,7 @@ export function createTimelineStore(port: AgentPort) {
       ...seedAgent(page),
       status: "ready",
       epoch: page.epoch,
-      rows: [...snapshot.rows, ...rows].slice(-500),
+      rows: cap([...snapshot.rows, ...rows]),
       error: null,
     });
   }
@@ -182,7 +205,7 @@ export function createTimelineStore(port: AgentPort) {
       status: "ready",
       epoch,
       error: null,
-      rows: [...snapshot.rows, row].slice(-500),
+      rows: cap([...snapshot.rows, row]),
     });
   }
   function removePermission(requestId: string) {
@@ -310,6 +333,12 @@ export function createTimelineStore(port: AgentPort) {
     if (prompt.length === 0) return;
     await action(() => port.send(prompt));
   }
+  /** Answer pending permissions with a message; the daemon resolves them. */
+  async function steer(text: string) {
+    const prompt = text.trim();
+    if (prompt.length === 0) return;
+    await action(() => port.steer(prompt));
+  }
   async function respond(requestId: string, response: AgentPermissionResponse) {
     await action(async () => {
       await port.respondToPermission(requestId, response);
@@ -334,6 +363,82 @@ export function createTimelineStore(port: AgentPort) {
   async function archive() {
     await action(() => port.archive());
   }
+  /** Pages older rows in until `seq` is loaded; serialized with live updates. */
+  function reveal(history: AgentHistoryPort, seq: number): Promise<void> {
+    const run = queue.then(async () => {
+      while (isActive()) {
+        const first = snapshot.rows[0];
+        const epoch = snapshot.epoch;
+        if (!first || epoch === null || first.seq <= seq) return;
+        const page = await history.fetchBefore(
+          { epoch, seq: first.seq },
+          OLDER_PAGE,
+        );
+        if (!isActive()) return;
+        if (page.error) throw Error(page.error);
+        if (page.epoch !== epoch) throw Error("History changed; search again");
+        const older = pageRows(page).filter((row) => row.seq < first.seq);
+        const oldest = older[0];
+        if (!oldest) throw Error(GONE);
+        floor = oldest.seq;
+        publish({ ...snapshot, rows: [...older, ...snapshot.rows] });
+        if (!page.hasOlder && oldest.seq > seq) throw Error(GONE);
+      }
+    });
+    queue = run.catch(() => {});
+    return run;
+  }
+  /** The user prompt at `prompt.seq`, read straight from the daemon. */
+  async function promptItem(prompt: TimelineCursor) {
+    const page = await port.fetchAfter(
+      { epoch: prompt.epoch, seq: prompt.seq - 1 },
+      1,
+    );
+    if (page.error) throw Error(page.error);
+    const entry = page.entries.find((entry) => entry.seqEnd === prompt.seq);
+    if (page.epoch !== prompt.epoch || entry?.item.type !== "user_message")
+      throw Error(GONE);
+    return entry.item;
+  }
+  const history = port.history;
+  const searchHistory = history?.search;
+  const listPrompts = history?.prompts;
+  const rewindTo = history?.rewind;
+  const forkContext = history?.forkContext;
+  const setThinkingOption = history?.setThinking;
+  const search =
+    history && searchHistory
+      ? { find: searchHistory, reveal: (seq: number) => reveal(history, seq) }
+      : null;
+  const rewind = rewindTo
+    ? (prompt: TimelineCursor, mode: RewindMode) =>
+        action(async () => {
+          const item = await promptItem(prompt);
+          if (!item.messageId)
+            throw Error("That prompt has no message id to rewind to");
+          await rewindTo(item.messageId, mode);
+        })
+    : null;
+  /** `withHistory` false forks from the first prompt, which has nothing before it. */
+  const fork = forkContext
+    ? async (
+        prompt: TimelineCursor,
+        withHistory: boolean,
+      ): Promise<ForkSeed> => {
+        const item = await promptItem(prompt);
+        const attachment = withHistory
+          ? await forkContext({ epoch: prompt.epoch, seq: prompt.seq - 1 })
+          : null;
+        return { text: item.text, attachment };
+      }
+    : null;
+  const setThinking = setThinkingOption
+    ? (optionId: string) =>
+        action(async () => {
+          const notice = await setThinkingOption(optionId);
+          if (isActive()) publish({ ...snapshot, lastNotice: notice });
+        })
+    : null;
   function close() {
     if (phase === "closed") return;
     phase = "closed";
@@ -351,11 +456,18 @@ export function createTimelineStore(port: AgentPort) {
     open,
     close,
     send,
+    steer,
     respond,
     cancel,
     setMode,
     setModel,
     rename,
     archive,
+    /** Full-history search (`agentHistorySearch`) and paging to a match. */
+    search,
+    prompts: listPrompts ?? null,
+    rewind,
+    fork,
+    setThinking,
   };
 }

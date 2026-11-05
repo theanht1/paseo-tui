@@ -146,6 +146,19 @@ test("q is inert in normal mode and gt/gT cycle workspace tabs", () => {
     delta: -1,
   });
 });
+test("gd opens the diff tool from either context and is in the Command Center", () => {
+  for (const context of ["sidebar", "pane"] as const) {
+    const first = dispatch(normal, context, key("g"));
+    const result = dispatch(first.mode, context, key("d"));
+    expect(result.action).toEqual({ type: "diff.open" });
+    expect(result.mode).toEqual(normal);
+  }
+  expect(paletteActions("Ctrl-B")).toContainEqual({
+    action: { type: "diff.open" },
+    title: "Open changes (lazygit)",
+    shortcut: "g d",
+  });
+});
 test("Ctrl-N opens a new tab from every mode, including text input modes", () => {
   for (const mode of [
     normal,
@@ -299,4 +312,48 @@ test("the palette returns to the mode it was opened from", () => {
     kind: "search",
     query: "x",
   });
+});
+test("triage keys: U jumps to attention, S regroups, [ ] cycle workspaces, digits pick tabs", () => {
+  for (const context of ["sidebar", "pane"] as const) {
+    expect(dispatch(normal, context, key("U")).action).toEqual({
+      type: "attention.next",
+    });
+    expect(dispatch(normal, context, key("S")).action).toEqual({
+      type: "sidebar.toggleGrouping",
+    });
+    expect(dispatch(normal, context, key("]")).action).toEqual({
+      type: "workspace.cycle",
+      delta: 1,
+    });
+    expect(dispatch(normal, context, key("[")).action).toEqual({
+      type: "workspace.cycle",
+      delta: -1,
+    });
+    expect(dispatch(normal, context, key("3")).action).toEqual({
+      type: "tab.select",
+      index: 2,
+    });
+  }
+  expect(dispatch({ kind: "insert" }, "pane", key("3")).action).toBeNull();
+});
+test("Alt-digit opens a workspace by sidebar position from normal and insert mode", () => {
+  const alt = parseKeypress("\x1b2");
+  if (!alt) throw Error("unparsed");
+  expect(dispatch(normal, "pane", alt).action).toEqual({
+    type: "workspace.select",
+    index: 1,
+  });
+  const inserting = dispatch({ kind: "insert" }, "pane", alt);
+  expect(inserting).toEqual({
+    mode: { kind: "insert" },
+    action: { type: "workspace.select", index: 1 },
+  });
+});
+test("the Command Center lists the triage actions but not positional jumps", () => {
+  const types = paletteActions("C-b").map((entry) => entry.action.type);
+  expect(types).toContain("attention.next");
+  expect(types).toContain("sidebar.toggleGrouping");
+  expect(types).toContain("workspace.cycle");
+  expect(types).not.toContain("tab.select");
+  expect(types).not.toContain("workspace.select");
 });

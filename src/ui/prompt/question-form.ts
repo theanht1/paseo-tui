@@ -5,6 +5,7 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import { createEmitter } from "../../state/emitter.js";
 import type { Stroke } from "../input/keymap.js";
+import { STEER_HINT } from "../permission/steer.js";
 
 export interface QuestionOption {
   label: string;
@@ -357,7 +358,7 @@ export function questionRows(
       kind: "hint",
       text: form.editing
         ? "Type your answer · Enter confirm · Esc back to options"
-        : `↑↓/jk move · 1-9 pick${question.multiSelect ? " · Space toggle" : ""} · Tab/←→ question · Enter ${form.index === form.questions.length - 1 ? "submit" : "next"} · Esc cancel`,
+        : `↑↓/jk move · 1-9 pick${question.multiSelect ? " · Space toggle" : ""} · Tab/←→ question · Enter ${form.index === form.questions.length - 1 ? "submit" : "next"} · ${STEER_HINT} · Esc cancel`,
     },
     { kind: "buttons", canSubmit: canSubmitQuestions(form) },
   ];

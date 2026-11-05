@@ -6,6 +6,7 @@ import type {
   PaseoWorkspaceListOptions,
   PaseoWorkspaceListResult,
 } from "@getpaseo/client";
+import type { TerminalActivity } from "../../connection/ports.js";
 import { createEmitter } from "../../state/emitter.js";
 import type { WorkspaceRow } from "./workspaces.js";
 
@@ -21,12 +22,18 @@ export interface DirectoryApi {
     list(options?: PaseoWorkspaceListOptions): Promise<DirectoryList>;
     subscribe: PaseoApi["workspaces"]["subscribe"];
   };
-  terminals: Pick<PaseoApi["terminals"], "list">;
+  terminals: {
+    list(): Promise<{ entries: readonly DirectoryTerminal[] }>;
+  };
 }
+/** A workspace terminal; `activity` is present when the listing carries it. */
+export type DirectoryTerminal = PaseoTerminal & {
+  activity?: TerminalActivity | null;
+};
 export interface DirectorySnapshot {
   projects: readonly PaseoProject[];
   workspaces: readonly WorkspaceRow[];
-  terminals: readonly PaseoTerminal[];
+  terminals: readonly DirectoryTerminal[];
   error: string | null;
 }
 export function createWorkspaceDirectory(api: DirectoryApi) {

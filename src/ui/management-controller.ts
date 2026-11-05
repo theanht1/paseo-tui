@@ -1,4 +1,4 @@
-import type { PaseoAgent, PaseoProject } from "@getpaseo/client";
+import type { PaseoAgent, PaseoProject, PaseoTerminal } from "@getpaseo/client";
 import { createEmitter } from "../state/emitter.js";
 import type { AgentsPort, CreateAgentInput } from "../state/ports.js";
 import type { ThinkingPreference } from "./agent/thinking-preference.js";
@@ -6,6 +6,7 @@ import { agentConfigurationStep } from "./command-center/create-agent.js";
 import type { CommandStep } from "./command-center/registry.js";
 import { editorTerminal } from "./file-links/editor-terminal.js";
 import type { FileLink } from "./file-links/links.js";
+import { diffToolTab, diffToolTerminal } from "./workspace/diff-tool.js";
 import { newTabInput } from "./workspace/tab-template.js";
 import type {
   WorkspaceActions,
@@ -275,6 +276,27 @@ export function createManagementController(context: () => ManagementContext) {
       });
     });
   }
+  /** Focuses the workspace's open diff-tool tab, or runs the tool in a new one. */
+  function openDiffTool(command: string, terminals: readonly PaseoTerminal[]) {
+    const workspace = selectedWorkspace();
+    if (!workspace) return;
+    const existing = diffToolTab(workspace.id, terminals, command);
+    if (existing) {
+      context().opened({ tab: existing, input: true });
+      return;
+    }
+    run("Opening changes…", async () => {
+      const terminal = await actions().openFile(
+        workspace,
+        diffToolTerminal(command),
+      );
+      await context().refresh();
+      context().opened({
+        tab: { kind: "terminal", key: `terminal:${terminal.id}`, terminal },
+        input: true,
+      });
+    });
+  }
   /** Copies the current (or newest) agent's config; only asks when nothing can be derived. */
   function createTab() {
     const workspace = selectedWorkspace();
@@ -389,6 +411,7 @@ export function createManagementController(context: () => ManagementContext) {
     createTab,
     createTerminalTab,
     openFile,
+    openDiffTool,
     renameWorkspace,
     renameTab,
     renameCurrentTab,

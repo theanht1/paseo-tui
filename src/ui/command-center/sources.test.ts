@@ -20,6 +20,7 @@ function setup(status: "running" | "idle" = "idle") {
   const source = builtinSource({
     workspaces: [],
     groups: [{ key: "repo", agents: [value], updatedAt: value.updatedAt }],
+    waiting: [],
     focusedAgent: value,
     focusedStore: null,
     prefixLabel: "Ctrl-A",
@@ -115,6 +116,7 @@ function controls(value: PaseoAgent) {
     fetchAfter: async () => page([]),
     subscribe: () => Object.assign(() => {}, { ready: Promise.resolve() }),
     send: async () => {},
+    steer: async () => {},
     respondToPermission: async () => {},
     cancel: async () => {},
     setMode: async () => null,
@@ -126,6 +128,7 @@ function controls(value: PaseoAgent) {
   });
   const source = builtinSource({
     groups: [],
+    waiting: [],
     workspaces: [],
     focusedAgent: value,
     focusedStore: store,
@@ -176,6 +179,7 @@ it("offers daemon workspaces with no agents in Command Center", () => {
   const opened: string[] = [];
   const source = builtinSource({
     groups: [],
+    waiting: [],
     workspaces: [empty],
     focusedAgent: undefined,
     focusedStore: null,
@@ -216,6 +220,7 @@ describe("open file from this chat", () => {
     const items = builtinSource({
       workspaces: [],
       groups: [],
+      waiting: [],
       focusedAgent: value,
       focusedStore: null,
       prefixLabel: "Ctrl-A",

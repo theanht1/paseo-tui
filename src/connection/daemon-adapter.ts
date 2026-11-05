@@ -1,14 +1,19 @@
 import type { createHostClient } from "@getpaseo/client/node";
 import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
 import type {
+  AgentFeaturesPort,
   CompletionPort,
   DirectoryPort,
   DraftCommandConfig,
   ProviderSubagentPort,
   ProviderSubagentTimelinePage,
   ProviderSubagentUpdate,
+  SchedulePort,
+  TerminalEntry,
+  TerminalListPort,
   TerminalStreamPort,
   TimelineCursor,
+  UsagePort,
 } from "./ports.js";
 
 type Daemon = Pick<
@@ -41,6 +46,98 @@ export function createDaemonAdapter(daemon: Daemon): DaemonAdapter {
       await daemon.updateAgent(id, { name: trimmed });
     },
     clearAgentAttention: (id) => daemon.clearAgentAttention(id),
+  };
+}
+
+export type AgentFeaturesDaemon = Pick<
+  ReturnType<typeof createHostClient>,
+  | "searchAgentTimeline"
+  | "listAgentTimelinePrompts"
+  | "rewindAgent"
+  | "buildAgentForkContext"
+  | "setAgentThinkingOption"
+> & {
+  getLastServerInfoMessage(): {
+    features?: {
+      agentHistorySearch?: boolean;
+      agentTimelinePromptIndex?: boolean;
+      rewind?: boolean;
+      agentForkContext?: boolean;
+      agentForkContextCursor?: boolean;
+      agentThinkingUpdate?: boolean;
+    };
+  } | null;
+};
+/** The daemon returns at most 200 locations per page; five pages bound one search. */
+const SEARCH_PAGES = 5;
+export function createAgentFeaturesAdapter(
+  daemon: AgentFeaturesDaemon,
+): AgentFeaturesPort {
+  const features = daemon.getLastServerInfoMessage()?.features;
+  return {
+    search:
+      features?.agentHistorySearch === true
+        ? async (agentId, query) => {
+            const seqs: number[] = [];
+            let epoch: string | null = null;
+            let cursor: number | null = null;
+            for (let page = 0; page < SEARCH_PAGES; page++) {
+              const result = await daemon.searchAgentTimeline({
+                agentId,
+                query,
+                ...(cursor === null ? {} : { cursor }),
+              });
+              if (result.error) throw Error(result.error);
+              if (epoch !== null && result.epoch !== epoch)
+                throw Error("History changed; search again");
+              epoch = result.epoch;
+              seqs.push(...result.locations.map((location) => location.seq));
+              if (result.nextCursor === null)
+                return { epoch, seqs, truncated: false };
+              cursor = result.nextCursor;
+            }
+            return { epoch: epoch ?? "", seqs, truncated: true };
+          }
+        : null,
+    prompts:
+      features?.agentTimelinePromptIndex === true
+        ? async (agentId) => {
+            const result = await daemon.listAgentTimelinePrompts(agentId);
+            if (result.error) throw Error(result.error);
+            return { epoch: result.epoch, prompts: result.prompts };
+          }
+        : null,
+    rewind:
+      features?.rewind === true
+        ? async (agentId, messageId, mode) => {
+            const result = await daemon.rewindAgent(agentId, messageId, mode);
+            if (!result.ok) throw Error(result.error ?? "Rewind failed");
+          }
+        : null,
+    forkContext:
+      features?.agentForkContext === true &&
+      features.agentForkContextCursor === true
+        ? async (agentId, boundary) => {
+            const result = await daemon.buildAgentForkContext(
+              agentId,
+              boundary ? { boundaryCursor: boundary } : {},
+            );
+            if (result.error) throw Error(result.error);
+            if (!result.attachment) throw Error("No chat history to fork");
+            return result.attachment;
+          }
+        : null,
+    setThinking:
+      features?.agentThinkingUpdate === true
+        ? async (agentId, optionId) => {
+            const notice = await daemon.setAgentThinkingOption(
+              agentId,
+              optionId,
+            );
+            if (notice?.type === "error") throw Error(notice.message);
+            return notice?.message ?? null;
+          }
+        : null,
   };
 }
 
@@ -312,6 +409,106 @@ export function createDirectoryAdapter(daemon: {
         name: entry.name,
         kind: entry.kind,
       }));
+    },
+  };
+}
+
+type HostClient = ReturnType<typeof createHostClient>;
+export interface UsageDaemon extends Pick<HostClient, "listUsageReports"> {
+  getLastServerInfoMessage(): {
+    features?: { usageSources?: boolean; providerUsageList?: boolean };
+  } | null;
+}
+/** Usage meters need `usageSources` or `providerUsageList`; the client bridges the two. */
+export function createUsageAdapter(daemon: UsageDaemon): UsagePort | null {
+  const features = daemon.getLastServerInfoMessage()?.features;
+  if (features?.usageSources !== true && features?.providerUsageList !== true)
+    return null;
+  return {
+    async list(options = {}) {
+      return (await daemon.listUsageReports(options)).reports;
+    },
+  };
+}
+
+export type ScheduleDaemon = Pick<
+  HostClient,
+  | "scheduleList"
+  | "scheduleInspect"
+  | "scheduleLogs"
+  | "schedulePause"
+  | "scheduleResume"
+  | "scheduleRunOnce"
+  | "scheduleDelete"
+  | "scheduleCreate"
+>;
+function checked<T extends { error: string | null }>(payload: T): T {
+  if (payload.error) throw Error(payload.error);
+  return payload;
+}
+/** Schedule RPCs are baseline daemon requests (no server_info feature flag gates them). */
+export function createScheduleAdapter(daemon: ScheduleDaemon): SchedulePort {
+  return {
+    list: async () => checked(await daemon.scheduleList()).schedules,
+    async inspect(id) {
+      const { schedule } = checked(await daemon.scheduleInspect({ id }));
+      if (!schedule) throw Error("Schedule not found");
+      return schedule;
+    },
+    logs: async (id) => checked(await daemon.scheduleLogs({ id })).runs,
+    async pause(id) {
+      checked(await daemon.schedulePause({ id }));
+    },
+    async resume(id) {
+      checked(await daemon.scheduleResume({ id }));
+    },
+    async runOnce(id) {
+      checked(await daemon.scheduleRunOnce({ id }));
+    },
+    async remove(id) {
+      checked(await daemon.scheduleDelete({ id }));
+    },
+    async create(input) {
+      const { schedule } = checked(
+        await daemon.scheduleCreate({
+          prompt: input.prompt,
+          ...(input.name ? { name: input.name } : {}),
+          cadence: { type: "cron", expression: input.cron },
+          target: input.target,
+        }),
+      );
+      if (!schedule) throw Error("The daemon did not create the schedule");
+      return schedule;
+    },
+  };
+}
+
+export type TerminalListDaemon = Pick<HostClient, "listTerminals">;
+/**
+ * The raw listing keeps each terminal's optional `activity` (the SDK's terminal list strips it).
+ * Requires `workspaceTerminals`, which `requireWorkspaceCapabilities` checks at connect.
+ */
+export function createTerminalListAdapter(
+  daemon: TerminalListDaemon,
+): TerminalListPort {
+  return {
+    async list() {
+      const { terminals } = await daemon.listTerminals();
+      return {
+        entries: terminals.flatMap((terminal): TerminalEntry[] =>
+          terminal.workspaceId !== undefined && terminal.cwd !== undefined
+            ? [
+                {
+                  id: terminal.id,
+                  workspaceId: terminal.workspaceId,
+                  cwd: terminal.cwd,
+                  name: terminal.name,
+                  activity: terminal.activity ?? null,
+                },
+              ]
+            : [],
+        ),
+      };
     },
   };
 }

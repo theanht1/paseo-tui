@@ -13,7 +13,15 @@ import type {
   AgentSelectOption,
 } from "@getpaseo/protocol/agent-types";
 import type { DaemonAdapter } from "../connection/daemon-adapter.js";
-import type { AgentTimelinePage, TimelineCursor } from "../connection/ports.js";
+import type {
+  AgentFeaturesPort,
+  AgentTimelinePage,
+  ForkAttachment,
+  RewindMode,
+  TimelineCursor,
+  TimelinePromptIndex,
+  TimelineSearchResult,
+} from "../connection/ports.js";
 
 /** The timeline fields the store reads; agent and provider-subagent pages both provide them. */
 export type TimelinePage = Pick<
@@ -65,6 +73,8 @@ export interface CreateAgentInput {
   model: string;
   modeId: string | null;
   thinkingOptionId?: string;
+  /** Context for the first prompt, such as a fork's chat history. */
+  attachments?: readonly ForkAttachment[];
   cwd: string;
   title: string | null;
   prompt: string | null;
@@ -95,6 +105,12 @@ export interface AgentPort {
     handler: (event: PaseoAgentTimelineEvent) => void,
   ): (() => void) & { ready: Promise<void> };
   send(text: string): Promise<void>;
+  /**
+   * Admit a message into the running turn. The daemon denies the permissions the
+   * turn is blocked on so the agent reads it in the same turn (a denied plan stays
+   * in the timeline as a rejected plan row).
+   */
+  steer(text: string): Promise<void>;
   respondToPermission(
     requestId: string,
     response: AgentPermissionResponse,
@@ -105,6 +121,24 @@ export interface AgentPort {
   archive(): Promise<void>;
   cancel(): Promise<void>;
   snapshot(): PaseoAgent | null;
+  /** Older pages and daemon-gated history operations; absent for read-only timelines. */
+  history?: AgentHistoryPort;
+}
+export type OlderTimelinePage = TimelinePage &
+  Pick<AgentTimelinePage, "hasOlder">;
+/** One agent's {@link AgentFeaturesPort}; a null operation is unsupported by the daemon. */
+export interface AgentHistoryPort {
+  fetchBefore(
+    cursor: TimelineCursor,
+    limit: number,
+  ): Promise<OlderTimelinePage>;
+  search: ((query: string) => Promise<TimelineSearchResult>) | null;
+  prompts: (() => Promise<TimelinePromptIndex>) | null;
+  rewind: ((messageId: string, mode: RewindMode) => Promise<void>) | null;
+  forkContext:
+    | ((boundary: TimelineCursor | null) => Promise<ForkAttachment>)
+    | null;
+  setThinking: ((optionId: string) => Promise<string | null>) | null;
 }
 
 export function createAgentsPort(
@@ -184,6 +218,8 @@ export function createAgentsPort(
       if (input.modeId !== null) options.config.modeId = input.modeId;
       if (input.title !== null) options.title = input.title;
       if (input.prompt !== null) options.prompt = input.prompt;
+      if (input.attachments?.length)
+        options.attachments = [...input.attachments];
       const handle = await api.agents.create(options);
       const current = handle.current();
       if (current === null) throw new Error("Agent created but no snapshot");
@@ -193,11 +229,32 @@ export function createAgentsPort(
     onUpdate: (handler) => api.agents.subscribe(handler),
   };
 }
+function bound<A extends unknown[], R>(
+  operation: ((agentId: string, ...args: A) => R) | null,
+  agentId: string,
+): ((...args: A) => R) | null {
+  return operation && ((...args) => operation(agentId, ...args));
+}
 export function createAgentPort(
   handle: PaseoAgentHandle,
   daemon: DaemonAdapter,
+  features: AgentFeaturesPort,
 ): AgentPort {
   return {
+    history: {
+      fetchBefore: (cursor, limit) =>
+        handle.timeline.refetch({
+          direction: "before",
+          cursor,
+          limit,
+          projection: "canonical",
+        }),
+      search: bound(features.search, handle.id),
+      prompts: bound(features.prompts, handle.id),
+      rewind: bound(features.rewind, handle.id),
+      forkContext: bound(features.forkContext, handle.id),
+      setThinking: bound(features.setThinking, handle.id),
+    },
     fetchTail: (limit) =>
       handle.timeline.refetch({
         direction: "tail",
@@ -213,6 +270,7 @@ export function createAgentPort(
       }),
     subscribe: (handler) => handle.timeline.subscribe(handler),
     send: (text) => handle.send(text),
+    steer: (text) => handle.send(text, { activeTurnBehavior: "steer" }),
     respondToPermission: (requestId, response) =>
       handle.respondToPermission({ requestId, response }),
     cancel: () => daemon.cancelAgent(handle.id),

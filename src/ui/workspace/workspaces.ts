@@ -14,6 +14,10 @@ export type WorkspaceRow = Pick<
   | "title"
   | "workspaceDirectory"
   | "projectRootPath"
+  | "diffStat"
+  | "gitRuntime"
+  | "githubRuntime"
+  | "setupStatus"
 >;
 export interface ProjectNode {
   project: PaseoProject;

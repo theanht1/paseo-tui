@@ -8,9 +8,12 @@ import {
 } from "@getpaseo/protocol/search/text-match";
 import type { CommandListSource } from "../../connection/ports.js";
 export type CommandGroup =
+  | "Needs you"
   | "Agents"
   | "Agent"
   | "Workspaces"
+  | "Schedules"
+  | "Usage"
   | "Actions"
   | "View";
 export interface CommandItem {
@@ -46,9 +49,12 @@ export function createCommandRegistry(): CommandRegistry {
   };
 }
 const GROUPS: readonly CommandGroup[] = [
+  "Needs you",
   "Agents",
   "Agent",
   "Workspaces",
+  "Schedules",
+  "Usage",
   "Actions",
   "View",
 ];

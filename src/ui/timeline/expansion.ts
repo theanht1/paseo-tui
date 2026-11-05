@@ -1,4 +1,4 @@
-import type { Block } from "./blocks.js";
+import { type Block, isExpandable } from "./blocks.js";
 export function toggle(
   set: ReadonlySet<string>,
   key: string,
@@ -12,11 +12,5 @@ export function setAll(
   blocks: readonly Block[],
   expanded: boolean,
 ): ReadonlySet<string> {
-  return new Set(
-    expanded
-      ? blocks
-          .filter((b) => b.kind === "tool" || b.kind === "reasoning")
-          .map((b) => b.key)
-      : [],
-  );
+  return new Set(expanded ? blocks.filter(isExpandable).map((b) => b.key) : []);
 }

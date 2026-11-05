@@ -167,3 +167,29 @@ it("returns to the tab an editor terminal was opened from once its terminal exit
   nav.reconcile([main], agents, []);
   expect(nav.getSnapshot().tab?.key).toBe("agent:b");
 });
+
+it("keeps the original return tab when an open tool terminal is focused again", async () => {
+  const { createWorkspaceNavigation } = await import(
+    "./workspace-navigation.js"
+  );
+  const nav = createWorkspaceNavigation();
+  const agents = [
+    agent("a", { workspaceId: "main" }),
+    agent("b", { workspaceId: "main" }),
+  ];
+  const lazygit = {
+    id: "lg",
+    workspaceId: "main",
+    cwd: "/repo",
+    name: "lazygit",
+  };
+  nav.reconcile([main], agents, [lazygit]);
+  const beta = at(workspaceTabs("main", agents, [lazygit]), 1);
+  const tool = at(workspaceTabs("main", agents, [lazygit]), 2);
+  if (!beta || !tool) throw Error("missing tab");
+  nav.selectTab(beta);
+  nav.selectTab(tool, beta.key);
+  nav.selectTab(tool, tool.key);
+  nav.reconcile([main], agents, []);
+  expect(nav.getSnapshot().tab?.key).toBe("agent:b");
+});

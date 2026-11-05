@@ -2,6 +2,7 @@ import { useKeyboard } from "@opentui/react";
 import { useEffect, useRef } from "react";
 import {
   type Action,
+  type Binding,
   type Context,
   dispatch,
   type Mode,
@@ -14,6 +15,7 @@ export function useKeymap(
   onAction: (action: Action) => void,
   enabled = true,
   prefix?: Stroke,
+  bindings?: readonly Binding[],
 ) {
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -32,7 +34,7 @@ export function useKeymap(
   useKeyboard((event) => {
     if (!enabled || (event.ctrl && event.name === "c")) return;
     const current = modeRef.current;
-    const result = dispatch(current, context, event, prefix);
+    const result = dispatch(current, context, event, prefix, bindings);
     if (
       current.kind === "prefix" ||
       current.kind === "search" ||

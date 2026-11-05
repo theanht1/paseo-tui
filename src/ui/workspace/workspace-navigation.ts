@@ -19,9 +19,12 @@ interface NavigationSnapshot {
   workspaceId: string | null;
   tab: WorkspaceTab | null;
 }
-export function createWorkspaceNavigation() {
+/** `tabs`: the tab key to reopen per workspace, e.g. remembered from the last run. */
+export function createWorkspaceNavigation(
+  tabs: ReadonlyMap<string, string> = new Map(),
+) {
   const emitter = createEmitter();
-  const remembered = new Map<string, string>();
+  const remembered = new Map(tabs);
   let previousIds: readonly string[] = [];
   const removedIds = new Set<string>();
   /** Tab key to reselect when the keyed tab disappears (an exited editor terminal). */
@@ -32,7 +35,8 @@ export function createWorkspaceNavigation() {
     tab: null,
   };
   function selectTab(tab: WorkspaceTab, returnTo?: string) {
-    if (returnTo) returns.set(tab.key, returnTo);
+    // Refocusing a tab from itself keeps the tab it first returns to.
+    if (returnTo && returnTo !== tab.key) returns.set(tab.key, returnTo);
     const workspaceId = tabWorkspaceId(tab);
     if (workspaceId) remembered.set(workspaceId, tab.key);
     snapshot = { cursorId: workspaceId, workspaceId, tab };

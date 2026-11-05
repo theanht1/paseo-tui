@@ -81,7 +81,7 @@ describe("App", () => {
       expect(app.lastFrame()).toContain("Long permission");
       expect(app.lastFrame()).toContain("1. Allow once");
       expect(app.lastFrame()).toContain("2. Deny once");
-      expect(app.lastFrame()).toContain("1–9 choose · Esc defer");
+      expect(app.lastFrame()).toContain("1–9 choose · m message · Esc defer");
     },
   );
   it("keeps the cursor visible when editing the beginning of a long prompt", async () => {

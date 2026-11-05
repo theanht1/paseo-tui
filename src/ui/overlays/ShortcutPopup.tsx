@@ -1,7 +1,7 @@
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { Fragment, useContext, useMemo } from "react";
 import { useKeyOwner } from "../input/key-router.js";
-import { helpRows } from "../input/keymap.js";
+import { type Binding, helpRows } from "../input/keymap.js";
 import {
   backgroundProp,
   foregroundProp,
@@ -13,9 +13,11 @@ import { popupRect } from "./popup-layout.js";
 import { createShortcutSearch, filterShortcuts } from "./shortcut-search.js";
 export function ShortcutPopup({
   prefix,
+  bindings,
   onClose,
 }: {
   prefix: string;
+  bindings?: readonly Binding[];
   onClose(): void;
 }) {
   const { width, height } = useTerminalDimensions();
@@ -37,7 +39,7 @@ export function ShortcutPopup({
       if (result === "close") onClose();
     }
   });
-  const rows = filterShortcuts(helpRows(prefix), state.query);
+  const rows = filterShortcuts(helpRows(prefix, bindings), state.query);
   const sections = [...new Set(rows.map((row) => row.section))];
   return (
     <box
@@ -128,7 +130,7 @@ export function ShortcutPopup({
           ) : null}
           {!state.query ? (
             <text fg={foregroundProp(theme.muted)}>
-              Permission: 1–9 choose · y allow / n deny · Esc defer
+              Permission: 1–9 choose · y allow / n deny · m message · Esc defer
             </text>
           ) : null}
           {!state.query ? (

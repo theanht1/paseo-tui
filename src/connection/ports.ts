@@ -2,7 +2,67 @@ import type { PaseoAgentHandle, TerminalStreamEvent } from "@getpaseo/client";
 import type {
   ProviderSubagentDescriptorPayload,
   SessionOutboundMessage,
+  UsageReportEntry,
 } from "@getpaseo/protocol/messages";
+import type {
+  ScheduleRun,
+  ScheduleSummary,
+  StoredSchedule,
+} from "@getpaseo/protocol/schedule/types";
+import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
+
+export type {
+  ScheduleRun,
+  ScheduleSummary,
+  StoredSchedule,
+  TerminalActivity,
+  UsageReportEntry,
+};
+/** Provider usage/quota reports; absent unless the daemon has `usageSources` or `providerUsageList`. */
+export interface UsagePort {
+  /** `forceRefresh` bypasses the daemon's five-minute report cache. */
+  list(options?: { forceRefresh?: boolean }): Promise<UsageReportEntry[]>;
+}
+export interface NewAgentScheduleConfig {
+  provider: string;
+  cwd: string;
+  model?: string;
+  modeId?: string;
+  thinkingOptionId?: string;
+  title?: string | null;
+}
+export type ScheduleTargetInput =
+  | { type: "agent"; agentId: string }
+  | { type: "new-agent"; config: NewAgentScheduleConfig };
+export interface CreateScheduleInput {
+  name: string | null;
+  prompt: string;
+  /** Five-field cron expression; the client only sends cron cadences. */
+  cron: string;
+  target: ScheduleTargetInput;
+}
+/** Daemon schedules: baseline RPCs, no server_info feature flag gates them. */
+export interface SchedulePort {
+  list(): Promise<ScheduleSummary[]>;
+  inspect(id: string): Promise<StoredSchedule>;
+  logs(id: string): Promise<ScheduleRun[]>;
+  pause(id: string): Promise<void>;
+  resume(id: string): Promise<void>;
+  runOnce(id: string): Promise<void>;
+  remove(id: string): Promise<void>;
+  create(input: CreateScheduleInput): Promise<ScheduleSummary>;
+}
+/** A workspace terminal plus its daemon-reported activity (null while unknown). */
+export interface TerminalEntry {
+  id: string;
+  workspaceId: string;
+  cwd: string;
+  name: string;
+  activity: TerminalActivity | null;
+}
+export interface TerminalListPort {
+  list(): Promise<{ entries: TerminalEntry[] }>;
+}
 
 export interface SlashCommand {
   name: string;
@@ -86,4 +146,51 @@ export interface ProviderSubagentPort {
       cursor?: TimelineCursor;
     },
   ): Promise<ProviderSubagentTimelinePage>;
+}
+
+export type RewindMode = "conversation" | "files" | "both";
+/** Daemon-side matches across the whole history, oldest first (seq of each matching message). */
+export interface TimelineSearchResult {
+  epoch: string;
+  seqs: readonly number[];
+  /** More matches exist than were collected. */
+  truncated: boolean;
+}
+export interface TimelinePrompt {
+  seq: number;
+  timestamp: string;
+  preview: string;
+}
+export interface TimelinePromptIndex {
+  epoch: string;
+  prompts: readonly TimelinePrompt[];
+}
+type ForkContextPayload = Extract<
+  SessionOutboundMessage,
+  { type: "agent.fork_context.response" }
+>["payload"];
+export type ForkAttachment = NonNullable<ForkContextPayload["attachment"]>;
+/** Agent operations gated on `server_info.features`; each is null when the daemon lacks it. */
+export interface AgentFeaturesPort {
+  /** `agentHistorySearch` */
+  search:
+    | ((agentId: string, query: string) => Promise<TimelineSearchResult>)
+    | null;
+  /** `agentTimelinePromptIndex` */
+  prompts: ((agentId: string) => Promise<TimelinePromptIndex>) | null;
+  /** `rewind` */
+  rewind:
+    | ((agentId: string, messageId: string, mode: RewindMode) => Promise<void>)
+    | null;
+  /** `agentForkContext` and `agentForkContextCursor`; a null boundary forks the whole chat. */
+  forkContext:
+    | ((
+        agentId: string,
+        boundary: TimelineCursor | null,
+      ) => Promise<ForkAttachment>)
+    | null;
+  /** `agentThinkingUpdate`; resolves to the provider's notice, if any. */
+  setThinking:
+    | ((agentId: string, optionId: string) => Promise<string | null>)
+    | null;
 }

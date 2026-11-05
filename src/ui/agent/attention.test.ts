@@ -2,8 +2,12 @@ import { expect, it } from "vitest";
 import { agent } from "../../test/fixtures.js";
 import {
   agentIndicator,
+  attentionQueue,
   createAttentionTracker,
   groupIndicator,
+  indicatorBucket,
+  nextAttention,
+  workspaceBucket,
 } from "./attention.js";
 
 const finished = agent("done", {
@@ -119,4 +123,71 @@ it("ranks question > permission > working > unread error > unread finished", () 
   expect(groupIndicator([permitting, asking, busy], none)).toEqual({
     kind: "question",
   });
+});
+
+it("buckets indicators act-first: needs input, failed, running, unread, idle", () => {
+  expect(indicatorBucket({ kind: "question" })).toBe("needs_input");
+  expect(indicatorBucket({ kind: "permission" })).toBe("needs_input");
+  expect(indicatorBucket({ kind: "unread", reason: "error" })).toBe("failed");
+  expect(indicatorBucket({ kind: "working" })).toBe("running");
+  expect(indicatorBucket({ kind: "unread", reason: "finished" })).toBe(
+    "attention",
+  );
+  expect(indicatorBucket({ kind: "none" })).toBe("done");
+  const none = new Set<string>();
+  const failed = agent("failed", {
+    requiresAttention: true,
+    attentionReason: "error",
+  });
+  expect(
+    workspaceBucket([agent("busy", { status: "running" }), failed], none),
+  ).toBe("failed");
+  expect(workspaceBucket([], none)).toBe("done");
+});
+
+it("queues agents that need you by urgency then recency and cycles past the current one", () => {
+  const none = new Set<string>();
+  const older = agent("older", {
+    ...finished,
+    id: "older",
+    attentionTimestamp: "2026-11-04T00:00:00Z",
+  });
+  const asking = agent("asking", { pendingPermissions: [request("tool")] });
+  const failed = agent("failed", {
+    requiresAttention: true,
+    attentionReason: "error",
+    attentionTimestamp: "2026-11-04T00:00:00Z",
+  });
+  const archived = agent("archived", {
+    pendingPermissions: [request("tool")],
+    archivedAt: "2026-11-04T00:00:00Z",
+  });
+  const queue = attentionQueue(
+    [
+      older,
+      agent("busy", { status: "running" }),
+      finished,
+      failed,
+      asking,
+      archived,
+    ],
+    none,
+  );
+  expect(queue.map((entry) => entry.id)).toEqual([
+    "asking",
+    "failed",
+    "done",
+    "older",
+  ]);
+  expect(nextAttention(queue, null)?.id).toBe("asking");
+  expect(nextAttention(queue, "busy")?.id).toBe("asking");
+  expect(nextAttention(queue, "failed")?.id).toBe("done");
+  expect(nextAttention(queue, "older")?.id).toBe("asking");
+  expect(nextAttention([], "older")).toBeNull();
+  expect(
+    attentionQueue(
+      [finished],
+      new Set([`done@${finished.attentionTimestamp}`]),
+    ),
+  ).toEqual([]);
 });

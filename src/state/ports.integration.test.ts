@@ -58,6 +58,7 @@ it("lists the mock catalogs and observes agent lifecycle and streaming pages", a
   const port = createAgentPort(
     connection.api.agents.ref(agent),
     connection.daemon,
+    connection.agentFeatures,
   );
   const events: PaseoAgentTimelineEvent[] = [];
   const unsubscribe = port.subscribe((event) => events.push(event));
@@ -160,6 +161,7 @@ it("sets mode and model, renames and archives an agent", async () => {
   const port = createAgentPort(
     connection.api.agents.ref(agent),
     connection.daemon,
+    connection.agentFeatures,
   );
   await port.setMode("approval-test");
   await port.setModel("ten-second-stream");
@@ -205,6 +207,7 @@ it("cancels a streaming response while its turn is running", async () => {
   const port = createAgentPort(
     connection.api.agents.ref(current),
     connection.daemon,
+    connection.agentFeatures,
   );
   const events: PaseoAgentTimelineEvent[] = [];
   const stop = port.subscribe((event) => events.push(event));

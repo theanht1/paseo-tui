@@ -44,7 +44,10 @@ export type Action =
         | "tab.create"
         | "tab.createTerminal"
         | "tab.rename"
-        | "tab.close";
+        | "tab.close"
+        | "attention.next"
+        | "sidebar.toggleGrouping"
+        | "diff.open";
     }
   | { type: "list.move" | "scroll.lines" | "block.move"; delta: number }
   | { type: "list.edge" | "scroll.edge"; edge: "top" | "bottom" }
@@ -62,8 +65,8 @@ export type Action =
         | "search.cancel"
         | "prefix.literal";
     }
-  | { type: "tab.cycle"; delta: number }
-  | { type: "pane.select"; index: number }
+  | { type: "tab.cycle" | "workspace.cycle"; delta: number }
+  | { type: "pane.select" | "tab.select" | "workspace.select"; index: number }
   | { type: "search.update"; query: string }
   | { type: "search.next"; dir: 1 | -1 }
   | { type: "copy.key" | "hint.key"; key: string };
@@ -75,6 +78,27 @@ export interface Binding {
   description: string;
   /** Documented here for help and hints but handled by the focused input itself. */
   inert?: true;
+  /** Works in every mode, over popups too (New tab, Command Center). */
+  global?: true;
+}
+function matches(binding: Binding, key: string, stroke: Stroke): boolean {
+  return binding.keys
+    .split(" / ")
+    .some(
+      (k) =>
+        k === key || (stroke.ctrl && k.toLowerCase() === key.toLowerCase()),
+    );
+}
+/** The always-on action a stroke triggers in any mode, if any. */
+export function globalAction(
+  stroke: Stroke,
+  bindings: readonly Binding[] = BINDINGS,
+): Action | null {
+  const key = label(stroke);
+  return (
+    bindings.find((b) => b.global && !b.inert && matches(b, key, stroke))
+      ?.action ?? null
+  );
 }
 function label(stroke: Stroke): string {
   if (stroke.ctrl) return `Ctrl-${stroke.name.toLowerCase()}`;
@@ -104,17 +128,17 @@ export function dispatch(
   context: Context,
   stroke: Stroke,
   prefix: Stroke = parsePrefix("C-b"),
+  bindings: readonly Binding[] = BINDINGS,
 ): { mode: Mode; action: Action | null } {
   const key = label(stroke);
   const normal: Mode = { kind: "normal", pending: "" };
   if (key.toLowerCase() === "ctrl-c") return interrupt(mode);
-  if (key.toLowerCase() === "ctrl-n")
-    return { mode: normal, action: { type: "tab.create" } };
-  if (
-    key.toLowerCase() === "ctrl-k" ||
-    ((mode.kind === "normal" || mode.kind === "prefix") && key === ":")
-  )
-    return { mode: { kind: "palette" }, action: { type: "palette.open" } };
+  const always = globalAction(stroke, bindings);
+  if (always)
+    return {
+      mode: always.type === "palette.open" ? { kind: "palette" } : normal,
+      action: always,
+    };
   if (mode.kind === "palette") return { mode, action: null };
   if (mode.kind === "copy") return { mode, action: { type: "copy.key", key } };
   if (mode.kind === "hint") return { mode, action: { type: "hint.key", key } };
@@ -154,7 +178,7 @@ export function dispatch(
     const action =
       key === "w"
         ? ({ type: "pane.next" } as const)
-        : (BINDINGS.find(
+        : (bindings.find(
             (b) =>
               b.modes.includes("prefix") &&
               b.action.type === "pane.focus" &&
@@ -178,40 +202,40 @@ export function dispatch(
       action: { type: "tab.cycle", delta: key === "t" ? 1 : -1 },
     };
   const candidate =
-    mode.kind === "normal" && mode.pending === "g" && key === "g" ? "g g" : key;
-  const binding = BINDINGS.find(
+    mode.kind === "normal" &&
+    mode.pending === "g" &&
+    (key === "g" || key === "d")
+      ? `g ${key}`
+      : key;
+  const binding = bindings.find(
     (b) =>
       !b.inert &&
       b.modes.includes(mode.kind) &&
       (!b.context || b.context === context) &&
-      b.keys
-        .split(" / ")
-        .some(
-          (k) =>
-            k === candidate ||
-            (stroke.ctrl && k.toLowerCase() === candidate.toLowerCase()),
-        ),
+      matches(b, candidate, stroke),
   );
   const action = binding?.action ?? null;
   return {
     mode:
-      action?.type === "search.start"
-        ? { kind: "search", query: "" }
-        : action?.type === "copy.start"
-          ? { kind: "copy" }
-          : action?.type === "hint.start"
-            ? { kind: "hint" }
-            : action?.type === "insert"
-              ? { kind: "insert" }
-              : action?.type === "normal"
-                ? normal
-                : mode.kind === "prefix" &&
-                    mode.returnTo === "insert" &&
-                    action?.type !== "pane.numbers"
-                  ? { kind: "insert" }
-                  : mode.kind === "insert"
-                    ? mode
-                    : normal,
+      action?.type === "palette.open"
+        ? { kind: "palette" }
+        : action?.type === "search.start"
+          ? { kind: "search", query: "" }
+          : action?.type === "copy.start"
+            ? { kind: "copy" }
+            : action?.type === "hint.start"
+              ? { kind: "hint" }
+              : action?.type === "insert"
+                ? { kind: "insert" }
+                : action?.type === "normal"
+                  ? normal
+                  : mode.kind === "prefix" &&
+                      mode.returnTo === "insert" &&
+                      action?.type !== "pane.numbers"
+                    ? { kind: "insert" }
+                    : mode.kind === "insert"
+                      ? mode
+                      : normal,
     action,
   };
 }
@@ -279,6 +303,8 @@ const KEYSTROKE_ONLY: ReadonlySet<Action["type"]> = new Set([
   "search.next",
   "prefix.literal",
   "pane.select",
+  "tab.select",
+  "workspace.select",
 ]);
 export interface PaletteAction {
   action: Action;
@@ -286,9 +312,12 @@ export interface PaletteAction {
   shortcut: string;
 }
 /** Command Center actions derived from BINDINGS, one per distinct action with all of its shortcuts. */
-export function paletteActions(prefixLabel: string): PaletteAction[] {
+export function paletteActions(
+  prefixLabel: string,
+  bindings: readonly Binding[] = BINDINGS,
+): PaletteAction[] {
   const entries = new Map<string, PaletteAction>();
-  for (const binding of BINDINGS) {
+  for (const binding of bindings) {
     if (KEYSTROKE_ONLY.has(binding.action.type)) continue;
     const shortcut = binding.modes.includes("prefix")
       ? `${prefixLabel} ${binding.keys}`
@@ -310,7 +339,10 @@ export function bindingSection(binding: Binding, prefixLabel: string) {
   if (binding.modes.every((mode) => mode === "copy")) return "copy mode";
   return binding.context ?? "any";
 }
-export function helpRows(prefixLabel: string) {
+export function helpRows(
+  prefixLabel: string,
+  bindings: readonly Binding[] = BINDINGS,
+) {
   return [
     {
       section: "terminal input",
@@ -332,7 +364,7 @@ export function helpRows(prefixLabel: string) {
       keys: "Enter · Esc",
       description: "Next question or submit · cancel (deny) the question",
     },
-    ...BINDINGS.map((b) => ({
+    ...bindings.map((b) => ({
       section: bindingSection(b, prefixLabel),
       keys: b.keys,
       description: b.description,
