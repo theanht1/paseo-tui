@@ -175,6 +175,8 @@ it("keeps the full search query from a key burst", async () => {
   app.stdin.write("\r");
   await settle();
   expect(app.lastFrame()).toContain("match 1/1");
+  // Markdown paragraphs paint once tree-sitter highlighting (a worker) returns.
+  await settleUntil(app.lastFrame, "header needle");
   expect(app.lastFrame()).toContain("header needle");
 });
 
