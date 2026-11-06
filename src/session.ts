@@ -1,3 +1,4 @@
+import type { PaseoAgent } from "@getpaseo/client";
 import type { Connection } from "./connection/connect.js";
 import { createAgentsStore } from "./state/agents-store.js";
 import { createAgentPort, createAgentsPort } from "./state/ports.js";
@@ -18,6 +19,7 @@ export function createSession(connection: Connection) {
       renameAgent: connection.daemon.renameAgent,
       renameTerminal: connection.management.renameTerminal,
       branches: connection.git.branches,
+      projects: connection.projects,
     }),
     connection.management.capabilities,
   );
@@ -37,15 +39,17 @@ export function createSession(connection: Connection) {
     void agents.resync();
     void directory.resync();
   });
-  const timelines = createTimelineRegistry((agent) =>
-    createTimelineStore(
+  /** A timeline store for one of this host's agents. */
+  function openTimeline(agent: PaseoAgent) {
+    return createTimelineStore(
       createAgentPort(
         connection.api.agents.ref(agent),
         connection.daemon,
         connection.agentFeatures,
       ),
-    ),
-  );
+    );
+  }
+  const timelines = createTimelineRegistry(openTimeline);
   const subagents = connection.subagents
     ? createProviderSubagentStore(connection.subagents)
     : undefined;
@@ -64,9 +68,13 @@ export function createSession(connection: Connection) {
     agents,
     status,
     timelines,
+    openTimeline,
     subagents,
     usage,
+    history: connection.history,
     schedules: connection.schedules,
+    completions: connection.completions,
+    directories: connection.directories,
     async close() {
       usage?.close();
       subagents?.close();

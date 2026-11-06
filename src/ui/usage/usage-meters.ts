@@ -1,5 +1,6 @@
 import type { ProviderUsageWindow } from "@getpaseo/protocol/messages";
 import type { UsageReportEntry } from "../../connection/ports.js";
+import type { UsageConfig, UsageSelection } from "../config/user-config.js";
 
 type Report = UsageReportEntry["report"];
 type Available = Extract<Report, { status: "available" }>;
@@ -45,18 +46,83 @@ function percentText(window: ProviderUsageWindow): string {
 export function usageMeters(
   reports: readonly UsageReportEntry[],
   now: number,
+  config?: UsageConfig,
 ): string {
+  if (config) return configuredMeters(reports, now, config);
   return reports
     .flatMap((entry) => {
       if (entry.report.status !== "available") return [];
       const window = headline(entry.report.windows);
       if (!window) return [];
-      const reset = resetsIn(window, now);
       return [
-        `${entry.sourceLabel.toLowerCase()} ${percentText(window)}${reset ? ` · resets ${reset}` : ""}`,
+        `${entry.sourceLabel.toLowerCase()} ${headlineText(window, now)}`,
       ];
     })
     .join("  ");
+}
+
+function headlineText(window: ProviderUsageWindow, now: number): string {
+  const reset = resetsIn(window, now);
+  return `${percentText(window)}${reset ? ` · resets ${reset}` : ""}`;
+}
+function windowText(window: ProviderUsageWindow, now: number): string {
+  const name = window.shortLabel ?? window.label;
+  const reset = resetsIn(window, now);
+  return `${name ? `${name} ` : ""}${percentText(window)}${reset ? ` · resets ${reset}` : ""}`;
+}
+function configuredMeters(
+  reports: readonly UsageReportEntry[],
+  now: number,
+  config: UsageConfig,
+): string {
+  return [...config]
+    .flatMap(([sourceId, selection]) =>
+      reports
+        .filter((entry) => entry.sourceId === sourceId)
+        .map((entry) => selectedText(entry, selection, now)),
+    )
+    .filter((text) => text !== "")
+    .join("  ");
+}
+interface ShownItem {
+  id: string;
+  text: string;
+}
+/** The items a selection puts in the status bar, in order; the one source of truth for what is shown. */
+function shownItems(
+  entry: UsageReportEntry,
+  selection: UsageSelection | undefined,
+  now: number,
+): ShownItem[] {
+  const report = entry.report;
+  if (!selection || selection === "hidden" || report.status !== "available")
+    return [];
+  if (selection === "default") {
+    const window = headline(report.windows);
+    return window ? [{ id: window.id, text: headlineText(window, now) }] : [];
+  }
+  return selection.flatMap((id): ShownItem[] => {
+    const window = report.windows.find((w) => w.id === id);
+    if (window)
+      return usedPercent(window) === null
+        ? []
+        : [{ id, text: windowText(window, now) }];
+    const balance = report.balances?.find((b) => b.id === id);
+    if (balance)
+      return [{ id, text: `${balance.label} ${balanceText(balance)}` }];
+    const detail = report.details?.find((d) => d.id === id);
+    return detail ? [{ id, text: `${detail.label} ${detail.value}` }] : [];
+  });
+}
+function selectedText(
+  entry: UsageReportEntry,
+  selection: UsageSelection,
+  now: number,
+): string {
+  const items = shownItems(entry, selection, now);
+  return items.length
+    ? `${entry.sourceLabel.toLowerCase()} ${items.map((item) => item.text).join(" · ")}`
+    : "";
 }
 
 function amount(value: number, unit: Balance["unit"]): string {
@@ -93,8 +159,23 @@ export interface UsageRow {
 export function usageDetailRows(
   reports: readonly UsageReportEntry[],
   now: number,
+  config?: UsageConfig,
 ): UsageRow[] {
   return reports.flatMap((entry): UsageRow[] => {
+    const shown =
+      config &&
+      new Set(
+        shownItems(entry, config.get(entry.sourceId), now).map(
+          (item) => item.id,
+        ),
+      );
+    const tag = (itemId: string, subtitle: string): string =>
+      [
+        subtitle,
+        `id ${entry.sourceId}.${itemId}${shown && !shown.has(itemId) ? " · hidden" : ""}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
     const name = entry.sourceLabel;
     const report = entry.report;
     if (report.status !== "available")
@@ -112,20 +193,23 @@ export function usageDetailRows(
         return {
           id: `${entry.id}:window:${window.id}`,
           title: `${name} · ${window.label}${usedPercent(window) === null ? "" : ` ${percentText(window)}`}`,
-          subtitle: [plan, reset ? `resets in ${reset}` : null]
-            .filter(Boolean)
-            .join(" · "),
+          subtitle: tag(
+            window.id,
+            [plan, reset ? `resets in ${reset}` : null]
+              .filter(Boolean)
+              .join(" · "),
+          ),
         };
       }),
       ...(report.balances ?? []).map((balance) => ({
         id: `${entry.id}:balance:${balance.id}`,
         title: `${name} · ${balance.label} ${balanceText(balance)}`,
-        subtitle: plan,
+        subtitle: tag(balance.id, plan),
       })),
       ...(report.details ?? []).map((detail) => ({
         id: `${entry.id}:detail:${detail.id}`,
         title: `${name} · ${detail.label}: ${detail.value}`,
-        subtitle: plan,
+        subtitle: tag(detail.id, plan),
       })),
     ];
   });

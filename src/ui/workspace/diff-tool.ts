@@ -18,7 +18,7 @@ export function resolveDiffTool(
   return env.PASEO_TUI_DIFF_TOOL?.trim() || DEFAULT_DIFF_TOOL;
 }
 
-function toolName(command: string): string {
+export function toolName(command: string): string {
   return posix.basename(command.trim().split(/\s+/)[0] ?? command);
 }
 

@@ -1,7 +1,13 @@
 import { parseKeypress } from "@opentui/core";
 import { expect, test } from "vitest";
-import { BINDINGS } from "./bindings.js";
 import {
+  BINDINGS,
+  positionModifiers,
+  workspaceJumpBindings,
+} from "./bindings.js";
+import { applyKeyOverrides } from "./key-overrides.js";
+import {
+  actionMode,
   dispatch,
   helpRows,
   type Mode,
@@ -9,6 +15,7 @@ import {
   paletteReturnMode,
   parsePrefix,
   type Stroke,
+  shortcutFor,
 } from "./keymap.js";
 
 function key(name: string, ctrl = false): Stroke {
@@ -28,8 +35,8 @@ test("gg chord depends on context and resets on unbound keys", () => {
   });
   expect(dispatch(first.mode, "pane", key("z")).mode).toEqual(normal);
 });
-test("insert passes all keys except escape and ctrl-c", () => {
-  for (const k of [key("q"), key("?"), key("x", true), key("tab")])
+test("insert passes typing keys through, keeping Esc, Ctrl-C and Ctrl-X (stop)", () => {
+  for (const k of [key("q"), key("?"), key("e", true), key("tab")])
     expect(dispatch({ kind: "insert" }, "pane", k).action).toBeNull();
   expect(dispatch({ kind: "insert" }, "pane", key("escape")).action).toEqual({
     type: "normal",
@@ -157,6 +164,7 @@ test("gd opens the diff tool from either context and is in the Command Center", 
     action: { type: "diff.open" },
     title: "Open changes (lazygit)",
     shortcut: "g d",
+    keywords: ["diff", "open"],
   });
 });
 test("Ctrl-N opens a new tab from every mode, including text input modes", () => {
@@ -219,8 +227,14 @@ function strokes(keys: string): Stroke[] {
     Right: "right",
     Up: "up",
     Down: "down",
+    PgUp: "pageup",
+    PgDn: "pagedown",
   };
-  return (keys.split(" / ")[0] ?? "").split(" ").map((token) => {
+  return keys.split(" ").map((token) => {
+    if (token.startsWith("Super-"))
+      return { ...key(token.slice(6)), super: true };
+    if (token.startsWith("Meta-"))
+      return { ...key(token.slice(5)), meta: true };
     if (token === "Shift-Tab")
       return {
         name: "tab",
@@ -247,21 +261,26 @@ test("every palette action is what its shortcut dispatches", () => {
   const actions = paletteActions("Ctrl-B");
   expect(actions.length).toBeGreaterThan(15);
   for (const entry of actions) {
-    const bindings = BINDINGS.filter(
-      (b) =>
-        !b.inert && JSON.stringify(b.action) === JSON.stringify(entry.action),
+    const expected =
+      entry.action.type === "exit" ? { type: "quit" } : entry.action;
+    const bound = BINDINGS.filter(
+      (b) => !b.inert && JSON.stringify(b.action) === JSON.stringify(expected),
     );
-    for (const binding of bindings) {
-      let mode: Mode = binding.modes.includes("prefix")
-        ? { kind: "prefix" }
-        : { kind: "normal", pending: "" };
-      let action = null;
-      for (const stroke of strokes(binding.keys)) {
-        const result = dispatch(mode, binding.context ?? "pane", stroke);
-        mode = result.mode;
-        action = result.action;
-      }
-      expect(action).toEqual(entry.action);
+    for (const binding of bound) {
+      // Any one of a binding's alternatives (one may be shadowed by the prefix key).
+      const reached = binding.keys.split(" / ").some((alternative) => {
+        let mode: Mode = binding.modes.includes("prefix")
+          ? { kind: "prefix" }
+          : { kind: "normal", pending: "" };
+        let action = null;
+        for (const stroke of strokes(alternative)) {
+          const result = dispatch(mode, binding.context ?? "pane", stroke);
+          mode = result.mode;
+          action = result.action;
+        }
+        return JSON.stringify(action) === JSON.stringify(expected);
+      });
+      expect(reached, `${binding.keys} → ${binding.description}`).toBe(true);
     }
   }
 });
@@ -292,7 +311,7 @@ test("F starts file hints in a pane, which forwards keys and leaves on Ctrl-C", 
   ).toBe(true);
   expect(
     paletteActions("Ctrl-B").some((a) => a.action.type === "hint.start"),
-  ).toBe(false);
+  ).toBe(true);
 });
 
 test("the palette returns to the mode it was opened from", () => {
@@ -336,24 +355,187 @@ test("triage keys: U jumps to attention, S regroups, [ ] cycle workspaces, digit
   }
   expect(dispatch({ kind: "insert" }, "pane", key("3")).action).toBeNull();
 });
-test("Alt-digit opens a workspace by sidebar position from normal and insert mode", () => {
+test("Alt-digit from a legacy terminal opens a workspace by position in normal and insert mode", () => {
   const alt = parseKeypress("\x1b2");
   if (!alt) throw Error("unparsed");
-  expect(dispatch(normal, "pane", alt).action).toEqual({
+  const bindings = workspaceJumpBindings(["Meta"]);
+  expect(dispatch(normal, "pane", alt, undefined, bindings).action).toEqual({
     type: "workspace.select",
     index: 1,
   });
-  const inserting = dispatch({ kind: "insert" }, "pane", alt);
+  const inserting = dispatch(
+    { kind: "insert" },
+    "pane",
+    alt,
+    undefined,
+    bindings,
+  );
   expect(inserting).toEqual({
     mode: { kind: "insert" },
     action: { type: "workspace.select", index: 1 },
   });
 });
-test("the Command Center lists the triage actions but not positional jumps", () => {
-  const types = paletteActions("C-b").map((entry) => entry.action.type);
-  expect(types).toContain("attention.next");
-  expect(types).toContain("sidebar.toggleGrouping");
-  expect(types).toContain("workspace.cycle");
-  expect(types).not.toContain("tab.select");
-  expect(types).not.toContain("workspace.select");
+test("the Command Center lists every shortcut action that does something from it", () => {
+  const entries = paletteActions("C-b");
+  const types = new Set(entries.map((entry) => entry.action.type));
+  for (const type of [
+    "attention.next",
+    "sidebar.toggleGrouping",
+    "workspace.cycle",
+    "diff.open",
+    "workspace.editor",
+    "tab.select",
+    "workspace.select",
+    "pane.select",
+    "search.start",
+    "search.next",
+    "scroll.half",
+    "scroll.edge",
+    "block.move",
+    "block.toggle",
+    "list.edge",
+    "insert",
+    "hint.start",
+    "exit",
+  ] as const)
+    expect(types).toContain(type);
+  for (const type of [
+    "palette.open",
+    "quit",
+    "copy.key",
+    "hint.key",
+    "search.update",
+    "list.move",
+    "scroll.lines",
+    "history.open",
+    "agent.unarchive",
+  ] as const)
+    expect(types).not.toContain(type);
+  expect(entries).toContainEqual({
+    action: { type: "exit" },
+    title: "Quit",
+    shortcut: "Ctrl-C Ctrl-C",
+    keywords: ["quit", "exit", "close"],
+  });
+  expect(
+    entries.find((entry) => entry.title === "Open workspace 2")?.shortcut,
+  ).toMatch(/^(Super-2 \/ )?Meta-2$/);
+});
+test("actions that enter a mode from the Command Center return to it", () => {
+  expect(actionMode({ type: "search.start" })).toEqual({
+    kind: "search",
+    query: "",
+  });
+  expect(actionMode({ type: "hint.start" })).toEqual({ kind: "hint" });
+  expect(actionMode({ type: "copy.start" })).toEqual({ kind: "copy" });
+  expect(actionMode({ type: "insert" })).toEqual({ kind: "insert" });
+  expect(actionMode({ type: "diff.open" })).toBeNull();
+  expect(actionMode({ type: "workspace.editor" })).toBeNull();
+});
+test("jumps to a workspace by position with Cmd-digit (or Alt-digit) on macOS and Alt-digit elsewhere", () => {
+  expect(positionModifiers("darwin")).toEqual(["Super", "Meta"]);
+  expect(positionModifiers("win32")).toEqual(["Meta"]);
+  expect(positionModifiers("linux")).toEqual(["Meta"]);
+  const mac = workspaceJumpBindings(["Super", "Meta"]);
+  const other = workspaceJumpBindings(["Meta"]);
+  expect(mac[1]?.keys).toBe("Super-2 / Meta-2");
+  const cmd2: Stroke = { ...key("2"), super: true, sequence: "2" };
+  const alt2: Stroke = { ...key("2"), meta: true, sequence: "2" };
+  const jump = { type: "workspace.select", index: 1 };
+  for (const mode of [normal, { kind: "insert" } as const]) {
+    expect(dispatch(mode, "pane", cmd2, undefined, mac).action).toEqual(jump);
+    expect(dispatch(mode, "pane", alt2, undefined, mac).action).toEqual(jump);
+    expect(dispatch(mode, "pane", alt2, undefined, other).action).toEqual(jump);
+    expect(dispatch(mode, "pane", cmd2, undefined, other).action).toBeNull();
+  }
+});
+test("H opens session history anywhere in normal mode; u unarchives only in a pane", () => {
+  const shiftH = { ...key("h"), shift: true };
+  expect(dispatch(normal, "sidebar", shiftH).action).toEqual({
+    type: "history.open",
+  });
+  expect(dispatch(normal, "pane", shiftH).action).toEqual({
+    type: "history.open",
+  });
+  expect(dispatch(normal, "pane", key("u")).action).toEqual({
+    type: "agent.unarchive",
+  });
+  expect(dispatch(normal, "sidebar", key("u")).action).toBeNull();
+  expect(dispatch({ kind: "copy" }, "pane", key("u")).action).toEqual({
+    type: "copy.key",
+    key: "u",
+  });
+});
+
+test("shortcutFor labels an action from the effective bindings", () => {
+  expect(shortcutFor({ type: "diff.open" }, BINDINGS, "Ctrl-B")).toBe("g d");
+  expect(shortcutFor({ type: "pane.zoom" }, BINDINGS, "Ctrl-A")).toBe(
+    "Ctrl-A z",
+  );
+  expect(shortcutFor({ type: "help" }, BINDINGS, "Ctrl-B")).toBe(
+    "Ctrl-B ? / ?",
+  );
+  expect(shortcutFor({ type: "exit" }, BINDINGS, "Ctrl-B")).toBe(
+    "Ctrl-C Ctrl-C",
+  );
+  expect(
+    shortcutFor({ type: "search.update", query: "" }, BINDINGS, "Ctrl-B"),
+  ).toBeNull();
+  const { bindings, errors } = applyKeyOverrides(
+    BINDINGS,
+    new Map([["diff.open", ["Ctrl-Y"]]]),
+  );
+  expect(errors).toEqual([]);
+  expect(shortcutFor({ type: "diff.open" }, bindings, "Ctrl-B")).toBe("Ctrl-Y");
+  for (const entry of paletteActions("Ctrl-B", bindings))
+    expect(entry.shortcut).toBe(
+      shortcutFor(entry.action, bindings, "Ctrl-B") ?? "",
+    );
+});
+
+test("Ctrl-X stops the turn while typing too, staying in insert mode", () => {
+  expect(dispatch({ kind: "insert" }, "pane", key("x", true))).toEqual({
+    mode: { kind: "insert" },
+    action: { type: "stop" },
+  });
+  expect(dispatch(normal, "pane", key("x", true)).action).toEqual({
+    type: "stop",
+  });
+});
+test("t opens the prompt list from a focused pane, not the sidebar", () => {
+  expect(dispatch(normal, "pane", key("t"))).toEqual({
+    mode: normal,
+    action: { type: "prompts.open" },
+  });
+  expect(dispatch(normal, "sidebar", key("t")).action).toBeNull();
+  const g = dispatch(normal, "pane", key("g")).mode;
+  expect(dispatch(g, "pane", key("t")).action).toEqual({
+    type: "tab.cycle",
+    delta: 1,
+  });
+});
+test("queue keys work while typing and are not typed into the prompt", () => {
+  const insert = { kind: "insert" } as const;
+  const ctrl = (name: string) => key(name, true);
+  expect(dispatch(insert, "pane", ctrl("s")).action).toEqual({
+    type: "queue.send",
+  });
+  expect(dispatch(insert, "pane", ctrl("r")).action).toEqual({
+    type: "queue.edit",
+  });
+  expect(dispatch(insert, "pane", ctrl("o")).action).toEqual({
+    type: "queue.remove",
+  });
+  expect(dispatch(insert, "pane", ctrl("up")).action).toEqual({
+    type: "queue.select",
+    delta: -1,
+  });
+  expect(dispatch(insert, "pane", ctrl("down"))).toEqual({
+    mode: insert,
+    action: { type: "queue.select", delta: 1 },
+  });
+  expect(dispatch(normal, "pane", ctrl("s")).action).toBeNull();
+  // The textarea's own editing keys stay with it (line end, delete, …).
+  for (const name of ["e", "d", "a", "w", "u"])
+    expect(dispatch(insert, "pane", ctrl(name)).action).toBeNull();
 });

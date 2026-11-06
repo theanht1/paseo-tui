@@ -1,20 +1,22 @@
+import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { describe, expect, it } from "vitest";
+import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
+import { createTheme } from "./render/theme.js";
 
-import { agents, settle, setup } from "../test/app-harness.js";
+function clipboard() {
+  const copied: string[] = [];
+  return {
+    copied,
+    writer: {
+      copyToClipboardOSC52(text: string) {
+        copied.push(text);
+        return true;
+      },
+    },
+  };
+}
 
 describe("copy mode and clipboard", () => {
-  function clipboard() {
-    const copied: string[] = [];
-    return {
-      copied,
-      writer: {
-        copyToClipboardOSC52(text: string) {
-          copied.push(text);
-          return true;
-        },
-      },
-    };
-  }
   it("enters copy mode with prefix [, yanks a line selection and shows a notice", async () => {
     const { copied, writer } = clipboard();
     const { app } = await setup(
@@ -191,5 +193,223 @@ describe("system clipboard", () => {
       await settle();
     }
     expect(app.lastFrame()).toContain("no clipboard tool found: install xclip");
+  });
+});
+
+describe("copy mode over the whole chat", () => {
+  function longChat(): AgentTimelineItem[] {
+    return [
+      { type: "user_message", text: "ancient first prompt" },
+      ...Array.from(
+        { length: 120 },
+        (_, index): AgentTimelineItem => ({
+          type: "user_message",
+          text: `message ${index}`,
+        }),
+      ),
+      { type: "reasoning", text: "secret line one\nsecret line two" },
+      { type: "user_message", text: "latest prompt" },
+    ];
+  }
+  async function enterCopy(app: Awaited<ReturnType<typeof setup>>["app"]) {
+    for (const key of ["\r", "\u0002", "["]) {
+      app.stdin.write(key);
+      await settle();
+    }
+  }
+  it("pages older history in as the cursor climbs past what is loaded, and keeps blocks collapsed", async () => {
+    const { copied, writer } = clipboard();
+    const { app } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { clipboard: writer },
+      () => longChat(),
+      () => ({ tail: 20, search: false }),
+    );
+    await enterCopy(app);
+    expect(app.lastFrame()).toContain("COPY");
+    expect(app.lastFrame()).toContain("∴ thinking · 2 lines");
+    expect(app.lastFrame()).not.toContain("secret line one");
+    for (let page = 0; page < 6; page++) {
+      app.stdin.write("g");
+      app.stdin.write("g");
+      await settle();
+    }
+    await settleUntil(app.lastFrame, "ancient first prompt");
+    for (const key of ["V", "y"]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    expect(copied).toEqual(["ancient first prompt"]);
+  });
+  it("moves with h j k l and pages with d and u", async () => {
+    const { copied, writer } = clipboard();
+    const { app } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { clipboard: writer },
+      () =>
+        Array.from(
+          { length: 40 },
+          (_, index): AgentTimelineItem => ({
+            type: "user_message",
+            text: `row ${index}`,
+          }),
+        ),
+    );
+    await enterCopy(app);
+    for (const key of [
+      "u",
+      "u",
+      "d",
+      "d",
+      "k",
+      "k",
+      "l",
+      "l",
+      "h",
+      "v",
+      "l",
+      "y",
+    ]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    expect(copied).toEqual(["ow"]);
+  });
+  it("searches with ? and jumps paragraphs with { from real key input", async () => {
+    const { copied, writer } = clipboard();
+    const rows = Array.from(
+      { length: 40 },
+      (_, index): AgentTimelineItem => ({
+        type: "user_message",
+        text: `row ${index}`,
+      }),
+    );
+    const { app } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { clipboard: writer },
+      () => rows,
+    );
+    await enterCopy(app);
+    for (const key of ["?", "r", "o", "w", " ", "1", "2"]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    expect(app.lastFrame()).toContain("?row 12▌");
+    for (const key of ["\r", "V", "y"]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    expect(copied).toEqual(["row 12"]);
+    await enterCopy(app);
+    for (const key of ["{", "k", "V", "y"]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    expect(copied).toEqual(["row 12", "row 38"]);
+  });
+  it("scrolls with the mouse wheel and pages older history in at the top", async () => {
+    const { app, test } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      () => [
+        { type: "user_message", text: "ancient first prompt" },
+        ...Array.from(
+          { length: 60 },
+          (_, index): AgentTimelineItem => ({
+            type: "user_message",
+            text: `message ${index}`,
+          }),
+        ),
+      ],
+      () => ({ tail: 20, search: false }),
+    );
+    await enterCopy(app);
+    const view = test.renderer.root.findDescendantById("copy-mode");
+    if (!view) throw Error("Missing copy view");
+    expect(app.lastFrame()).toContain("message 59");
+    await test.mockMouse.scroll(view.x + 2, view.y + 2, "up");
+    await settle();
+    expect(app.lastFrame()).not.toContain("message 59");
+    expect(app.lastFrame()).toContain("COPY");
+    for (let tick = 0; tick < 60; tick++)
+      await test.mockMouse.scroll(view.x + 2, view.y + 2, "up");
+    await settleUntil(app.lastFrame, "ancient first prompt");
+  });
+  it("draws copy-mode text in the timeline's colors", async () => {
+    const { app, test } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      () => [
+        { type: "user_message", text: "hello alpha" },
+        {
+          type: "tool_call",
+          callId: "c1",
+          name: "Bash",
+          status: "completed",
+          error: null,
+          detail: { type: "shell", command: "npm test" },
+        },
+        { type: "assistant_message", text: "Ran `npm test`." },
+      ],
+    );
+    await enterCopy(app);
+    expect(app.lastFrame()).toContain("COPY");
+    const theme = createTheme({});
+    const spans = test.captureSpans().lines.flatMap((line) => line.spans);
+    const color = (text: string) =>
+      spans
+        .find((span) => span.text.includes(text))
+        ?.fg.toInts()
+        .slice(0, 3)
+        .join(",");
+    const hex = (value: string) =>
+      [1, 3, 5]
+        .map((at) => Number.parseInt(value.slice(at, at + 2), 16))
+        .join(",");
+    expect(color("✓ Bash npm test")).toBe(hex(theme.success));
+    expect(color("hello alpha")).toBe(hex(theme.user));
+    expect(color("npm test`")).toBeUndefined();
+    expect(
+      spans.some(
+        (span) =>
+          span.text === "npm test" &&
+          span.fg.toInts().slice(0, 3).join(",") === hex(theme.tool),
+      ),
+    ).toBe(true);
   });
 });

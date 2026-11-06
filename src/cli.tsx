@@ -1,13 +1,22 @@
 #!/usr/bin/env -S NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning
+import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type CliRendererConfig, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
+import type { ReactNode } from "react";
 import packageJson from "../package.json" with { type: "json" };
 import { connect } from "./connection/connect.js";
 import { resolveTarget } from "./connection/target.js";
-import { createSession } from "./session.js";
+import {
+  type ConnectedHost,
+  connectedHost,
+  createHosts,
+  type LiveHost,
+} from "./hosts.js";
+import { createMultiHost, windowLabel } from "./multi-host.js";
+import { hostsPath, loadHostRegistry } from "./state/host-registry.js";
 import { App } from "./ui/App.js";
 import {
   filePreferenceStorage,
@@ -17,7 +26,10 @@ import {
 import { createCommandRegistry } from "./ui/command-center/registry.js";
 import { loadUserConfig, userConfigPath } from "./ui/config/user-config.js";
 import { nodeClipboardRunner, systemClipboard } from "./ui/copy/clipboard.js";
+import { nodeBrowserRunner, systemBrowser } from "./ui/file-links/browser.js";
+import { positionModifiers } from "./ui/input/bindings.js";
 import { parsePrefix } from "./ui/input/keymap.js";
+import { createModifierHold } from "./ui/input/modifier-hold.js";
 import {
   layoutsPath,
   loadLayoutMemory,
@@ -37,7 +49,9 @@ import {
   createTheme,
   ThemeContext,
 } from "./ui/render/theme.js";
+import { useStore } from "./ui/use-store.js";
 import { resolveDiffTool } from "./ui/workspace/diff-tool.js";
+import { DEFAULT_EDITOR } from "./ui/workspace/workspace-editor.js";
 
 const HELP = `Usage: paseo-tui [options]
 
@@ -57,19 +71,46 @@ Options:
   -h, --help       Show help
   -v, --version    Show version
 
+Environment: PASEO_TUI_KEY_LOG=<file> logs every key the terminal sends
+(raw bytes and how it parsed), to debug shortcuts that don't fire.
+
 Config keys: "keys" (rebind actions), "theme" (hex color overrides), "prefix",
 "notify". Layouts are saved in $XDG_STATE_HOME/paseo-tui/layouts.json.
 `;
 
-export function rendererOptions(values: {
-  mouse?: boolean;
-}): CliRendererConfig {
+/**
+ * Kitty keyboard reporting of modifier-only keys and releases lets a held
+ * Cmd/Alt show jump hints; `modifierInput` swallows those keys first.
+ */
+export function rendererOptions(
+  values: { mouse?: boolean },
+  modifierInput?: (sequence: string) => boolean,
+): CliRendererConfig {
   return {
     exitOnCtrlC: false,
     screenMode: "alternate-screen",
     useMouse: values.mouse !== false,
     targetFps: 60,
+    useKittyKeyboard: { events: true, allKeysAsEscapes: true },
+    ...(modifierInput ? { prependInputHandlers: [modifierInput] } : {}),
   };
+}
+
+type Hosts = ReturnType<typeof createHosts<ConnectedHost>>;
+/** Re-renders with the connected hosts, for the status bar label. */
+function HostWindow({
+  hosts,
+  children,
+}: {
+  hosts: Hosts;
+  children(live: readonly LiveHost<ConnectedHost>[]): ReactNode;
+}) {
+  return children(useStore(hosts));
+}
+
+/** `PASEO_TUI_KEY_LOG=<file>`: what the terminal sends and how it parses, to debug shortcuts. */
+function logKey(path: string, entry: Record<string, unknown>) {
+  appendFileSync(path, `${JSON.stringify(entry)}\n`);
 }
 
 async function main() {
@@ -116,11 +157,44 @@ async function main() {
   const thinkingPreference = await loadThinkingPreference(
     filePreferenceStorage(thinkingPreferencePath(process.env, homedir())),
   );
-  const connection = await connect(target);
-  const session = createSession(connection);
-  const { agentsPort, agents, status, timelines } = session;
+  const hostsFile = hostsPath(process.env, homedir());
+  const hosts = createHosts({
+    initial: { target, live: connectedHost(await connect(target)) },
+    registry: await loadHostRegistry(
+      filePreferenceStorage(hostsFile),
+      hostsFile,
+    ),
+    open: async (saved, label, password) =>
+      connectedHost(await connect(saved, label, password)),
+  });
+  const merged = createMultiHost(hosts);
+  const local = merged.local;
   const commands = createCommandRegistry();
-  const renderer = await createCliRenderer(rendererOptions(values));
+  const positionHints = createModifierHold(
+    positionModifiers(process.platform).map((modifier) =>
+      modifier === "Super" ? "super" : "alt",
+    ),
+  );
+  const keyLog = process.env.PASEO_TUI_KEY_LOG;
+  const renderer = await createCliRenderer(
+    rendererOptions(values, (sequence) => {
+      if (keyLog) logKey(keyLog, { raw: sequence });
+      return positionHints.input(sequence);
+    }),
+  );
+  renderer.on("blur", positionHints.reset);
+  if (keyLog)
+    renderer.keyInput.on("keypress", (key) =>
+      logKey(keyLog, {
+        name: key.name,
+        sequence: key.sequence,
+        ctrl: key.ctrl,
+        meta: key.meta,
+        shift: key.shift,
+        super: key.super ?? false,
+        source: key.source,
+      }),
+    );
   const theme = createTheme(process.env, config.theme);
   const syntaxStyle = createSyntaxStyle(renderer, theme);
   function uncaught(error: Error) {
@@ -132,57 +206,69 @@ async function main() {
   try {
     createRoot(renderer).render(
       <ThemeContext value={{ theme, syntaxStyle }}>
-        <App
-          label={connection.label}
-          connection={status}
-          agents={agents}
-          directory={session.directory}
-          terminals={session.terminals}
-          terminalStream={session.terminalStream}
-          thinkingPreference={thinkingPreference}
-          management={session.management}
-          clearAttention={session.clearAttention}
-          refresh={session.refresh}
-          catalog={agentsPort}
-          timelines={timelines}
-          commands={commands}
-          prefix={prefix}
-          bindings={config.bindings}
-          layouts={layouts}
-          completions={connection.completions}
-          directories={connection.directories}
-          systemClipboard={systemClipboard(
-            process.platform,
-            process.env,
-            nodeClipboardRunner,
+        <HostWindow hosts={hosts}>
+          {(live) => (
+            <App
+              label={windowLabel(live)}
+              connection={local.status}
+              agents={merged.agents}
+              directory={merged.directory}
+              terminals={merged.terminals}
+              terminalStream={merged.terminalStream}
+              thinkingPreference={thinkingPreference}
+              management={merged.management}
+              clearAttention={merged.clearAttention}
+              refresh={merged.refresh}
+              catalog={merged.catalog}
+              timelines={merged.timelines}
+              commands={commands}
+              hosts={hosts.port}
+              onActiveWorkspace={merged.focus}
+              prefix={prefix}
+              bindings={config.bindings}
+              layouts={layouts}
+              completions={merged.completions}
+              directories={merged.directories}
+              systemClipboard={systemClipboard(
+                process.platform,
+                process.env,
+                nodeClipboardRunner,
+              )}
+              browser={systemBrowser(process.platform, nodeBrowserRunner)}
+              isRemoteAgent={merged.isRemoteAgent}
+              subagents={merged.subagents}
+              diffTool={diffTool}
+              editor={config.editor ?? DEFAULT_EDITOR}
+              usage={local.usage}
+              usageConfig={config.usage}
+              schedules={local.schedules}
+              history={merged.history ?? undefined}
+              positionHints={positionHints}
+              notify={
+                notifyStyle === "off"
+                  ? undefined
+                  : (notification) => {
+                      process.stdout.write(
+                        notificationSequence(
+                          notifyStyle,
+                          notification,
+                          process.env,
+                        ),
+                      );
+                    }
+              }
+              editPrompt={(text, host) =>
+                editExternally(text, {
+                  env: process.env,
+                  host,
+                  files: nodeEditorFiles(),
+                  spawn: nodeEditorSpawn,
+                })
+              }
+              onExit={() => renderer.destroy()}
+            />
           )}
-          subagents={session.subagents}
-          diffTool={diffTool}
-          usage={session.usage}
-          schedules={session.schedules}
-          notify={
-            notifyStyle === "off"
-              ? undefined
-              : (notification) => {
-                  process.stdout.write(
-                    notificationSequence(
-                      notifyStyle,
-                      notification,
-                      process.env,
-                    ),
-                  );
-                }
-          }
-          editPrompt={(text, host) =>
-            editExternally(text, {
-              env: process.env,
-              host,
-              files: nodeEditorFiles(),
-              spawn: nodeEditorSpawn,
-            })
-          }
-          onExit={() => renderer.destroy()}
-        />
+        </HostWindow>
       </ThemeContext>,
     );
     await renderer.closed;
@@ -191,8 +277,8 @@ async function main() {
     await renderer.closed;
     syntaxStyle.destroy();
     process.off("uncaughtException", uncaught);
-    await session.close();
-    await connection.close();
+    merged.timelines.close();
+    await hosts.close();
     await thinkingPreference.flush();
     await layouts.flush();
   }

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { rowText, settle, setup } from "../test/app-harness.js";
 import { agent } from "../test/fixtures.js";
+import { createModifierHold } from "./input/modifier-hold.js";
 import type { AttentionNotification } from "./notify/attention-notifier.js";
 
 const tool = (id: string) => ({
@@ -145,14 +146,20 @@ it("shows branch, diff size, and PR checks under a workspace row", async () => {
   expect(app.lastFrame()).toContain("⎇ feat-login · +3 −1 · #7 ✗");
 });
 
-it("opens workspaces by position with Alt-digit and [ ], and tabs with digits", async () => {
-  const { app, test } = await setup([
-    inWorkspace("alpha", "one"),
-    inWorkspace("alpha2", "one"),
-    inWorkspace("beta", "two"),
-    inWorkspace("gamma", "three"),
-  ]);
-  test.mockInput.pressKey("2", { meta: true });
+/** Command on macOS, Alt elsewhere. */
+const jump = process.platform === "darwin" ? { super: true } : { meta: true };
+it("opens workspaces by position with Cmd/Alt-digit and [ ], and tabs with digits", async () => {
+  const { app, test } = await setup(
+    [
+      inWorkspace("alpha", "one"),
+      inWorkspace("alpha2", "one"),
+      inWorkspace("beta", "two"),
+      inWorkspace("gamma", "three"),
+    ],
+    24,
+    true,
+  );
+  test.mockInput.pressKey("2", jump);
   await settle();
   expect(app.lastFrame()).toContain("hello beta");
   app.stdin.write("]");
@@ -164,7 +171,7 @@ it("opens workspaces by position with Alt-digit and [ ], and tabs with digits", 
   app.stdin.write("[");
   await settle();
   expect(app.lastFrame()).toContain("hello gamma");
-  test.mockInput.pressKey("1", { meta: true });
+  test.mockInput.pressKey("1", jump);
   await settle();
   app.stdin.write("2");
   await settle();
@@ -183,4 +190,32 @@ it("shows a failed worktree setup under the workspace row", async () => {
   });
   await settle();
   expect(app.lastFrame()).toContain("⎇ feat-login · setup failed");
+});
+
+it("shows each workspace's jump number while the jump modifier is held", async () => {
+  const fire: (() => void)[] = [];
+  const hold = createModifierHold(["super"], (run) => {
+    fire.push(run);
+    return () => {};
+  });
+  const { test } = await setup(
+    [inWorkspace("alpha", "one"), inWorkspace("beta", "two")],
+    24,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { positionHints: hold },
+  );
+  expect(rowText(test, "workspace:two")).not.toMatch(/2\s*$/);
+  hold.input("\u001b[57444;9u");
+  for (const run of fire.splice(0)) run();
+  await settle();
+  expect(rowText(test, "workspace:one")).toMatch(/one\s+1\s*$/);
+  expect(rowText(test, "workspace:two")).toMatch(/two\s+2\s*$/);
+  hold.input("\u001b[57444;1:3u");
+  await settle();
+  expect(rowText(test, "workspace:two")).not.toMatch(/2\s*$/);
 });

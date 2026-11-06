@@ -8,6 +8,7 @@ import type {
 } from "@getpaseo/client";
 import type { TerminalActivity } from "../../connection/ports.js";
 import { createEmitter } from "../../state/emitter.js";
+import type { ProjectPlacement } from "../hosts/merge.js";
 import type { WorkspaceRow } from "./workspaces.js";
 
 type DirectoryList = Omit<PaseoWorkspaceListResult, "subscription"> & {
@@ -35,6 +36,14 @@ export interface DirectorySnapshot {
   workspaces: readonly WorkspaceRow[];
   terminals: readonly DirectoryTerminal[];
   error: string | null;
+  /** Present when several hosts are merged into this view. */
+  hosts?: DirectoryHosts;
+}
+export interface DirectoryHosts {
+  /** Each workspace's host name, for the sidebar tag. */
+  labels: ReadonlyMap<string, string>;
+  /** Where each merged project lives; one entry per host. */
+  placements: ReadonlyMap<string, readonly ProjectPlacement[]>;
 }
 export function createWorkspaceDirectory(api: DirectoryApi) {
   const emitter = createEmitter();

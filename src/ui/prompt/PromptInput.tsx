@@ -1,6 +1,7 @@
 import type { TextareaRenderable } from "@opentui/core";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { CompletionPort } from "../../connection/ports.js";
+import type { MessageQueue } from "../../state/message-queue.js";
 import type { TimelineStore } from "../../state/timeline-store.js";
 import { useKeyOwner } from "../input/key-router.js";
 import {
@@ -25,6 +26,10 @@ interface PromptInputProps {
   completions?: CompletionPort;
   editPrompt?(text: string): Promise<string>;
   editRequest?: number;
+  /** Takes what is sent while a turn runs; without it, Enter always sends. */
+  queue?: MessageQueue | undefined;
+  /** The send-now key's label, for the placeholder while a turn runs. */
+  queueKey?: string | null;
   onClose(): void;
 }
 export function PromptInput({
@@ -36,6 +41,8 @@ export function PromptInput({
   completions,
   editPrompt,
   editRequest = 0,
+  queue,
+  queueKey = null,
   onClose,
 }: PromptInputProps) {
   const editor = useRef<TextareaRenderable>(null);
@@ -120,9 +127,23 @@ export function PromptInput({
     }
     return false;
   });
+  const turn = useStore(store).turn.kind;
+  const busy = turn === "running" || turn === "stopping";
   async function send() {
     const text = editor.current?.plainText ?? "";
-    if (!text.trim() || inFlight.current) return;
+    if (inFlight.current) return;
+    const waiting = queue?.getSnapshot();
+    if (!text.trim()) {
+      if (waiting?.paused && waiting.items.length) void queue?.resume();
+      return;
+    }
+    const kind = store.getSnapshot().turn.kind;
+    if (queue && (kind === "running" || kind === "stopping")) {
+      // The turn is busy: hold the message, and stay in the prompt for the next one.
+      queue.enqueue(text);
+      editor.current?.clear();
+      return;
+    }
     inFlight.current = true;
     setSending(true);
     await store.send(text);
@@ -225,9 +246,11 @@ export function PromptInput({
         height={focused ? 2 : 1}
         focused={focused && !sending && !editing}
         placeholder={
-          focused
-            ? `Message ${name}…  (/ commands · @ files · Ctrl-G editor)`
-            : `Press i or a to message ${name}…  (/ commands · @ files · Ctrl-G editor)`
+          focused && busy && queue
+            ? `Message ${name}…  (Enter queues${queueKey ? ` · ${queueKey} send now` : ""})`
+            : focused
+              ? `Message ${name}…  (/ commands · @ files · Ctrl-G editor)`
+              : `Press i or a to message ${name}…  (/ commands · @ files · Ctrl-G editor)`
         }
         textColor={foregroundProp(theme.fg)}
         focusedTextColor={foregroundProp(theme.fg)}

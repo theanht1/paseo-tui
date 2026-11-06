@@ -26,11 +26,11 @@ import {
   type CopyEffect,
   type CopyState,
   copyKey,
-  documentLines,
+  rebaseCopy,
+  scrollCopy,
   startCopy,
 } from "../copy/copy-mode.js";
 import { FileLinksContext } from "../file-links/context.js";
-import { mentionAt } from "../file-links/detect.js";
 import {
   assignHints,
   type HintState,
@@ -38,10 +38,11 @@ import {
   screenSpots,
 } from "../file-links/hints.js";
 import {
-  type FileLink,
+  type ChatLink,
   type FileResolver,
   fileResolver,
   linkifyMarkdown,
+  markdownUrlLabels,
   timelineLinks,
 } from "../file-links/links.js";
 import type { PathVerifier } from "../file-links/verify.js";
@@ -56,21 +57,25 @@ import {
 import { useStore } from "../use-store.js";
 import {
   type Block,
-  blockText,
   isExpandable,
   planLabel,
   toBlocks,
+  toolGlyph,
+  toolSummary,
 } from "./blocks.js";
 import { CopyView } from "./CopyView.js";
+import { copyDocument } from "./copy-document.js";
 import { setAll, toggle } from "./expansion.js";
 import {
   combineMatches,
   createHistorySearch,
+  createRevealTracker,
   nextTarget,
   type SearchTarget,
   searchStatus,
   targetIndex,
 } from "./history-search.js";
+import { promptTarget } from "./prompt-jump.js";
 import { findMatches } from "./search.js";
 
 function code(text: string, lang = "") {
@@ -164,28 +169,6 @@ function filePath(detail: ToolCallDetail): string | null {
     ? detail.filePath
     : null;
 }
-function summary(detail: ToolCallDetail): string {
-  switch (detail.type) {
-    case "shell":
-      return detail.command;
-    case "read":
-    case "edit":
-    case "write":
-      return detail.filePath;
-    case "search":
-      return detail.query;
-    case "fetch":
-      return detail.url;
-    case "sub_agent":
-      return detail.description ?? detail.subAgentType ?? "";
-    case "plan":
-      return detail.text;
-    case "plain_text":
-      return detail.text ?? detail.label ?? "";
-    default:
-      return "";
-  }
-}
 export function UserMessage({ text }: { text: string }) {
   const context = useContext(ThemeContext);
   if (!context) throw Error("ThemeContext required");
@@ -260,14 +243,7 @@ function BlockBody({
             )}
             onMouseDown={onToggle}
           >
-            {status === "running"
-              ? "◌"
-              : status === "completed"
-                ? "✓"
-                : status === "failed"
-                  ? "✗"
-                  : "·"}{" "}
-            {block.call.name}{" "}
+            {toolGlyph(status)} {block.call.name}{" "}
             {linkify && filePath(block.call.detail) ? (
               <span
                 fg={foregroundProp(theme.accent)}
@@ -276,7 +252,7 @@ function BlockBody({
                 {filePath(block.call.detail)}
               </span>
             ) : (
-              summary(block.call.detail).replace(/\s+/g, " ")
+              toolSummary(block.call.detail).replace(/\s+/g, " ")
             )}
           </text>
           {expanded ? <ToolDetail detail={block.call.detail} /> : null}
@@ -377,15 +353,18 @@ export function TimelineView({
     const owners = new Map<number, string>();
     return { blocks: toBlocks(snapshot.rows, owners), owners };
   }, [snapshot.rows]);
+  /** One page-in at a time per pane, shared by search matches and prompt jumps. */
+  const reveals = useMemo(() => createRevealTracker(store.reveal), [store]);
   const historySearch = useMemo(
-    () => createHistorySearch(store.search),
-    [store],
+    () => createHistorySearch(store.search, reveals),
+    [store, reveals],
   );
   const searched = useStore(historySearch);
   const links = useMemo(
     () => timelineLinks(blocks, agent.cwd),
     [blocks, agent.cwd],
   );
+  const urlLabels = useMemo(() => markdownUrlLabels(blocks), [blocks]);
   useEffect(() => {
     files?.verifier.request(
       links.filter((link) => link.source === "text").map((link) => link.path),
@@ -399,12 +378,13 @@ export function TimelineView({
             links,
             agent.cwd,
             (path) => verified >= 0 && files.verifier.status(path) === "file",
+            urlLabels,
           )
         : null,
-    [files, links, agent.cwd, verified],
+    [files, links, agent.cwd, verified, urlLabels],
   );
   const root = useRef<BoxRenderable>(null);
-  const [hint, setHint] = useState<HintState<FileLink> | null>(null);
+  const [hint, setHint] = useState<HintState<ChatLink> | null>(null);
   const hintRef = useRef(hint);
   hintRef.current = hint;
   const resolverRef = useRef(resolver);
@@ -414,7 +394,7 @@ export function TimelineView({
   useEffect(() => {
     if (!hinting) setHint(null);
   }, [hinting]);
-  function open(link: FileLink) {
+  function open(link: ChatLink) {
     files?.open(agent.id, link);
   }
   const openRef = useRef(open);
@@ -423,8 +403,10 @@ export function TimelineView({
   function openAt(x: number, y: number): boolean {
     const row = screenRows(renderer)[y];
     if (!resolver || row === undefined) return false;
-    const mention = mentionAt(row, Array.from(row).slice(0, x).join("").length);
-    const link = mention ? resolver.resolve(mention) : null;
+    const link = resolver.resolveAt(
+      row,
+      Array.from(row).slice(0, x).join("").length,
+    );
     if (link) open(link);
     return link !== null;
   }
@@ -447,6 +429,7 @@ export function TimelineView({
   const current = useRef({
     blocks,
     owners,
+    epoch: snapshot.epoch,
     expanded,
     selectedKey,
     targets,
@@ -455,6 +438,7 @@ export function TimelineView({
   current.current = {
     blocks,
     owners,
+    epoch: snapshot.epoch,
     expanded,
     selectedKey,
     targets,
@@ -517,6 +501,24 @@ export function TimelineView({
   useEffect(() => {
     if (!copying) setCopy(null);
   }, [copying]);
+  const olderRef = useRef(store.older);
+  olderRef.current = store.older;
+  /** The width and first block of the copy document, to rebuild it when history pages in. */
+  const copyLayout = useRef<{ width: number; first: string | null }>({
+    width: 1,
+    first: null,
+  });
+  useEffect(() => {
+    const state = copyRef.current;
+    if (!state) return;
+    const { width, first } = copyLayout.current;
+    const doc = copyDocument(blocks, expanded, width);
+    const shift = first === null ? 0 : (doc.starts.get(first) ?? 0);
+    copyLayout.current = { width, first: blocks[0]?.key ?? null };
+    const next = rebaseCopy(state, doc.lines, shift);
+    copyRef.current = next;
+    setCopy(next);
+  }, [blocks, expanded]);
   useEffect(() => {
     onSearchStatus(
       searchStatus({
@@ -538,18 +540,13 @@ export function TimelineView({
         if (!box) return;
         switch (action.type) {
           case "copy.start": {
-            const next = startCopy(
-              documentLines(
-                blocks.flatMap((block, index) => [
-                  ...(index ? [""] : []),
-                  ...blockText(block).split("\n"),
-                ]),
-                Math.max(1, box.viewport.width - 1),
-              ),
-              Math.max(1, box.viewport.height),
-            );
+            const width = Math.max(1, box.viewport.width - 1);
+            const doc = copyDocument(blocks, expanded, width);
+            copyLayout.current = { width, first: blocks[0]?.key ?? null };
+            const next = startCopy(doc.lines, Math.max(1, box.viewport.height));
             copyRef.current = next;
             setCopy(next);
+            if (next.top === 0) void olderRef.current?.().catch(() => {});
             break;
           }
           case "copy.key": {
@@ -558,19 +555,20 @@ export function TimelineView({
             const result = copyKey(state, action.key);
             copyRef.current = result.state;
             setCopy(result.state);
+            // At the top of what is loaded: page older history in above it.
+            if (result.state.top === 0)
+              void olderRef.current?.().catch(() => {});
             if (result.effect.kind === "file") {
               const { text, col } = result.effect;
-              const mention = mentionAt(
-                text,
-                Array.from(text).slice(0, col).join("").length,
-              );
-              const link = mention
-                ? (resolverRef.current?.resolve(mention) ?? null)
-                : null;
+              const link =
+                resolverRef.current?.resolveAt(
+                  text,
+                  Array.from(text).slice(0, col).join("").length,
+                ) ?? null;
               if (link) {
                 openRef.current(link);
                 onCopyRef.current({ kind: "exit" });
-              } else files?.notify("No file path under the cursor");
+              } else files?.notify("No file path or link under the cursor");
             } else if (result.effect.kind !== "none")
               onCopyRef.current(result.effect);
             break;
@@ -581,7 +579,7 @@ export function TimelineView({
               : [];
             if (targets.length) setHint({ targets, typed: "" });
             else {
-              files?.notify("No file paths on screen");
+              files?.notify("No file paths or links on screen");
               onHintDoneRef.current();
             }
             break;
@@ -620,6 +618,18 @@ export function TimelineView({
                 .find((b) => found.includes(b.key))?.key ?? found[0];
             awaitingHistory.current = key === undefined;
             if (key) jump(key);
+            break;
+          }
+          case "timeline.goto": {
+            const target = promptTarget(
+              action.seq,
+              current.current.owners,
+              current.current.epoch,
+              action.epoch,
+            );
+            if (target.kind === "stale")
+              reveals.notify("History changed; reopen the prompt list");
+            else go(target);
             break;
           }
           case "search.next":
@@ -686,7 +696,16 @@ export function TimelineView({
         }
       },
     }),
-    [expandCurrent, selectCurrent, files, renderer, historySearch, jump, go],
+    [
+      expandCurrent,
+      selectCurrent,
+      files,
+      renderer,
+      historySearch,
+      reveals,
+      jump,
+      go,
+    ],
   );
   const linkify = useMemo(
     () =>
@@ -709,7 +728,10 @@ export function TimelineView({
         flexShrink={0}
       >
         <strong>{agentName(agent)}</strong>{" "}
-        {snapshot.turn.kind === "running" || agent.status === "initializing" ? (
+        {snapshot.turn.kind === "stopping" ? (
+          <span fg={foregroundProp(context.theme.warn)}>■ stopping</span>
+        ) : snapshot.turn.kind === "running" ||
+          agent.status === "initializing" ? (
           <WorkingIndicator />
         ) : null}{" "}
         {agent.provider}
@@ -735,7 +757,19 @@ export function TimelineView({
           {snapshot.lastNotice}
         </text>
       ) : null}
-      {copy ? <CopyView state={copy} /> : null}
+      {copy ? (
+        <CopyView
+          state={copy}
+          onScroll={(lines) => {
+            const state = copyRef.current;
+            if (!state) return;
+            const next = scrollCopy(state, lines);
+            copyRef.current = next;
+            setCopy(next);
+            if (next.top === 0) void olderRef.current?.().catch(() => {});
+          }}
+        />
+      ) : null}
       <scrollbox
         visible={!copy}
         scrollbarOptions={scrollbarOptions(context.theme)}
@@ -766,7 +800,9 @@ export function TimelineView({
                 block={block}
                 expanded={expanded.has(block.key)}
                 streaming={
-                  i === blocks.length - 1 && snapshot.turn.kind === "running"
+                  i === blocks.length - 1 &&
+                  (snapshot.turn.kind === "running" ||
+                    snapshot.turn.kind === "stopping")
                 }
                 linkify={linkify}
                 onToggle={(event) => {
@@ -842,11 +878,12 @@ function linkAt(
 ): boolean {
   const row = screenRows(renderer)[point.y];
   if (row === undefined) return false;
-  const mention = mentionAt(
-    row,
-    Array.from(row).slice(0, point.x).join("").length,
+  return (
+    resolver.resolveAt(
+      row,
+      Array.from(row).slice(0, point.x).join("").length,
+    ) !== null
   );
-  return mention !== null && resolver.resolve(mention) !== null;
 }
 function visibleSpots(
   renderer: CliRenderer,
@@ -861,7 +898,12 @@ function visibleSpots(
         .slice(box.x, box.x + width)
         .join(""),
     );
-  return screenSpots(rows, { x: box.x, y: box.y }, (mention) =>
-    resolver.resolve(mention),
+  return screenSpots(rows, { x: box.x, y: box.y }, (text) =>
+    // A link label and its URL drawn beside it share one hint.
+    resolver.linksIn(text).map((span) => ({
+      start: span.start,
+      raw: span.link.kind === "url" ? span.link.url : span.raw,
+      value: span.link,
+    })),
   );
 }

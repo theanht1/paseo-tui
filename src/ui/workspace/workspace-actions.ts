@@ -7,6 +7,7 @@ import type {
   PaseoWorkspaceAgentCreateOptions,
   PaseoWorkspaceCreateOptions,
 } from "@getpaseo/client";
+import type { ProjectPort } from "../../connection/ports.js";
 import type { CreateAgentInput } from "../../state/ports.js";
 import type { EditorTerminal } from "../file-links/editor-terminal.js";
 import { defaultBaseBranch } from "./base-branch.js";
@@ -51,9 +52,13 @@ export interface ManagementApi {
   branches(
     cwd: string,
   ): Promise<{ branches: string[]; baseRef: string | null }>;
+  projects: ProjectPort;
+}
+function updateRequired(feature: string) {
+  return Error(`Update the Paseo daemon to use ${feature}.`);
 }
 function requireCapability(supported: boolean, feature: string) {
-  if (!supported) throw Error(`Update the Paseo daemon to use ${feature}.`);
+  if (!supported) throw updateRequired(feature);
 }
 function agentOptions(input: CreateAgentInput): PaseoAgentCreateOptions {
   return {
@@ -67,6 +72,9 @@ function agentOptions(input: CreateAgentInput): PaseoAgentCreateOptions {
     },
     ...(input.title ? { title: input.title } : {}),
     ...(input.prompt ? { prompt: input.prompt } : {}),
+    ...(input.attachments?.length
+      ? { attachments: [...input.attachments] }
+      : {}),
   };
 }
 function trimmedTitle(title: string) {
@@ -132,6 +140,7 @@ export function createWorkspaceActions(
                 projectId: project.projectId,
               },
         agent: agentOptions(input),
+        ...(input.title ? { title: input.title } : {}),
       });
     },
     async createAgent(workspace: WorkspaceRow, input: CreateAgentInput) {
@@ -188,6 +197,33 @@ export function createWorkspaceActions(
         await api.killTerminal(tab.terminal.id);
       }
     },
+    directories: (query: string) => api.projects.directories(query),
+    async addProject(cwd: string) {
+      const add = api.projects.add;
+      if (!add) throw updateRequired("adding projects (projectAdd)");
+      const path = cwd.trim();
+      if (!path) throw Error("Choose a directory");
+      return add(path);
+    },
+    /**
+     * Archives each of the project's workspaces first, as Archive workspace does: the
+     * daemon deletes a workspace's Paseo worktree on that archive, but removing the
+     * project alone leaves worktrees on disk. The main checkout is never deleted.
+     */
+    async removeProject(
+      project: PaseoProject,
+      workspaces: readonly WorkspaceRow[],
+    ) {
+      const remove = api.projects.remove;
+      if (!remove) throw updateRequired("removing projects (projectRemove)");
+      requireCapability(
+        capabilities.workspace,
+        "workspace archiving (workspaceMultiplicity)",
+      );
+      for (const workspace of workspaces)
+        await api.archiveWorkspace(workspace.id);
+      await remove(project.projectId);
+    },
     async archiveWorkspace(workspace: WorkspaceRow) {
       requireCapability(
         capabilities.workspace,
@@ -200,7 +236,10 @@ export function createWorkspaceActions(
 export type WorkspaceActions = ReturnType<typeof createWorkspaceActions>;
 export function managementApi(
   api: Pick<PaseoApi, "workspaces" | "terminals" | "agents">,
-  daemon: Pick<ManagementApi, "renameAgent" | "renameTerminal" | "branches">,
+  daemon: Pick<
+    ManagementApi,
+    "renameAgent" | "renameTerminal" | "branches" | "projects"
+  >,
 ): ManagementApi {
   return {
     async createWorkspace(options) {

@@ -2,7 +2,7 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { expect, it } from "vitest";
 import type { CreateAgentInput } from "../state/ports.js";
 import { agents, settle, setup } from "../test/app-harness.js";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
 it("closes empty unfocused help with q, leaves normal q inert, and requires a second Ctrl-C", async () => {
@@ -10,8 +10,6 @@ it("closes empty unfocused help with q, leaves normal q inert, and requires a se
   app.stdin.write("\r");
   await settle();
   app.stdin.write("?");
-  await settle();
-  app.stdin.write("\t");
   await settle();
   app.stdin.write("q");
   await settle();
@@ -140,9 +138,7 @@ it("switches to a terminal tab, displays its output, and forwards insert input",
     kill: async () => {},
   };
   const { app, test } = await setup(agents, 24, false, {}, undefined, {
-    list: async () => ({ requestId: "r", entries: [] }),
     ref: () => terminal,
-    create: async () => terminal,
   });
   const tab = test.renderer.root.findDescendantById("tab:terminal:shell");
   if (!tab) throw Error("Missing terminal tab");
@@ -213,8 +209,6 @@ it("centers a bordered shortcut modal and leaves the content visible around it",
   expect(modal.y).toBeGreaterThan(0);
   expect(modal.width).toBeLessThan(120);
   expect(app.lastFrame()).toContain("Keyboard shortcuts");
-  app.stdin.write("\t");
-  await settle();
   app.stdin.write("q");
   await settle();
   expect(
@@ -298,6 +292,7 @@ it("dims the sidebar title and accents the agent title when pane focus moves", a
 it("runs workspace and tab rename from shortcuts and the mouse Apply button", async () => {
   const names: { kind: string; id: string; name: string }[] = [];
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -359,6 +354,7 @@ it("creates a workspace through project and model configuration, then creates an
     placement?: unknown;
   }[] = [];
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -478,6 +474,7 @@ it("creates a new tab instantly from the current agent's config, activates it an
   );
   let created: PaseoAgent | null = null;
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -585,6 +582,7 @@ it("creates a terminal with keyboard and renames it through its mouse menu", asy
     kill: async () => {},
   };
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -616,9 +614,7 @@ it("creates a terminal with keyboard and renames it through its mouse menu", asy
     {},
     "agents",
     {
-      list: async () => ({ requestId: "r", entries: [] }),
       ref: () => terminal,
-      create: async () => terminal,
     },
     management,
   );
@@ -708,9 +704,14 @@ it("gives shortcut search at least 60 percent height, filters fuzzy terms, and c
   const popup = test.renderer.root.findDescendantById("shortcut-modal");
   if (!popup) throw Error("Missing shortcuts");
   expect(popup.height).toBeGreaterThanOrEqual(36);
+  app.stdin.write("/");
+  await settle();
   app.stdin.write("renw");
   await settle();
   expect(app.lastFrame()).toContain("Rename workspace");
+  expect(app.lastFrame()).not.toContain("Toggle sidebar");
+  app.stdin.write("\r");
+  await settle();
   expect(app.lastFrame()).not.toContain("Toggle sidebar");
   test.mockInput.pressEscape();
   await new Promise((resolve) => setTimeout(resolve, 40));
@@ -788,9 +789,11 @@ it("treats q ? W r and gt as text in Command Center filters and the new-workspac
   expect(app.lastFrame()).toContain("q?Wrgt");
   expect(app.lastFrame()).not.toContain("Keyboard shortcuts");
 });
-it("lets q and shortcut letters search shortcuts, then closes q only on empty results focus", async () => {
+it("types q and shortcut letters into the search after /, and closes with q from normal mode", async () => {
   const { app, test } = await setup();
   app.stdin.write("?");
+  await settle();
+  app.stdin.write("/");
   await settle();
   app.stdin.write("q?Wrgt");
   await settle();
@@ -799,8 +802,7 @@ it("lets q and shortcut letters search shortcuts, then closes q only on empty re
   test.mockInput.pressEscape();
   await new Promise((resolve) => setTimeout(resolve, 40));
   await settle();
-  app.stdin.write("\t");
-  await settle();
+  expect(test.renderer.root.findDescendantById("shortcut-modal")).toBeDefined();
   app.stdin.write("q");
   await settle();
   expect(
@@ -827,6 +829,7 @@ it("shares the persisted thinking selection across new-workspace and new-agent-t
     name: "Main",
   };
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -923,6 +926,7 @@ it("opens New tab with Ctrl-N from the prompt and timeline search", async () => 
 it("confirms tab closure through ZQ and mouse buttons, and keeps canceled tabs open", async () => {
   const closed: string[] = [];
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -1026,9 +1030,7 @@ it("closes an active terminal when its workspace is archived and opens its neigh
     {},
     undefined,
     {
-      list: async () => ({ requestId: "r", entries: [] }),
       ref: () => terminal,
-      create: async () => terminal,
     },
   );
   const tab = test.renderer.root.findDescendantById("tab:terminal:shell");
@@ -1046,6 +1048,7 @@ it("closes an active terminal when its workspace is archived and opens its neigh
 it("cancels a workspace archive from the confirmation by click or n", async () => {
   const archived: string[] = [];
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -1106,6 +1109,7 @@ it("cancels a workspace archive from the confirmation by click or n", async () =
 it("archives a workspace from its context menu without waiting for a directory event", async () => {
   const archived: string[] = [];
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
     openFile: async () => {
       throw Error("Unexpected");
@@ -1170,4 +1174,23 @@ it("archives a workspace from its context menu without waiting for a directory e
   ).toBeDefined();
   expect(app.lastFrame()).toContain("hello gamma");
   expect(ports.get("alpha")?.released).toBe(true);
+});
+it("scrolls the shortcut list with j/k and G/gg in normal mode instead of typing", async () => {
+  const { app, test } = await setup(agents, 24);
+  app.stdin.write("?");
+  await settle();
+  const first = app.lastFrame();
+  expect(first).toContain("Keyboard shortcuts");
+  for (const key of ["j", "j", "j"]) app.stdin.write(key);
+  await settle();
+  const scrolled = app.lastFrame();
+  expect(scrolled).not.toEqual(first);
+  expect(test.renderer.root.findDescendantById("shortcut-modal")).toBeDefined();
+  app.stdin.write("G");
+  await settle();
+  expect(app.lastFrame()).toContain("Insert: Enter send");
+  app.stdin.write("g");
+  app.stdin.write("g");
+  await settle();
+  expect(app.lastFrame()).toEqual(first);
 });

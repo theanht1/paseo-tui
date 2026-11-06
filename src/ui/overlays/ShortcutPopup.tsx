@@ -1,5 +1,6 @@
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { Fragment, useContext, useMemo } from "react";
+import { Fragment, useContext, useMemo, useRef } from "react";
 import { useKeyOwner } from "../input/key-router.js";
 import { type Binding, helpRows } from "../input/keymap.js";
 import {
@@ -31,12 +32,28 @@ export function ShortcutPopup({
     (event) =>
       event.ctrl && event.name === "c" && search.key(event) === "handled",
   );
+  const scroll = useRef<ScrollBoxRenderable>(null);
   useKeyboard((event) => {
     const result = search.key(event);
-    if (result !== "pass") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (result === "close") onClose();
+    if (result === "pass") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (result === "close") onClose();
+    else if (typeof result === "object") {
+      const box = scroll.current;
+      if (!box) return;
+      const page = Math.max(1, box.height - 1);
+      if (result.scroll === "edge")
+        box.scrollTo(result.dir > 0 ? Number.POSITIVE_INFINITY : 0);
+      else
+        box.scrollBy(
+          result.dir *
+            (result.scroll === "line"
+              ? 1
+              : result.scroll === "half"
+                ? Math.max(1, Math.floor(box.height / 2))
+                : page),
+        );
     }
   });
   const rows = filterShortcuts(helpRows(prefix, bindings), state.query);
@@ -92,6 +109,7 @@ export function ShortcutPopup({
           focusedBackgroundColor={backgroundProp(theme.codeBg)}
         />
         <scrollbox
+          ref={scroll}
           focused={state.focus === "results"}
           onMouseDown={() => search.focus("results")}
           flexGrow={1}
@@ -141,7 +159,9 @@ export function ShortcutPopup({
           ) : null}
         </scrollbox>
         <text fg={foregroundProp(theme.muted)}>
-          Esc clear/close · Tab search/results · q closes empty results
+          {state.focus === "search"
+            ? "Type to filter · Enter/Esc done"
+            : "j/k scroll · Ctrl-d/u half page · gg/G top/bottom · / search · Esc clear/close · q close"}
         </text>
       </box>
     </box>

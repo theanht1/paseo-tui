@@ -87,3 +87,24 @@ it("reports stream failures without polling or swallowing errors", async () => {
   expect(store.getSnapshot().error).toContain("input failed");
   store.close();
 });
+
+it("tells its owner when the terminal's process exits, but not after closing", () => {
+  const exits: ((() => void) | undefined)[] = [];
+  const port: TerminalStreamPort = {
+    observe(_id, _event, _error, onExit) {
+      exits.push(onExit);
+      return { ready: Promise.resolve(), async close() {} };
+    },
+    write() {},
+    resize() {},
+  };
+  let exited = 0;
+  const screen = { beginReplay() {}, endReplay() {}, write() {} };
+  const store = createTerminalStore("t", port, () => exited++);
+  store.start(screen);
+  exits[0]?.();
+  expect(exited).toBe(1);
+  store.close();
+  exits[0]?.();
+  expect(exited).toBe(1);
+});

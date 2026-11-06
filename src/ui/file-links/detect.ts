@@ -80,6 +80,71 @@ export function mentionAt(line: string, col: number): PathMention | null {
   );
 }
 
+export interface UrlMention {
+  /** Offsets of `raw` in the scanned text. */
+  start: number;
+  end: number;
+  raw: string;
+  /** The parsed `http:`/`https:` URL, normalized. */
+  url: string;
+}
+
+const URL_TOKEN = /(?<![A-Za-z0-9+.-])https?:\/\/[^\s<>"'`]+/gi;
+const URL_TRAILING = /[.,:;!?]+$/;
+
+function count(text: string, char: string) {
+  return text.split(char).length - 1;
+}
+/** Drops trailing punctuation and closing brackets that the URL did not open. */
+function trimUrl(token: string): string {
+  let raw = token;
+  for (;;) {
+    const next = raw.replace(URL_TRAILING, "");
+    const last = next.at(-1);
+    const pairs = { ")": "(", "]": "[", "}": "{" } as const;
+    const open =
+      last === ")" || last === "]" || last === "}" ? pairs[last] : null;
+    const trimmed =
+      open && last && count(next, last) > count(next, open)
+        ? next.slice(0, -1)
+        : next;
+    if (trimmed === raw) return raw;
+    raw = trimmed;
+  }
+}
+
+/** `http://` and `https://` URLs in free text; other schemes are never links. */
+export function findUrlMentions(text: string): UrlMention[] {
+  const mentions: UrlMention[] = [];
+  for (const match of text.matchAll(URL_TOKEN)) {
+    const raw = trimUrl(match[0]);
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      continue;
+    }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || !url.host)
+      continue;
+    mentions.push({
+      start: match.index,
+      end: match.index + raw.length,
+      raw,
+      url: url.href,
+    });
+  }
+  return mentions;
+}
+
+/** The URL covering column `col` of a single line, if any. */
+export function urlAt(line: string, col: number): UrlMention | null {
+  return (
+    findUrlMentions(line).find(
+      (mention) => col >= mention.start && col < mention.end,
+    ) ?? null
+  );
+}
+
 /** Absolute path, or a normalized `~/` path the daemon expands itself. */
 export function resolvePath(path: string, cwd: string): string {
   if (path.startsWith("~/")) return `~/${posix.normalize(path.slice(2))}`;

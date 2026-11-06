@@ -73,7 +73,7 @@ test("lists every problem in one startup error", () => {
     new RegExp(
       [
         "^Invalid config /home/me/\\.config/paseo-tui/config\\.json:",
-        '  - unknown setting "colour" \\(expected keys, theme, prefix, notify\\)',
+        '  - unknown setting "colour" \\(expected keys, theme, prefix, notify, usage, editor\\)',
         '  - keys\\."pane\\.zoom": expected a key string or an array of key strings',
         '  - keys\\."tab\\.explode": unknown action; valid: .*',
         '  - theme\\.accent: "orange" is not a hex color \\(#rgb, #rrggbb or #rrggbbaa\\)',
@@ -107,4 +107,51 @@ test("a missing default config is empty, a missing --config path is an error", a
   );
   const present = { read: async () => '{"notify":"off"}' };
   expect((await loadUserConfig(present, "a.json", true)).notify).toBe("off");
+});
+
+test("parses usage selections", () => {
+  const config = parseUserConfig(
+    JSON.stringify({
+      usage: {
+        claude: ["five_hour", "seven_day"],
+        codex: true,
+        openrouter: false,
+      },
+    }),
+    "c.json",
+  );
+  expect([...(config.usage ?? [])]).toEqual([
+    ["claude", ["five_hour", "seven_day"]],
+    ["codex", "default"],
+    ["openrouter", "hidden"],
+  ]);
+});
+
+test("rejects bad usage values", () => {
+  expect(() => parseUserConfig('{"usage": []}', "c.json")).toThrow(
+    "  - usage: expected an object of provider ids",
+  );
+  expect(() =>
+    parseUserConfig('{"usage": {"claude": "5h"}}', "c.json"),
+  ).toThrow(
+    '  - usage."claude": expected true, false or an array of usage ids',
+  );
+  expect(() => parseUserConfig('{"usage": {"claude": [1]}}', "c.json")).toThrow(
+    '  - usage."claude": expected true, false or an array of usage ids',
+  );
+});
+
+test("usage is undefined when not configured", () => {
+  expect(parseUserConfig("{}", "c.json").usage).toBeUndefined();
+});
+
+test("parses and validates the editor command", () => {
+  expect(parseUserConfig('{"editor": "hx"}', "c.json").editor).toBe("hx");
+  expect(parseUserConfig("{}", "c.json").editor).toBeUndefined();
+  expect(() => parseUserConfig('{"editor": "  "}', "c.json")).toThrow(
+    "  - editor: needs a command",
+  );
+  expect(() => parseUserConfig('{"editor": 3}', "c.json")).toThrow(
+    "  - editor: expected a string",
+  );
 });

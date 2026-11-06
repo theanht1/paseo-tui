@@ -130,6 +130,7 @@ export function createProviderSubagentStore(port: ProviderSubagentPort) {
         },
         send: reject,
         steer: reject,
+        interrupt: reject,
         respondToPermission: reject,
         setMode: reject,
         setModel: reject,

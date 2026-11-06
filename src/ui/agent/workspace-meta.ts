@@ -47,3 +47,11 @@ export function setupTag(row: WorkspaceRow): SetupTag | null {
       return null;
   }
 }
+const HOST_TAG_WIDTH = 10;
+/** A workspace's host name, short enough to share the title row in the sidebar. */
+export function hostTag(label: string): string {
+  const name = label.trim();
+  return name.length > HOST_TAG_WIDTH
+    ? `${name.slice(0, HOST_TAG_WIDTH - 1)}…`
+    : name;
+}

@@ -21,7 +21,14 @@ export interface UserConfig {
   theme: ThemeOverrides;
   prefix?: string;
   notify?: NotifyStyle;
+  usage?: UsageConfig;
+  editor?: string;
 }
+
+/** `default` keeps a provider's headline window; an array lists exact usage ids. */
+export type UsageSelection = "default" | "hidden" | readonly string[];
+/** Provider id to selection; insertion order is display order. */
+export type UsageConfig = ReadonlyMap<string, UsageSelection>;
 
 export function userConfigPath(env: NodeJS.ProcessEnv, home: string): string {
   return join(
@@ -31,7 +38,7 @@ export function userConfigPath(env: NodeJS.ProcessEnv, home: string): string {
   );
 }
 
-const SETTINGS = ["keys", "theme", "prefix", "notify"];
+const SETTINGS = ["keys", "theme", "prefix", "notify", "usage", "editor"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,6 +79,29 @@ function parseKeys(
       );
   }
   return overrides;
+}
+
+function parseUsage(value: unknown, errors: string[]): UsageConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    errors.push("usage: expected an object of provider ids");
+    return undefined;
+  }
+  const usage = new Map<string, UsageSelection>();
+  for (const [id, selection] of Object.entries(value)) {
+    if (selection === true) usage.set(id, "default");
+    else if (selection === false) usage.set(id, "hidden");
+    else if (
+      Array.isArray(selection) &&
+      selection.every((item): item is string => typeof item === "string")
+    )
+      usage.set(id, selection);
+    else
+      errors.push(
+        `usage.${JSON.stringify(id)}: expected true, false or an array of usage ids`,
+      );
+  }
+  return usage;
 }
 
 function parseTheme(value: unknown, errors: string[]): ThemeOverrides {
@@ -192,6 +222,17 @@ export function parseUserConfig(text: string, source: string): UserConfig {
     errors,
   );
   const notify = parseFlag("notify", value.notify, parseNotifyStyle, errors);
+  const usage = parseUsage(value.usage, errors);
+  const editor = parseFlag(
+    "editor",
+    value.editor,
+    (raw) => {
+      const command = raw.trim();
+      if (!command) throw new Error("needs a command");
+      return command;
+    },
+    errors,
+  );
   if (errors.length > 0)
     throw new Error(
       `Invalid config ${source}:\n${errors.map((error) => `  - ${error}`).join("\n")}`,
@@ -201,6 +242,8 @@ export function parseUserConfig(text: string, source: string): UserConfig {
     theme,
     ...(prefix === undefined ? {} : { prefix }),
     ...(notify === undefined ? {} : { notify }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(editor === undefined ? {} : { editor }),
   };
 }
 

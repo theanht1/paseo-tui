@@ -28,11 +28,21 @@ export function agentConfigurationStep(
   deps: ConfigurationDeps,
   cwd: string,
   onSubmit: (input: CreateAgentInput) => void,
+  options?: ConfigurationOptions,
 ): CommandStep {
-  return agentConfigurationFlow(deps, cwd, (input) => {
-    onSubmit(input);
-    return undefined;
-  });
+  return agentConfigurationFlow(
+    deps,
+    cwd,
+    (input) => {
+      onSubmit(input);
+      return undefined;
+    },
+    undefined,
+    options,
+  );
+}
+export interface ConfigurationOptions {
+  titlePlaceholder?: string;
 }
 /** Provider › Model › Mode › Thinking › Title › prompt; `finish` may continue with another step. */
 export function agentConfigurationFlow(
@@ -43,6 +53,7 @@ export function agentConfigurationFlow(
     title: "First prompt",
     placeholder: "First prompt (optional) · / commands · @ files",
   },
+  options: ConfigurationOptions = {},
 ): CommandStep {
   function providerStep(cwd: string): CommandStep {
     const step: CommandStep = {
@@ -163,7 +174,7 @@ export function agentConfigurationFlow(
     return {
       kind: "input",
       title: "Title",
-      placeholder: "Agent title (optional)",
+      placeholder: options.titlePlaceholder ?? "Agent title (optional)",
       submit: (title) => ({
         kind: "input",
         title: prompt.title,

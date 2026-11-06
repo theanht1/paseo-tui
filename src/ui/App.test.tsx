@@ -210,6 +210,9 @@ describe("App", () => {
     expect(app.lastFrame()).toContain("Keyboard shortcuts");
     expect(app.lastFrame()).toContain("Ctrl-X");
     app.stdin.write("j");
+    app.stdin.write("/");
+    await settle();
+    app.stdin.write("j");
     app.stdin.write("\r");
     await settle();
     expect([...ports.keys()]).toEqual([]);
@@ -513,6 +516,19 @@ describe("App", () => {
 it("disables mouse through rendererOptions", () => {
   expect(rendererOptions({ mouse: false }).useMouse).toBe(false);
 });
+it("asks the terminal for modifier-only keys and releases and routes them to the hint handler", () => {
+  const seen: string[] = [];
+  const options = rendererOptions({}, (sequence) => {
+    seen.push(sequence);
+    return true;
+  });
+  expect(options.useKittyKeyboard).toMatchObject({
+    events: true,
+    allKeysAsEscapes: true,
+  });
+  options.prependInputHandlers?.[0]?.("\u001b[57444;9u");
+  expect(seen).toEqual(["\u001b[57444;9u"]);
+});
 it("opens the selected workspace by clicking its row", async () => {
   const { test, ports } = await setup();
   const row = test.renderer.root.findDescendantById("workspace:one");
@@ -745,4 +761,42 @@ it("pane header includes provider and model", async () => {
   app.stdin.write("\r");
   await settle();
   expect(app.lastFrame()).toContain("codex/gpt-6");
+});
+
+it("status bar shows the focused agent's context window", async () => {
+  const withUsage = agent("alpha", {
+    lastUsage: {
+      contextWindowUsedTokens: 84_000,
+      contextWindowMaxTokens: 200_000,
+    },
+  });
+  const first = await setup([withUsage]);
+  first.app.stdin.write("\r");
+  await settle();
+  expect(first.app.lastFrame()).toContain("ctx 42%");
+  const second = await setup([agent("beta")]);
+  second.app.stdin.write("\r");
+  await settle();
+  expect(second.app.lastFrame()).not.toContain("ctx");
+});
+
+it("Command Center lists the focused agent's context window details", async () => {
+  const { app } = await setup([
+    agent("alpha", {
+      lastUsage: {
+        contextWindowUsedTokens: 84_000,
+        contextWindowMaxTokens: 200_000,
+        totalCostUsd: 0.1234,
+      },
+    }),
+  ]);
+  app.stdin.write("\r");
+  await settle();
+  app.stdin.write(":");
+  await settle();
+  app.stdin.write("Context window");
+  await settle();
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "Session cost $0.12");
+  expect(app.lastFrame()).toContain("84k / 200k tokens");
 });

@@ -88,7 +88,7 @@ export function searchStatus(input: {
   notice: string | null;
 }): string {
   const { history, targets } = input;
-  if (!input.query) return "";
+  if (!input.query) return input.notice ?? "";
   const notes = [
     history.kind === "searching" ? "searching history…" : null,
     history.kind === "failed"
@@ -105,66 +105,99 @@ export function searchStatus(input: {
   return [count, ...notes].filter((part) => part !== null).join(" · ");
 }
 
-interface HistorySearchSnapshot {
-  history: HistoryState;
-  /** Sequence of an unloaded match being paged in. */
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+interface RevealSnapshot {
+  /** Sequence of an unloaded row being paged in. */
   pending: number | null;
   notice: string | null;
 }
-/** Runs daemon searches for one pane, dropping answers to superseded queries. */
-export function createHistorySearch(search: TimelineStore["search"]) {
+/**
+ * One pane's page-in of an unloaded row (a search match or a prompt jump): the
+ * pane jumps once `pending` is loaded and calls `shown`.
+ */
+export function createRevealTracker(
+  reveal: ((seq: number) => Promise<void>) | null,
+) {
   const emitter = createEmitter();
-  let snapshot: HistorySearchSnapshot = {
-    history: { kind: "off" },
-    pending: null,
-    notice: null,
-  };
-  let generation = 0;
-  function publish(next: Partial<HistorySearchSnapshot>) {
+  let snapshot: RevealSnapshot = { pending: null, notice: null };
+  function publish(next: Partial<RevealSnapshot>) {
     snapshot = { ...snapshot, ...next };
     emitter.notify();
   }
-  function message(error: unknown) {
-    return error instanceof Error ? error.message : String(error);
+  return {
+    subscribe: emitter.subscribe,
+    getSnapshot: () => snapshot,
+    reveal(seq: number) {
+      if (!reveal) return;
+      publish({ pending: seq, notice: null });
+      reveal(seq).catch((error: unknown) => {
+        if (snapshot.pending === seq)
+          publish({ pending: null, notice: message(error) });
+      });
+    },
+    /** The pending row is on screen now. */
+    shown() {
+      publish({ pending: null });
+    },
+    /** Drops any pending page-in and shows `text` instead. */
+    notify(text: string) {
+      publish({ pending: null, notice: text });
+    },
+    reset() {
+      if (snapshot.pending !== null || snapshot.notice !== null)
+        publish({ pending: null, notice: null });
+    },
+  };
+}
+export type RevealTracker = ReturnType<typeof createRevealTracker>;
+
+interface HistorySearchSnapshot extends RevealSnapshot {
+  history: HistoryState;
+}
+/** Runs daemon searches for one pane, dropping answers to superseded queries. */
+export function createHistorySearch(
+  search: TimelineStore["search"],
+  tracker: RevealTracker = createRevealTracker(search?.reveal ?? null),
+) {
+  const emitter = createEmitter();
+  let history: HistoryState = { kind: "off" };
+  let snapshot: HistorySearchSnapshot = { history, ...tracker.getSnapshot() };
+  let generation = 0;
+  function refresh() {
+    snapshot = { history, ...tracker.getSnapshot() };
+    emitter.notify();
+  }
+  tracker.subscribe(refresh);
+  function publish(next: HistoryState) {
+    history = next;
+    refresh();
   }
   return {
     subscribe: emitter.subscribe,
     getSnapshot: () => snapshot,
     run(query: string) {
       const current = ++generation;
+      tracker.reset();
       if (!search || !query) {
-        publish({ history: { kind: "off" }, pending: null, notice: null });
+        publish({ kind: "off" });
         return;
       }
-      publish({
-        history: { kind: "searching", query },
-        pending: null,
-        notice: null,
-      });
+      publish({ kind: "searching", query });
       search.find(query).then(
         (result) => {
           if (current === generation)
-            publish({ history: { kind: "done", query, ...result } });
+            publish({ kind: "done", query, ...result });
         },
         (error: unknown) => {
           if (current === generation)
-            publish({
-              history: { kind: "failed", query, message: message(error) },
-            });
+            publish({ kind: "failed", query, message: message(error) });
         },
       );
     },
-    reveal(seq: number) {
-      if (!search) return;
-      publish({ pending: seq, notice: null });
-      search.reveal(seq).catch((error: unknown) => {
-        if (snapshot.pending === seq)
-          publish({ pending: null, notice: message(error) });
-      });
-    },
+    reveal: tracker.reveal,
     /** The pending match is on screen now. */
-    shown() {
-      publish({ pending: null });
-    },
+    shown: tracker.shown,
   };
 }

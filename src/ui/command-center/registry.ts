@@ -7,6 +7,7 @@ import {
   tokenizeQuery,
 } from "@getpaseo/protocol/search/text-match";
 import type { CommandListSource } from "../../connection/ports.js";
+import type { Action } from "../input/keymap.js";
 export type CommandGroup =
   | "Needs you"
   | "Agents"
@@ -22,9 +23,17 @@ export interface CommandItem {
   title: string;
   subtitle?: string;
   keywords?: readonly string[];
-  shortcut?: string;
+  /** The key binding this item is equivalent to; its shortcut is shown on the right. */
+  action?: Action;
   recency?: number;
   run(): undefined | CommandStep;
+}
+/** The shortcut shown at the right of an item's row, from the effective key bindings. */
+export function rowShortcut(
+  item: CommandItem,
+  shortcut: (action: Action) => string | null,
+): string {
+  return item.action ? (shortcut(item.action) ?? "") : "";
 }
 export interface CommandSource {
   id: string;
@@ -146,6 +155,19 @@ export type CommandStep =
       initial?: string;
       /** Offers `/` command and `@` file completions while typing. */
       completion?: { source: CommandListSource; cwd: string };
+      /** Hides what is typed (a password); paste works, nothing is drawn but dots. */
+      secret?: true;
+      /** Enter on a blank value stays and says "<required> is required". */
+      required?: string;
       submit(text: string): undefined | CommandStep;
+    }
+  | {
+      /** Like `choice`, but the items come from `search` as you type instead of filtering a fixed list. */
+      kind: "search";
+      title: string;
+      placeholder: string;
+      /** Fills the terminal height to list more rows (long lists such as History). */
+      tall?: true;
+      search(query: string): Promise<readonly CommandItem[]>;
     }
   | { kind: "confirm"; title: string; confirm(): void };

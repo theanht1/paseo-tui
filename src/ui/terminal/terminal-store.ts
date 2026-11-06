@@ -7,7 +7,12 @@ interface TerminalScreen {
   endReplay(): void;
 }
 
-export function createTerminalStore(id: string, port: TerminalStreamPort) {
+/** `onExit` runs when the terminal's process exits, so its tab can close without waiting for the daemon's lists. */
+export function createTerminalStore(
+  id: string,
+  port: TerminalStreamPort,
+  onExit?: () => void,
+) {
   const emitter = createEmitter();
   let closed = false;
   let subscription: ReturnType<TerminalStreamPort["observe"]> | undefined;
@@ -45,6 +50,9 @@ export function createTerminalStore(id: string, port: TerminalStreamPort) {
             } else screen.write(`\r\n\x1b[2m[${type}]\x1b[0m\r\n`);
           },
           report,
+          () => {
+            if (!closed) onExit?.();
+          },
         );
         void subscription.ready.catch(report);
       });

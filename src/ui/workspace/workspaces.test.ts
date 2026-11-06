@@ -39,3 +39,37 @@ it("tabs are scoped by workspace identity and include terminals", () => {
   expect(cycleTab(tabs, "terminal:shell", 1)?.key).toBe("agent:a");
   expect(cycleTab([], null, 1)).toBeNull();
 });
+it("agent tabs keep creation order when activity changes", () => {
+  const a = agent("a", {
+    workspaceId: "main",
+    createdAt: "2026-11-01T00:00:01Z",
+    updatedAt: "2026-11-01T00:00:09Z",
+    status: "running",
+  });
+  const b = agent("b", {
+    workspaceId: "main",
+    createdAt: "2026-11-01T00:00:02Z",
+    updatedAt: "2026-11-01T00:00:03Z",
+  });
+  const keys = (list: Parameters<typeof workspaceTabs>[1]) =>
+    workspaceTabs("main", list, []).map((t) => t.key);
+  expect(keys([a, b])).toEqual(["agent:a", "agent:b"]);
+  expect(keys([b, a])).toEqual(["agent:a", "agent:b"]);
+});
+it("archived agents get one slot in creation order", () => {
+  const live = agent("live", {
+    workspaceId: "main",
+    createdAt: "2026-11-01T00:00:02Z",
+  });
+  const old = agent("old", {
+    workspaceId: "main",
+    createdAt: "2026-11-01T00:00:01Z",
+    archivedAt: "2026-11-02T00:00:00Z",
+  });
+  const other = agent("other", {
+    workspaceId: "branch",
+    archivedAt: "2026-11-02T00:00:00Z",
+  });
+  const tabs = workspaceTabs("main", [live, old], [], [], [old, other, live]);
+  expect(tabs.map((t) => t.key)).toEqual(["agent:old", "agent:live"]);
+});

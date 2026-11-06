@@ -1,9 +1,12 @@
 import { BINDINGS } from "./bindings.js";
+import { actionId } from "./key-overrides.js";
 export interface Stroke {
   name: string;
   ctrl: boolean;
   meta: boolean;
   shift: boolean;
+  /** Command on macOS; only reported by terminals speaking the kitty keyboard protocol. */
+  super?: boolean;
   sequence: string;
 }
 export type Mode =
@@ -19,6 +22,8 @@ export type Action =
   | {
       type:
         | "quit"
+        /** Quits at once; the Command Center's Quit (the key needs Ctrl-C twice). */
+        | "exit"
         | "help"
         | "insert"
         | "normal"
@@ -47,8 +52,21 @@ export type Action =
         | "tab.close"
         | "attention.next"
         | "sidebar.toggleGrouping"
-        | "diff.open";
+        | "diff.open"
+        | "workspace.editor"
+        | "history.open"
+        | "agent.unarchive"
+        /** Opens the Jump to prompt list for the focused agent. */
+        | "prompts.open"
+        | "queue.send"
+        | "queue.interrupt"
+        | "queue.edit"
+        | "queue.remove"
+        | "queue.clear";
     }
+  | { type: "queue.select"; delta: number }
+  /** Scrolls the pane to the prompt at `seq` (from the prompt index of `epoch`). */
+  | { type: "timeline.goto"; seq: number; epoch: string }
   | { type: "list.move" | "scroll.lines" | "block.move"; delta: number }
   | { type: "list.edge" | "scroll.edge"; edge: "top" | "bottom" }
   | { type: "scroll.half" | "scroll.page"; dir: 1 | -1 }
@@ -103,6 +121,7 @@ export function globalAction(
 function label(stroke: Stroke): string {
   if (stroke.ctrl) return `Ctrl-${stroke.name.toLowerCase()}`;
   if (stroke.name === "tab" && stroke.shift) return "Shift-Tab";
+  if (stroke.super) return `Super-${stroke.name}`;
   if (stroke.meta) return `Meta-${stroke.name}`;
   const names: Record<string, string> = {
     return: "Enter",
@@ -150,7 +169,10 @@ export function dispatch(
     const query =
       stroke.name === "backspace"
         ? mode.query.slice(0, -1)
-        : !stroke.ctrl && !stroke.meta && stroke.sequence.length === 1
+        : !stroke.ctrl &&
+            !stroke.meta &&
+            !stroke.super &&
+            stroke.sequence.length === 1
           ? mode.query + stroke.sequence
           : mode.query;
     return {
@@ -204,7 +226,7 @@ export function dispatch(
   const candidate =
     mode.kind === "normal" &&
     mode.pending === "g" &&
-    (key === "g" || key === "d")
+    (key === "g" || key === "d" || key === "e")
       ? `g ${key}`
       : key;
   const binding = bindings.find(
@@ -215,29 +237,38 @@ export function dispatch(
       matches(b, candidate, stroke),
   );
   const action = binding?.action ?? null;
+  const entered = action ? actionMode(action) : null;
   return {
     mode:
       action?.type === "palette.open"
         ? { kind: "palette" }
-        : action?.type === "search.start"
-          ? { kind: "search", query: "" }
-          : action?.type === "copy.start"
-            ? { kind: "copy" }
-            : action?.type === "hint.start"
-              ? { kind: "hint" }
-              : action?.type === "insert"
-                ? { kind: "insert" }
-                : action?.type === "normal"
-                  ? normal
-                  : mode.kind === "prefix" &&
-                      mode.returnTo === "insert" &&
-                      action?.type !== "pane.numbers"
-                    ? { kind: "insert" }
-                    : mode.kind === "insert"
-                      ? mode
-                      : normal,
+        : (entered ??
+          (action?.type === "normal"
+            ? normal
+            : mode.kind === "prefix" &&
+                mode.returnTo === "insert" &&
+                action?.type !== "pane.numbers"
+              ? { kind: "insert" }
+              : mode.kind === "insert"
+                ? mode
+                : normal)),
     action,
   };
+}
+/** The input mode an action starts, from a key or the Command Center; null when it starts none. */
+export function actionMode(action: Action): Mode | null {
+  switch (action.type) {
+    case "search.start":
+      return { kind: "search", query: "" };
+    case "copy.start":
+      return { kind: "copy" };
+    case "hint.start":
+      return { kind: "hint" };
+    case "insert":
+      return { kind: "insert" };
+    default:
+      return null;
+  }
 }
 /** Ctrl-C leaves whatever input or transient mode is active; only normal mode arms quit. */
 /** The mode the Command Center restores when it closes. */
@@ -272,44 +303,72 @@ export function interrupt(mode: Mode): { mode: Mode; action: Action | null } {
   }
 }
 /**
- * Actions that only make sense as in-context keystrokes, never as Command Center entries.
- * File hints label what is on screen, which the Command Center covers; it lists the chat's
- * files itself ("Open file from this chat…").
+ * Actions that are keystrokes within another surface (the palette itself, copy and hint
+ * keys, search typing), single-step moves the Command Center's own list replaces, or
+ * ones it already lists as its own items (History…, Unarchive, Jump to prompt…, the
+ * message queue's items).
  */
 const KEYSTROKE_ONLY: ReadonlySet<Action["type"]> = new Set([
-  "quit",
-  "insert",
   "normal",
   "palette.open",
   "palette.close",
   "copy.exit",
   "copy.key",
-  "hint.start",
   "hint.key",
   "hint.cancel",
   "list.move",
-  "list.edge",
-  "list.open",
   "scroll.lines",
-  "scroll.edge",
-  "scroll.half",
-  "scroll.page",
-  "block.move",
-  "block.toggle",
-  "search.start",
   "search.update",
   "search.commit",
   "search.cancel",
-  "search.next",
   "prefix.literal",
-  "pane.select",
-  "tab.select",
-  "workspace.select",
+  "history.open",
+  "agent.unarchive",
+  "prompts.open",
+  "timeline.goto",
+  "queue.select",
+  "queue.send",
+  "queue.interrupt",
+  "queue.edit",
+  "queue.remove",
+  "queue.clear",
 ]);
 export interface PaletteAction {
   action: Action;
   title: string;
   shortcut: string;
+  /** Words from the action's id, so "diff" finds "Open changes (lazygit)". */
+  keywords: string[];
+}
+function actionKeywords(action: Action): string[] {
+  return action.type
+    .split(".")
+    .flatMap((part) => part.split(/(?=[A-Z])/))
+    .map((word) => word.toLowerCase());
+}
+/**
+ * The keys that run `action` in the effective bindings, e.g. `g d` or `Ctrl-B z`;
+ * Quit (`exit`) is the double Ctrl-C. Null when no key runs it.
+ */
+export function shortcutFor(
+  action: Action,
+  bindings: readonly Binding[],
+  prefixLabel: string,
+): string | null {
+  const quit = action.type === "exit";
+  const id = actionId(quit ? { type: "quit" } : action);
+  const labels = bindings
+    .filter((binding) => actionId(binding.action) === id)
+    .map((binding) => {
+      const keys = quit
+        ? binding.keys
+            .split(" / ")
+            .map((key) => `${key} ${key}`)
+            .join(" / ")
+        : binding.keys;
+      return binding.modes.includes("prefix") ? `${prefixLabel} ${keys}` : keys;
+    });
+  return labels.length ? [...new Set(labels)].join(" / ") : null;
 }
 /** Command Center actions derived from BINDINGS, one per distinct action with all of its shortcuts. */
 export function paletteActions(
@@ -319,18 +378,16 @@ export function paletteActions(
   const entries = new Map<string, PaletteAction>();
   for (const binding of bindings) {
     if (KEYSTROKE_ONLY.has(binding.action.type)) continue;
-    const shortcut = binding.modes.includes("prefix")
-      ? `${prefixLabel} ${binding.keys}`
-      : binding.keys;
-    const key = JSON.stringify(binding.action);
-    const entry = entries.get(key);
-    if (entry) entry.shortcut = `${entry.shortcut} / ${shortcut}`;
-    else
-      entries.set(key, {
-        action: binding.action,
-        title: binding.description,
-        shortcut,
-      });
+    const quit = binding.action.type === "quit";
+    const action: Action = quit ? { type: "exit" } : binding.action;
+    const key = actionId(action);
+    if (entries.has(key)) continue;
+    entries.set(key, {
+      action,
+      title: quit ? "Quit" : binding.description,
+      shortcut: shortcutFor(action, bindings, prefixLabel) ?? "",
+      keywords: quit ? ["quit", "exit", "close"] : actionKeywords(action),
+    });
   }
   return [...entries.values()];
 }
@@ -371,19 +428,19 @@ export function helpRows(
     })),
     { section: "input popups", keys: "Esc", description: "Back / close popup" },
     {
-      section: "shortcut search",
-      keys: "Esc",
-      description: "Clear search, then close",
+      section: "shortcut list",
+      keys: "j k · Ctrl-d Ctrl-u · g g G",
+      description: "Scroll · half page · top / bottom",
     },
     {
-      section: "shortcut search",
-      keys: "Tab",
-      description: "Focus search / results",
+      section: "shortcut list",
+      keys: "/ · Enter / Esc",
+      description: "Search shortcuts · back to the list",
     },
     {
-      section: "shortcut search",
-      keys: "q",
-      description: "Close on empty results focus",
+      section: "shortcut list",
+      keys: "Esc · q",
+      description: "Clear the search, then close · close",
     },
   ];
 }

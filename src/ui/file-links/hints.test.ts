@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findPathMentions } from "./detect.js";
 import { assignHints, hintKey, hintLabels, screenSpots } from "./hints.js";
 
 describe("hintLabels", () => {
@@ -69,7 +70,10 @@ describe("screenSpots", () => {
     const spots = screenSpots(
       ["  open src/a.ts:4 and x/y.ts", "", "/abs/z.md"],
       { x: 10, y: 3 },
-      (mention) => (mention.path === "x/y.ts" ? null : mention.raw),
+      (text) =>
+        findPathMentions(text)
+          .filter((mention) => mention.path !== "x/y.ts")
+          .map((mention) => ({ ...mention, value: mention.raw })),
     );
     expect(spots).toEqual([
       { row: 3, col: 17, key: "src/a.ts:4", value: "src/a.ts:4" },

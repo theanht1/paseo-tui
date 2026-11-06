@@ -130,10 +130,10 @@ test("reports unknown actions, fixed chords, bad keys, reserved keys and conflic
     ),
     'keys."tab.close": not rebindable (fixed chord)',
     'keys."pane.zoom": "g z" is a multi-key chord; only single keys can be bound',
-    'keys."pane.next": "Hyper-q" is not a key (use e.g. x, X, Ctrl-x, Meta-x, Enter, Esc, Tab, Shift-Tab, Up, PgDn, F1)',
+    'keys."pane.next": "Hyper-q" is not a key (use e.g. x, X, Ctrl-x, Meta-x, Cmd-x, Enter, Esc, Tab, Shift-Tab, Up, PgDn, F1)',
     'keys."tab.rename": "Ctrl-c" is reserved',
     'keys."workspace.rename": "g" is reserved in normal mode',
-    'keys."tab.create": "t" would be typed as text; use a Ctrl- or Meta- key',
+    'keys."tab.create": "t" would be typed as text; use a Ctrl-, Meta- or Cmd- key',
     'keys."sidebar.toggle": "n" conflicts with search.next:1 in normal mode',
   ]);
 });
@@ -149,6 +149,20 @@ test("the default table has no conflicts and named keys are normalized", () => {
   );
   expect(
     dispatch(normal, "pane", { ...key("s"), meta: true }, undefined, bindings)
+      .action,
+  ).toEqual({ type: "sidebar.toggle" });
+});
+test("Cmd and Super keys rebind to Super- and work while typing", () => {
+  const { bindings, errors } = rebind({
+    "tab.create": ["cmd-t"],
+    "sidebar.toggle": ["Super-b"],
+  });
+  expect(errors).toEqual([]);
+  expect(bindings.find((b) => b.action.type === "tab.create")?.keys).toBe(
+    "Super-t",
+  );
+  expect(
+    dispatch(normal, "pane", { ...key("b"), super: true }, undefined, bindings)
       .action,
   ).toEqual({ type: "sidebar.toggle" });
 });

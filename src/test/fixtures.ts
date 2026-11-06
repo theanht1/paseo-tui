@@ -117,17 +117,31 @@ export function timelineStore(
     getSnapshot: () => snapshot,
     send: async () => {},
     steer: async () => {},
+    interrupt: async () => {},
     respond: async () => {},
     cancel: async () => {},
+    stop: async () => {},
     setMode: async () => {},
     setModel: async () => {},
     rename: async () => {},
     archive: async () => {},
     search: null,
+    reveal: null,
     prompts: null,
     rewind: null,
     fork: null,
     setThinking: null,
+    older: null,
     ...overrides,
   };
 }
+/** Project operations for WorkspaceActions fakes in tests that don't touch projects. */
+export const NO_PROJECT_ACTIONS = {
+  directories: async (): Promise<string[]> => [],
+  addProject: async (): Promise<never> => {
+    throw Error("Unexpected addProject");
+  },
+  removeProject: async (): Promise<never> => {
+    throw Error("Unexpected removeProject");
+  },
+};

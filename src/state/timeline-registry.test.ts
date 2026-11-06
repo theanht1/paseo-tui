@@ -1,43 +1,20 @@
 import { expect, test } from "vitest";
-import { agent } from "../test/fixtures.js";
+import { agent, timelineStore } from "../test/fixtures.js";
 import { createTimelineRegistry } from "./timeline-registry.js";
-import type { TimelineSnapshot } from "./timeline-store.js";
 
 test("shared acquire opens once and final release closes once", () => {
   let opened = 0,
     closed = 0;
-  const registry = createTimelineRegistry(() => ({
-    open: async () => {
-      opened++;
-    },
-    close: () => {
-      closed++;
-    },
-    subscribe: () => () => {},
-    getSnapshot: (): TimelineSnapshot => ({
-      status: "closed",
-      epoch: null,
-      error: null,
-      rows: [],
-      turn: { kind: "idle" },
-      pendingPermissions: [],
-      lastActionError: null,
-      lastNotice: null,
+  const registry = createTimelineRegistry(() =>
+    timelineStore({
+      open: async () => {
+        opened++;
+      },
+      close: () => {
+        closed++;
+      },
     }),
-    send: async () => {},
-    steer: async () => {},
-    respond: async () => {},
-    cancel: async () => {},
-    setMode: async () => {},
-    setModel: async () => {},
-    rename: async () => {},
-    archive: async () => {},
-    search: null,
-    prompts: null,
-    rewind: null,
-    fork: null,
-    setThinking: null,
-  }));
+  );
   const a = registry.acquire(agent("a")),
     b = registry.acquire(agent("a"));
   expect(a.store).toBe(b.store);
@@ -55,36 +32,14 @@ test("shared acquire opens once and final release closes once", () => {
 test("reopen replaces failed or closed store and notifies holders", () => {
   let count = 0,
     notified = 0;
-  const registry = createTimelineRegistry(() => ({
-    open: async () => {
-      count++;
-    },
-    close: () => {},
-    subscribe: () => () => {},
-    getSnapshot: (): TimelineSnapshot => ({
-      status: "closed",
-      epoch: null,
-      error: null,
-      rows: [],
-      turn: { kind: "idle" },
-      pendingPermissions: [],
-      lastActionError: null,
-      lastNotice: null,
+  const registry = createTimelineRegistry(() =>
+    timelineStore({
+      open: async () => {
+        count++;
+      },
+      close: () => {},
     }),
-    send: async () => {},
-    steer: async () => {},
-    respond: async () => {},
-    cancel: async () => {},
-    setMode: async () => {},
-    setModel: async () => {},
-    rename: async () => {},
-    archive: async () => {},
-    search: null,
-    prompts: null,
-    rewind: null,
-    fork: null,
-    setThinking: null,
-  }));
+  );
   const holder = registry.acquire(agent("a"));
   const before = holder.store;
   registry.subscribe(() => notified++);

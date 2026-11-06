@@ -3,7 +3,7 @@ import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
 } from "@getpaseo/protocol/agent-types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TimelineCursor } from "../connection/ports.js";
 import { agent, page } from "../test/fixtures.js";
 import type { AgentPort, TimelinePage } from "./ports.js";
@@ -80,12 +80,18 @@ class FakeAgent implements AgentPort {
     if (this.sendError) throw this.sendError;
     this.steered.push(text);
   }
+  interrupted: string[] = [];
+  async interrupt(text: string) {
+    this.interrupted.push(text);
+  }
   async respondToPermission(id: string, _response: AgentPermissionResponse) {
     await this.responseResult;
     this.responded.push(id);
   }
+  cancelResult: Promise<void> = Promise.resolve();
   async cancel() {
     this.cancels++;
+    await this.cancelResult;
   }
   snapshot() {
     return this.current;
@@ -511,4 +517,92 @@ it("forwards model, rename and archive actions", async () => {
   expect(port.models).toEqual(["model"]);
   expect(port.names).toEqual(["Name"]);
   expect(port.archives).toBe(1);
+});
+
+describe("stopping a turn", () => {
+  function running(port: FakeAgent) {
+    port.push({
+      agentId: "a",
+      timestamp: "now",
+      event: { type: "turn_started", provider: "codex", turnId: "turn" },
+    });
+  }
+  it("shows stopping at once, ignores repeats, and ends when the turn does", async () => {
+    const port = new FakeAgent();
+    const store = createTimelineStore(port);
+    await store.open();
+    void store.stop();
+    expect(store.getSnapshot().turn.kind).toBe("idle");
+    expect(port.cancels).toBe(0);
+    running(port);
+    await settle();
+    const ack = deferred<void>();
+    port.cancelResult = ack.promise;
+    const stopping = store.stop();
+    expect(store.getSnapshot().turn).toEqual({
+      kind: "stopping",
+      turnId: "turn",
+      phase: "requested",
+    });
+    void store.stop();
+    expect(port.cancels).toBe(1);
+    ack.resolve();
+    await stopping;
+    expect(store.getSnapshot().turn).toMatchObject({ phase: "acknowledged" });
+    port.push({
+      agentId: "a",
+      timestamp: "now",
+      event: { type: "turn_canceled", provider: "codex", reason: "stop" },
+    });
+    await settle();
+    expect(store.getSnapshot().turn).toEqual({ kind: "idle" });
+  });
+  it("goes back to running with the error when the daemon rejects the stop", async () => {
+    const port = new FakeAgent();
+    const store = createTimelineStore(port);
+    await store.open();
+    running(port);
+    await settle();
+    port.cancelResult = Promise.reject(Error("Stop rejected"));
+    await store.stop();
+    expect(store.getSnapshot().turn).toEqual({
+      kind: "running",
+      turnId: "turn",
+    });
+    expect(store.getSnapshot().lastActionError).toBe("Stop rejected");
+  });
+  it("says the agent is still stopping after a while, and a second stop retries", async () => {
+    vi.useFakeTimers();
+    try {
+      const port = new FakeAgent();
+      const store = createTimelineStore(port);
+      await store.open();
+      running(port);
+      await vi.advanceTimersByTimeAsync(0);
+      await store.stop();
+      void store.stop();
+      expect(port.cancels).toBe(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(store.getSnapshot().turn).toMatchObject({
+        kind: "stopping",
+        phase: "stalled",
+      });
+      await store.stop();
+      expect(port.cancels).toBe(2);
+      expect(store.getSnapshot().turn).toMatchObject({ phase: "acknowledged" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("keeps stopping when a page still reports the agent running", async () => {
+    const port = new FakeAgent();
+    port.current = agent("a", { status: "running" });
+    const store = createTimelineStore(port);
+    await store.open();
+    await store.stop();
+    port.tail = page([1, 2], { agent: agent("a", { status: "running" }) });
+    port.push({ agentId: "a", event: { type: "replacement", epoch: "epoch" } });
+    await settle();
+    expect(store.getSnapshot().turn.kind).toBe("stopping");
+  });
 });

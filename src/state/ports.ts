@@ -111,6 +111,8 @@ export interface AgentPort {
    * in the timeline as a rejected plan row).
    */
   steer(text: string): Promise<void>;
+  /** Interrupt the running turn and start a new one with this message. */
+  interrupt(text: string): Promise<void>;
   respondToPermission(
     requestId: string,
     response: AgentPermissionResponse,
@@ -271,6 +273,7 @@ export function createAgentPort(
     subscribe: (handler) => handle.timeline.subscribe(handler),
     send: (text) => handle.send(text),
     steer: (text) => handle.send(text, { activeTurnBehavior: "steer" }),
+    interrupt: (text) => handle.send(text, { activeTurnBehavior: "interrupt" }),
     respondToPermission: (requestId, response) =>
       handle.respondToPermission({ requestId, response }),
     cancel: () => daemon.cancelAgent(handle.id),

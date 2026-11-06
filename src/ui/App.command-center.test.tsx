@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
+import {
+  agents,
+  rowText,
+  settle,
+  settleUntil,
+  setup,
+} from "../test/app-harness.js";
 import { at } from "../test/at.js";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
+import { createCommandRegistry } from "./command-center/registry.js";
 
 describe("Command Center", () => {
   it("opens a matching agent in the focused pane with Ctrl-K", async () => {
@@ -339,16 +346,40 @@ it("prefills rename and submits burst input", async () => {
   await settle();
   expect(port.names).toEqual(["New name"]);
 });
-it("archives and releases the removed agent's pane", async () => {
-  const { app, port, agentsPort } = await controlSetup("archive");
-  expect(app.lastFrame()).toContain("y confirm");
+it("archives the open workspace from the Command Center after confirming", async () => {
+  const archived: string[] = [];
+  const { app } = await setup(agents, 24, false, {}, undefined, undefined, {
+    ...NO_PROJECT_ACTIONS,
+    baseBranches: async () => ({ branches: [], defaultBranch: null }),
+    createWorkspace: async () => {
+      throw Error("Unexpected");
+    },
+    createAgent: async () => agent("a"),
+    createTerminal: async () => {
+      throw Error("Unexpected");
+    },
+    openFile: async () => {
+      throw Error("Unexpected");
+    },
+    renameWorkspace: async () => {},
+    closeTab: async () => {},
+    archiveWorkspace: async (workspace) => {
+      archived.push(workspace.id);
+    },
+    renameTab: async () => {},
+  });
+  for (const key of ["\r", "\u000b", "archive"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("Archive workspace…");
+  expect(app.lastFrame()).not.toMatch(/Archive Alpha/);
+  app.stdin.write("\r");
+  await settle();
+  expect(app.lastFrame()).toContain("Archive workspace “/repo/one”?");
   app.stdin.write("y");
   await settle();
-  expect(port.archived).toBe(1);
-  agentsPort.handler?.({ kind: "remove", agentId: "alpha" });
-  await settle();
-  expect(app.lastFrame()).toContain("No agent");
-  expect(port.released).toBe(true);
+  expect(archived).toEqual(["one"]);
 });
 it("cycles mode with Shift-Tab and renders a rejected action", async () => {
   const { app, ports, test } = await setup([controlAgent]);
@@ -570,4 +601,82 @@ it("keeps one Provider breadcrumb and the overlay open when an unavailable provi
     expect(app.lastFrame()).not.toContain("Loading…");
   }
   expect(agentsPort.createdInputs).toEqual([]);
+});
+describe("Command Center shortcut actions", () => {
+  async function palette(
+    app: Awaited<ReturnType<typeof setup>>["app"],
+    query: string,
+  ) {
+    for (const key of ["\u000b", query]) {
+      app.stdin.write(key);
+      await settle();
+    }
+  }
+  it("keeps a long title's shortcut on the right edge, from the effective keys", async () => {
+    const commands = createCommandRegistry();
+    commands.register({
+      id: "test",
+      items: () => [
+        {
+          id: "long",
+          group: "Actions",
+          title: `Zebra ${"very long title ".repeat(8)}end`,
+          action: { type: "diff.open" },
+          run: () => undefined,
+        },
+      ],
+    });
+    const { app, test } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { commands },
+    );
+    await palette(app, "zebra");
+    const row = rowText(test, "command:long");
+    expect(row).toContain("Zebra very long");
+    expect(row).toMatch(/\.\.\.|…/);
+    expect(row.trimEnd().endsWith("end  g d")).toBe(true);
+  });
+  it("finds actions by their id words, e.g. diff for g d", async () => {
+    const { app } = await setup();
+    await palette(app, "diff");
+    expect(app.lastFrame()).toContain("Open changes (lazygit)");
+    expect(app.lastFrame()).toContain("g d");
+  });
+  it("quits at once from Quit", async () => {
+    let exits = 0;
+    const { app } = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { onExit: () => exits++ },
+    );
+    await palette(app, "quit");
+    expect(app.lastFrame()).toContain("Ctrl-C Ctrl-C");
+    app.stdin.write("\r");
+    await settle();
+    expect(exits).toBe(1);
+  });
+  it("starts a timeline search that takes the typed query", async () => {
+    const { app } = await setup();
+    app.stdin.write("\r");
+    await settle();
+    await palette(app, "search timeline");
+    app.stdin.write("\r");
+    await settle();
+    app.stdin.write("hello");
+    await settle();
+    expect(app.lastFrame()).toContain("/hello");
+  });
 });

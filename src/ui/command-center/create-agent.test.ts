@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { CreateAgentInput } from "../../state/ports.js";
 import { at } from "../../test/at.js";
 import { agent } from "../../test/fixtures.js";
-import { type CreateDeps, createAgentStep } from "./create-agent.js";
+import {
+  agentConfigurationStep,
+  type CreateDeps,
+  createAgentStep,
+} from "./create-agent.js";
 import type { CommandItem } from "./registry.js";
 
 async function choices(step: ReturnType<CommandItem["run"]>) {
@@ -175,4 +179,26 @@ it("selects medium thinking by default, persists a supported choice, and sends t
     write: async () => {},
   });
   expect(restarted.get()).toBe("high");
+});
+
+describe("title step placeholder", () => {
+  async function titlePlaceholder(
+    options?: Parameters<typeof agentConfigurationStep>[3],
+  ) {
+    const { deps } = fixture();
+    const providers = await choices(
+      agentConfigurationStep(deps, "/repo", () => {}, options),
+    );
+    const models = await choices(at(providers, 1).run());
+    const modes = await choices(at(models, 0).run());
+    const step = at(modes, 0).run();
+    if (step?.kind !== "input") throw Error("Expected title");
+    return step.placeholder;
+  }
+  it("title step uses the given placeholder", async () => {
+    expect(await titlePlaceholder({ titlePlaceholder: "Custom title" })).toBe(
+      "Custom title",
+    );
+    expect(await titlePlaceholder()).toBe("Agent title (optional)");
+  });
 });

@@ -43,4 +43,10 @@ it("shows the most urgent status message ahead of the connection label", () => {
   expect(statusLabel({ ...idle, quitPending: true, notice: "Copied" })).toBe(
     "Press Ctrl+C again to quit",
   );
+  expect(statusLabel({ ...idle, quitPending: true, queued: 1 })).toBe(
+    "Press Ctrl+C again to quit · 1 queued message will be lost",
+  );
+  expect(statusLabel({ ...idle, quitPending: true, queued: 3 })).toBe(
+    "Press Ctrl+C again to quit · 3 queued messages will be lost",
+  );
 });

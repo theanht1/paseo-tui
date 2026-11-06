@@ -13,6 +13,7 @@ import type {
 import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot, flushSync } from "@opentui/react";
 import { afterEach } from "vitest";
+import type { HistoryEntry } from "../connection/ports.js";
 import { createAgentsStore } from "../state/agents-store.js";
 import type {
   AgentHistoryPort,
@@ -28,6 +29,7 @@ import { at } from "../test/at.js";
 import { agent, listSnapshot, page } from "../test/fixtures.js";
 import { App, type AppProps } from "../ui/App.js";
 import type { ThinkingPreference } from "../ui/agent/thinking-preference.js";
+import type { SessionHistory } from "../ui/command-center/session-history.js";
 import { watchConnection } from "../ui/connection-status.js";
 import {
   createSyntaxStyle,
@@ -102,12 +104,30 @@ export class FakeAgents implements AgentsPort {
     };
   }
 }
+/** Session history across hosts (the `history` prop); pass it through `extra`. */
+export class FakeHistory implements SessionHistory {
+  searchable = true;
+  queries: string[] = [];
+  unarchived: string[] = [];
+  unarchiveError: Error | null = null;
+  constructor(public entries: HistoryEntry[] = []) {}
+  async list(query: string) {
+    this.queries.push(query);
+    return { entries: this.entries, truncated: false, hostErrors: [] };
+  }
+  async unarchive(agentId: string) {
+    this.unarchived.push(agentId);
+    if (this.unarchiveError) throw this.unarchiveError;
+  }
+}
 /** Daemon-side history for a fake agent; omitted means a daemon without those features. */
 export interface FakeHistoryOptions {
   /** Rows the tail fetch returns; older ones page in through `fetchBefore`. */
   tail: number;
   /** Whether the daemon advertises `agentHistorySearch`. */
   search: boolean;
+  /** Whether the daemon advertises `agentTimelinePromptIndex`. */
+  prompts?: boolean;
 }
 export class FakeAgent implements AgentPort {
   sent: string[] = [];
@@ -121,6 +141,8 @@ export class FakeAgent implements AgentPort {
   cancelGate: Promise<void> = Promise.resolve();
   handler: ((event: PaseoAgentTimelineEvent) => void) | null = null;
   released = false;
+  /** The cursor sequence of each older page the pane fetched. */
+  olderFetches: number[] = [];
   readonly history?: AgentHistoryPort;
   constructor(
     readonly current: PaseoAgent,
@@ -131,6 +153,7 @@ export class FakeAgent implements AgentPort {
       this.tailSize = options.tail;
       this.history = {
         fetchBefore: async (cursor, limit) => {
+          this.olderFetches.push(cursor.seq);
           const seqs = this.items
             .map((_, index) => index + 1)
             .filter((seq) => seq < cursor.seq)
@@ -150,7 +173,22 @@ export class FakeAgent implements AgentPort {
               truncated: false,
             })
           : null,
-        prompts: null,
+        prompts: options.prompts
+          ? async () => ({
+              epoch: "epoch",
+              prompts: this.items.flatMap((item, index) =>
+                item.type === "user_message"
+                  ? [
+                      {
+                        seq: index + 1,
+                        timestamp: "2026-11-03T00:00:00Z",
+                        preview: item.text,
+                      },
+                    ]
+                  : [],
+              ),
+            })
+          : null,
         rewind: null,
         forkContext: null,
         setThinking: null,
@@ -197,6 +235,12 @@ export class FakeAgent implements AgentPort {
     await this.sendGate;
     if (this.sendError) throw this.sendError;
   }
+  interrupted: string[] = [];
+  async interrupt(text: string) {
+    this.interrupted.push(text);
+    await this.sendGate;
+    if (this.sendError) throw this.sendError;
+  }
   async respondToPermission(id: string, response: AgentPermissionResponse) {
     this.responses.push({ id, response });
     await this.responseGate;
@@ -235,6 +279,28 @@ export class FakeAgent implements AgentPort {
       agentId: this.current.id,
       timestamp: "2026-11-03T00:00:00Z",
       event: { type: "permission_requested", provider: "codex", request },
+    });
+  }
+  startTurn(turnId = "turn") {
+    this.handler?.({
+      agentId: this.current.id,
+      timestamp: "2026-11-03T00:00:00Z",
+      event: { type: "turn_started", provider: "codex", turnId },
+    });
+  }
+  endTurn(
+    event:
+      | { type: "turn_completed" }
+      | { type: "turn_canceled"; reason: string }
+      | { type: "turn_failed"; error: string } = {
+      type: "turn_canceled",
+      reason: "stop",
+    },
+  ) {
+    this.handler?.({
+      agentId: this.current.id,
+      timestamp: "2026-11-03T00:00:00Z",
+      event: { ...event, provider: "codex" },
     });
   }
   pushAssistant(seq: number, text: string) {
@@ -349,6 +415,8 @@ export async function setup(
     error: null,
   };
   const directoryListeners = new Set<() => void>();
+  /** Each observed terminal's exit callback: lets a test end the process (vim `:q`). */
+  const terminalExits = new Map<string, () => void>();
   const agentsPort = new FakeAgents(currentAgents);
   const store = createAgentsStore(agentsPort);
   await store.load();
@@ -411,7 +479,8 @@ export async function setup(
           terminalStream={
             terminalApi
               ? {
-                  observe(id, receive) {
+                  observe(id, receive, _onError, onExit) {
+                    if (onExit) terminalExits.set(id, onExit);
                     let closed = false;
                     const ready = terminalApi
                       .ref(id)
@@ -497,6 +566,10 @@ export async function setup(
     removeWorkspace,
     updateWorkspace,
     setTerminals,
+    /** Ends the terminal's process, as vim `:q` does; the directory still lists it. */
+    exitTerminal(id: string) {
+      terminalExits.get(id)?.();
+    },
   };
 }
 

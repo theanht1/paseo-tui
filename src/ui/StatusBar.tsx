@@ -3,6 +3,11 @@ import { useTerminalDimensions } from "@opentui/react";
 import { useContext } from "react";
 import type { TimelineSnapshot, TurnState } from "../state/timeline-store.js";
 import type { UsageSnapshot } from "../state/usage-store.js";
+import {
+  type ContextWindow,
+  contextMeterText,
+} from "./agent/context-window.js";
+import type { UsageConfig } from "./config/user-config.js";
 import { BINDINGS } from "./input/bindings.js";
 import type { Binding, Context, Mode } from "./input/keymap.js";
 import { foregroundProp, type Theme, ThemeContext } from "./render/theme.js";
@@ -46,8 +51,24 @@ function turnText(turn: TurnState): string {
       return "idle";
     case "running":
       return "running";
+    case "stopping":
+      return "stopping";
     case "failed":
       return `failed: ${turn.message}`;
+  }
+}
+interface Meter {
+  text: string;
+  color: string;
+}
+function levelColor(level: "ok" | "warn" | "error", theme: Theme): string {
+  switch (level) {
+    case "ok":
+      return theme.muted;
+    case "warn":
+      return theme.warn;
+    case "error":
+      return theme.error;
   }
 }
 export interface StatusBarProps {
@@ -60,6 +81,10 @@ export interface StatusBarProps {
   terminalInput?: boolean;
   /** Provider usage meters; absent when the daemon reports no usage. */
   usage?: ExternalStore<UsageSnapshot>;
+  /** Which providers and windows the meters show; absent shows each headline. */
+  usageConfig?: UsageConfig;
+  /** The focused agent's context window, shown before the usage meters. */
+  contextWindow?: ContextWindow;
   onHelp?(): void;
   bindings?: readonly Binding[];
 }
@@ -73,6 +98,8 @@ export function StatusBar({
   searchStatus,
   terminalInput = false,
   usage = NO_USAGE,
+  usageConfig,
+  contextWindow,
   onHelp,
   bindings = BINDINGS,
 }: StatusBarProps) {
@@ -91,15 +118,21 @@ export function StatusBar({
   const meters =
     usageSnapshot.kind === "loading"
       ? ""
-      : usageMeters(usageSnapshot.reports, Date.now());
+      : usageMeters(usageSnapshot.reports, Date.now(), usageConfig);
   const prefix = `${terminalInput ? "Terminal input · Ctrl-] TUI shortcuts · " : ""}${label} ${state.text} ${mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}`;
-  const suffix = meters ? ` · ${meters}` : "";
+  const contextText = contextWindow ? contextMeterText(contextWindow) : "";
+  const meter: Meter | null =
+    contextWindow?.kind === "measured" && contextText
+      ? { text: contextText, color: levelColor(contextWindow.level, theme) }
+      : null;
+  const suffix = `${contextText ? ` · ${contextText}` : ""}${meters ? ` · ${meters}` : ""}`;
   return timeline ? (
     <TimelineStatus
       store={timeline}
       width={width}
       prefix={prefix}
       suffix={suffix}
+      meter={meter}
       hints={hints}
       searchStatus={searchStatus ?? ""}
       onHelp={onHelp}
@@ -108,6 +141,7 @@ export function StatusBar({
     <StatusText
       width={width}
       prefix={`${prefix}${suffix}`}
+      meter={meter}
       hints={hints}
       onHelp={onHelp}
     />
@@ -123,6 +157,7 @@ function TimelineStatus({
   store: ExternalStore<TimelineSnapshot>;
   prefix: string;
   suffix: string;
+  meter: Meter | null;
   searchStatus: string;
   width: number;
   hints: readonly string[];
@@ -136,14 +171,26 @@ function TimelineStatus({
     />
   );
 }
+function headParts(head: string, meter: Meter | null) {
+  const start = meter ? head.indexOf(meter.text) : -1;
+  if (!meter || start < 0) return [{ at: 0, text: head, color: null }];
+  const end = start + meter.text.length;
+  return [
+    { at: 0, text: head.slice(0, start), color: null },
+    { at: start, text: meter.text, color: meter.color },
+    { at: end, text: head.slice(end), color: null },
+  ];
+}
 function StatusText({
   width,
   prefix,
+  meter,
   hints,
   onHelp,
 }: {
   width: number;
   prefix: string;
+  meter: Meter | null;
   hints: readonly string[];
   onHelp?: () => void;
 }) {
@@ -151,11 +198,18 @@ function StatusText({
   if (!context) throw Error("ThemeContext required");
   const line = statusLine(width, prefix, hints);
   const head = truncateCells(prefix, Math.max(0, width - 14));
+  const parts = headParts(head, meter);
   return (
     <box height={1} flexShrink={0} flexDirection="row">
-      <text wrapMode="none" fg={foregroundProp(context.theme.fg)}>
-        {head}
-      </text>
+      {parts.map((part) => (
+        <text
+          key={part.at}
+          wrapMode="none"
+          fg={foregroundProp(part.color ?? context.theme.fg)}
+        >
+          {part.text}
+        </text>
+      ))}
       <text wrapMode="none" fg={foregroundProp(context.theme.muted)}>
         {line.slice(head.length, -11)}
       </text>

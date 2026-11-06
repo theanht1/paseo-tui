@@ -1,12 +1,38 @@
 import {
   EmbeddedTerminalRenderable,
+  KeyEvent,
   type OptimizedBuffer,
   TextAttributes,
 } from "@opentui/core";
 
+/**
+ * Shift that only produced a printable character ("J") is used up, as real
+ * terminals report it: otherwise apps that enable the kitty keyboard protocol
+ * (lazygit) receive `CSI 106;2u`, shift+j, and their `J` bindings never match.
+ */
+export function consumeShift(key: KeyEvent): KeyEvent {
+  const printable =
+    [...key.sequence].length === 1 && !/\p{Cc}/u.test(key.sequence);
+  if (
+    !key.shift ||
+    !printable ||
+    key.ctrl ||
+    key.meta ||
+    key.option ||
+    key.super ||
+    key.hyper
+  )
+    return key;
+  return new KeyEvent({ ...key, shift: false });
+}
+
 export class TerminalSurfaceRenderable extends EmbeddedTerminalRenderable {
   private viewport = { cols: 80, rows: 24 };
   private replaying = false;
+
+  override encodeKey(key: KeyEvent): Uint8Array {
+    return super.encodeKey(consumeShift(key));
+  }
 
   protected override onResize(cols: number, rows: number): void {
     this.viewport = { cols, rows };

@@ -71,6 +71,8 @@ export function canonicalKey(input: string): string | null {
   }
   const meta = /^(?:meta|alt|m)-(.+)$/i.exec(input)?.[1];
   if (meta && printable(meta)) return `Meta-${meta.toLowerCase()}`;
+  const command = /^(?:super|cmd|command)-(.+)$/i.exec(input)?.[1];
+  if (command && printable(command)) return `Super-${command.toLowerCase()}`;
   return null;
 }
 
@@ -100,7 +102,12 @@ function typed(key: string, binding: Binding): boolean {
   const textModes = binding.modes.some(
     (mode) => mode === "insert" || mode === "search" || mode === "palette",
   );
-  return textModes && !key.startsWith("Ctrl-") && !key.startsWith("Meta-");
+  return (
+    textModes &&
+    !key.startsWith("Ctrl-") &&
+    !key.startsWith("Meta-") &&
+    !key.startsWith("Super-")
+  );
 }
 
 function overlaps(a: Binding, b: Binding): boolean {
@@ -165,7 +172,7 @@ export function applyKeyOverrides(
       const key = canonicalKey(input);
       if (key === null) {
         errors.push(
-          `${where}: ${JSON.stringify(raw)} is not a key (use e.g. x, X, Ctrl-x, Meta-x, Enter, Esc, Tab, Shift-Tab, Up, PgDn, F1)`,
+          `${where}: ${JSON.stringify(raw)} is not a key (use e.g. x, X, Ctrl-x, Meta-x, Cmd-x, Enter, Esc, Tab, Shift-Tab, Up, PgDn, F1)`,
         );
         continue;
       }
@@ -174,7 +181,7 @@ export function applyKeyOverrides(
           (binding) =>
             reservation(key, binding) ??
             (typed(key, binding)
-              ? "would be typed as text; use a Ctrl- or Meta- key"
+              ? "would be typed as text; use a Ctrl-, Meta- or Cmd- key"
               : null),
         )
         .find((message) => message !== null);

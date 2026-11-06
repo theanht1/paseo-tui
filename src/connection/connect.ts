@@ -12,7 +12,9 @@ import {
   createDaemonAdapter,
   createDirectoryAdapter,
   createGitAdapter,
+  createHistoryAdapter,
   createManagementAdapter,
+  createProjectAdapter,
   createScheduleAdapter,
   createSubagentAdapter,
   createTerminalListAdapter,
@@ -22,7 +24,7 @@ import {
   requireWorkspaceCapabilities,
 } from "./daemon-adapter.js";
 import { readLocalCredentialForTarget } from "./local-credential.js";
-import type { AgentFeaturesPort } from "./ports.js";
+import type { AgentFeaturesPort, HistoryPort, ProjectPort } from "./ports.js";
 import { type HostTarget, resolveListen } from "./target.js";
 
 export interface Connection {
@@ -36,22 +38,35 @@ export interface Connection {
   directories: ReturnType<typeof createDirectoryAdapter>;
   subagents: ReturnType<typeof createSubagentAdapter>;
   usage: ReturnType<typeof createUsageAdapter>;
+  history: HistoryPort;
   schedules: ReturnType<typeof createScheduleAdapter>;
   terminalList: ReturnType<typeof createTerminalListAdapter>;
+  projects: ProjectPort;
   label: string;
   onConnectionState(cb: (state: ConnectionState) => void): () => void;
   close(): Promise<void>;
 }
 
-export async function connect(target: HostTarget): Promise<Connection> {
+/**
+ * `name` labels a saved host (`build (tcp://…)`); `password` is its daemon's, ahead of
+ * one in the address and then PASEO_PASSWORD.
+ */
+export async function connect(
+  target: HostTarget,
+  name: string | null = null,
+  savedPassword: string | null = null,
+): Promise<Connection> {
   const connection =
     target.kind === "home" ? resolveListen(target.home) : target.connection;
   const parsed = parseHostTarget(connection);
   const label =
     target.kind === "home"
       ? `local (${parsed.description.replace(/^tcp:\/\//, "")})`
-      : parsed.description;
-  const password = parsed.password || process.env.PASEO_PASSWORD;
+      : name
+        ? `${name} (${parsed.description})`
+        : parsed.description;
+  const password =
+    savedPassword || parsed.password || process.env.PASEO_PASSWORD;
   const daemon = createHostClient(connection, {
     clientId: `paseo-tui-${randomUUID()}`,
     clientType: "cli",
@@ -107,8 +122,10 @@ export async function connect(target: HostTarget): Promise<Connection> {
     directories: createDirectoryAdapter(daemon),
     subagents: createSubagentAdapter(daemon),
     usage: createUsageAdapter(daemon),
+    history: createHistoryAdapter(daemon),
     schedules: createScheduleAdapter(daemon),
     terminalList: createTerminalListAdapter(daemon),
+    projects: createProjectAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
     close: () => daemon.close(),
   };

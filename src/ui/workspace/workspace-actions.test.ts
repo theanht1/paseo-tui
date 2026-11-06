@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { ProjectPort } from "../../connection/ports.js";
 import { agent } from "../../test/fixtures.js";
 import {
   createWorkspaceActions,
@@ -17,6 +18,11 @@ const workspace = {
   projectRootPath: "/repo",
   workspaceDirectory: "/tree",
   name: "Worktree",
+};
+const NO_PROJECTS: ProjectPort = {
+  add: null,
+  remove: null,
+  directories: async () => [],
 };
 const input = {
   provider: "codex",
@@ -52,6 +58,7 @@ it("creates a project worktree with the requested initial agent and creates tabs
     renameAgent: async () => {},
     renameTerminal: async () => {},
     branches: async () => ({ branches: [], baseRef: null }),
+    projects: NO_PROJECTS,
   };
   const actions = createWorkspaceActions(api, {
     create: true,
@@ -133,6 +140,7 @@ it("blocks unsupported operations before RPC and rejects blank names", async () 
       calls++;
     },
     branches: async () => ({ branches: [], baseRef: null }),
+    projects: NO_PROJECTS,
   };
   const actions = createWorkspaceActions(api, {
     create: false,
@@ -170,6 +178,7 @@ it("archives agent tabs and kills terminal tabs, gating terminals before RPC", a
   const calls: string[] = [];
   const api: ManagementApi = {
     branches: async () => ({ branches: [], baseRef: null }),
+    projects: NO_PROJECTS,
     createWorkspace: async () => {
       throw Error("Unexpected");
     },
@@ -214,6 +223,7 @@ it("archives the exact workspace and blocks unsupported workspace archive before
   const calls: string[] = [];
   const api: ManagementApi = {
     branches: async () => ({ branches: [], baseRef: null }),
+    projects: NO_PROJECTS,
     createWorkspace: async () => {
       throw Error("Unexpected");
     },
@@ -266,6 +276,7 @@ it("lists base branches for the project root with the default first", async () =
       roots.push(cwd);
       return { branches: ["dev", "master", "feature"], baseRef: null };
     },
+    projects: NO_PROJECTS,
   };
   const actions = createWorkspaceActions(api, {
     create: true,
@@ -295,6 +306,7 @@ it("opens a file by creating a named terminal in the workspace that runs the edi
     renameAgent: async () => {},
     renameTerminal: async () => {},
     branches: async () => ({ branches: [], baseRef: null }),
+    projects: NO_PROJECTS,
   };
   const editor = {
     name: "a.ts",
@@ -315,4 +327,161 @@ it("opens a file by creating a named terminal in the workspace that runs the edi
       terminal: false,
     }).openFile(workspace, editor),
   ).rejects.toThrow(/Update/);
+});
+
+it("adds and removes projects through the host, asking for an update when it can't", async () => {
+  const calls: unknown[] = [];
+  const projects: ProjectPort = {
+    add: async (cwd) => {
+      calls.push(["add", cwd]);
+      return { ...project, projectRootPath: cwd };
+    },
+    remove: async (id) => {
+      calls.push(["remove", id]);
+    },
+    directories: async (query) => [`/src/${query}`],
+  };
+  const api = (port: ProjectPort): ManagementApi => ({
+    createWorkspace: async () => {
+      throw Error("Unexpected");
+    },
+    createAgent: async () => {
+      throw Error("Unexpected");
+    },
+    createTerminal: async () => {
+      throw Error("Unexpected");
+    },
+    renameWorkspace: async () => {},
+    archiveWorkspace: async (id) => {
+      calls.push(["archive", id]);
+    },
+    archiveAgent: async () => {},
+    killTerminal: async () => {},
+    renameAgent: async () => {},
+    renameTerminal: async () => {},
+    branches: async () => ({ branches: [], baseRef: null }),
+    projects: port,
+  });
+  const capabilities = {
+    create: true,
+    workspace: true,
+    terminal: true,
+  };
+  const actions = createWorkspaceActions(api(projects), capabilities);
+  expect(await actions.directories("app")).toEqual(["/src/app"]);
+  expect((await actions.addProject(" /src/app ")).projectRootPath).toBe(
+    "/src/app",
+  );
+  // Each workspace archives first: the daemon deletes Paseo worktrees only on workspace archive.
+  await actions.removeProject(project, [
+    { ...workspace, id: "tree" },
+    { ...workspace, id: "main", workspaceDirectory: "/repo" },
+  ]);
+  expect(calls).toEqual([
+    ["add", "/src/app"],
+    ["archive", "tree"],
+    ["archive", "main"],
+    ["remove", "p"],
+  ]);
+  const old = createWorkspaceActions(api(NO_PROJECTS), capabilities);
+  await expect(old.addProject("/src/app")).rejects.toThrow(
+    "Update the Paseo daemon to use adding projects (projectAdd).",
+  );
+  calls.length = 0;
+  await expect(old.removeProject(project, [workspace])).rejects.toThrow(
+    "Update the Paseo daemon to use removing projects (projectRemove).",
+  );
+  expect(calls).toEqual([]);
+  await expect(actions.addProject("  ")).rejects.toThrow("Choose a directory");
+});
+it("gives a new workspace's first agent the fork's chat history", async () => {
+  const calls: unknown[] = [];
+  const actions = createWorkspaceActions(
+    {
+      createWorkspace: async (options) => {
+        calls.push(options);
+        return { workspace, agent: null };
+      },
+      createAgent: async () => {
+        throw Error("Unexpected");
+      },
+      createTerminal: async () => {
+        throw Error("Unexpected");
+      },
+      renameWorkspace: async () => {},
+      archiveWorkspace: async () => {},
+      archiveAgent: async () => {},
+      killTerminal: async () => {},
+      renameAgent: async () => {},
+      renameTerminal: async () => {},
+      branches: async () => ({ branches: [], baseRef: null }),
+      projects: NO_PROJECTS,
+    },
+    { create: true, workspace: true, terminal: true },
+  );
+  const history = {
+    type: "text" as const,
+    mimeType: "text/plain" as const,
+    contextKind: "chat_history",
+    title: "Chat history",
+    text: "earlier",
+  };
+  await actions.createWorkspace(
+    project,
+    { ...input, attachments: [history] },
+    { kind: "local" },
+  );
+  expect(calls[0]).toMatchObject({ agent: { attachments: [history] } });
+});
+
+function titleRecorder() {
+  const calls: unknown[] = [];
+  const api: ManagementApi = {
+    createWorkspace: async (options) => {
+      calls.push(options);
+      return { workspace, agent: null };
+    },
+    createAgent: async () => agent("b"),
+    createTerminal: async () => {
+      throw Error("Unexpected");
+    },
+    renameWorkspace: async () => {},
+    archiveWorkspace: async () => {},
+    archiveAgent: async () => {},
+    killTerminal: async () => {},
+    renameAgent: async () => {},
+    renameTerminal: async () => {},
+    branches: async () => ({ branches: [], baseRef: null }),
+    projects: NO_PROJECTS,
+  };
+  const actions = createWorkspaceActions(api, {
+    create: true,
+    thinking: true,
+    workspace: true,
+    terminal: true,
+  });
+  return { calls, actions };
+}
+it("createWorkspace titles the workspace and its agent", async () => {
+  const { calls, actions } = titleRecorder();
+  await actions.createWorkspace(
+    project,
+    { ...input, title: "Fix login" },
+    { kind: "local" },
+  );
+  expect(calls[0]).toMatchObject({
+    title: "Fix login",
+    agent: { title: "Fix login" },
+  });
+});
+it("createWorkspace without a title lets the daemon name it", async () => {
+  const { calls, actions } = titleRecorder();
+  await actions.createWorkspace(
+    project,
+    { ...input, title: null },
+    { kind: "local" },
+  );
+  expect(calls[0]).not.toHaveProperty("title");
+  expect(calls[0]).toHaveProperty("agent");
+  expect(calls[0]).not.toHaveProperty("agent.title");
 });

@@ -17,6 +17,7 @@ test("new permissions take focus, removal selects next then timeline, defer stay
     },
     send: async () => {},
     steer: async () => {},
+    interrupt: async () => {},
     respondToPermission: async () => {},
     cancel: async () => {},
     setMode: async () => null,

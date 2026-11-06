@@ -1,5 +1,5 @@
 import type { PaseoProject } from "@getpaseo/client";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useContext, useEffect, useRef } from "react";
 import {
   backgroundProp,
@@ -11,7 +11,7 @@ import type { WorkspaceRow } from "../workspace/workspaces.js";
 import type { Indicator } from "./attention.js";
 import type { SidebarSection } from "./sidebar-sections.js";
 import { StatusGlyph } from "./WorkingIndicator.js";
-import { setupTag, workspaceMeta } from "./workspace-meta.js";
+import { hostTag, setupTag, workspaceMeta } from "./workspace-meta.js";
 export interface AgentListProps {
   sections: readonly SidebarSection[];
   indicators: ReadonlyMap<string, Indicator>;
@@ -22,6 +22,10 @@ export interface AgentListProps {
   onSelect(workspace: WorkspaceRow): void;
   onCreate?(project: PaseoProject): void;
   onContext?(workspace: WorkspaceRow, x: number, y: number): void;
+  /** Jump numbers shown while the jump modifier is held (Cmd on macOS, Alt elsewhere). */
+  positions?: ReadonlyMap<string, number>;
+  /** Each workspace's host name, shown when several hosts are merged. */
+  hosts?: ReadonlyMap<string, string>;
 }
 export function AgentList({
   sections,
@@ -32,6 +36,8 @@ export function AgentList({
   onSelect,
   onCreate,
   onContext,
+  positions,
+  hosts,
 }: AgentListProps) {
   const scroll = useRef<ScrollBoxRenderable>(null);
   useEffect(() => {
@@ -115,22 +121,49 @@ export function AgentList({
                     else if (event.button === 0) onSelect(workspace);
                   }}
                 >
-                  <text
-                    wrapMode="none"
-                    attributes={workspace.id === selectedId ? 1 : 0}
-                    fg={foregroundProp(
-                      workspace.id === selectedId ? theme.cursorFg : theme.fg,
-                    )}
-                  >
-                    {" "}
-                    <StatusGlyph
-                      indicator={
-                        indicators.get(workspace.id) ?? { kind: "none" }
-                      }
-                      idle={workspace.id === openId ? "›" : " "}
-                    />
-                    {count > 1 ? count : ""} {workspace.title || workspace.name}
-                  </text>
+                  <box height={1} flexDirection="row">
+                    <text
+                      minWidth={0}
+                      flexGrow={1}
+                      wrapMode="none"
+                      attributes={workspace.id === selectedId ? 1 : 0}
+                      fg={foregroundProp(
+                        workspace.id === selectedId ? theme.cursorFg : theme.fg,
+                      )}
+                    >
+                      {" "}
+                      <StatusGlyph
+                        indicator={
+                          indicators.get(workspace.id) ?? { kind: "none" }
+                        }
+                        idle={workspace.id === openId ? "›" : " "}
+                      />
+                      {count > 1 ? count : ""}{" "}
+                      {workspace.title || workspace.name}
+                    </text>
+                    {positions?.has(workspace.id) ? (
+                      <text
+                        flexShrink={0}
+                        fg={foregroundProp(theme.accent)}
+                        attributes={TextAttributes.BOLD}
+                      >
+                        {` ${positions.get(workspace.id)} `}
+                      </text>
+                    ) : hosts?.has(workspace.id) ? (
+                      <text
+                        id={`workspace-host:${workspace.id}`}
+                        flexShrink={0}
+                        wrapMode="none"
+                        fg={foregroundProp(
+                          workspace.id === selectedId
+                            ? theme.cursorFg
+                            : theme.muted,
+                        )}
+                      >
+                        {` ${hostTag(hosts.get(workspace.id) ?? "")} `}
+                      </text>
+                    ) : null}
+                  </box>
                   {meta || setup ? (
                     <text
                       id={`workspace-meta:${workspace.id}`}

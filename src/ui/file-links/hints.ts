@@ -1,5 +1,3 @@
-import { findPathMentions, type PathMention } from "./detect.js";
-
 /** Home row first, then the rest of the keyboard by reach. */
 const ALPHABET = "asdfjkl;ghqweruiopzxcvbnmty";
 
@@ -61,24 +59,18 @@ export function hintKey<T>(
   };
 }
 
-/** Path mentions on screen rows (starting at `origin`) that `resolve` accepts. */
+/** Links `find` reports in screen rows (starting at `origin`), with screen positions. */
 export function screenSpots<T>(
   rows: readonly string[],
   origin: { x: number; y: number },
-  resolve: (mention: PathMention) => T | null,
+  find: (text: string) => readonly { start: number; raw: string; value: T }[],
 ): HintSpot<T>[] {
   return rows.flatMap((text, offset) =>
-    findPathMentions(text).flatMap((mention) => {
-      const value = resolve(mention);
-      if (value === null) return [];
-      return [
-        {
-          row: origin.y + offset,
-          col: origin.x + Array.from(text.slice(0, mention.start)).length,
-          key: mention.raw,
-          value,
-        },
-      ];
-    }),
+    find(text).map((span) => ({
+      row: origin.y + offset,
+      col: origin.x + Array.from(text.slice(0, span.start)).length,
+      key: span.raw,
+      value: span.value,
+    })),
   );
 }

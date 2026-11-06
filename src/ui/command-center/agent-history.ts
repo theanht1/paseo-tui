@@ -6,7 +6,8 @@ import type {
 } from "../../connection/ports.js";
 import type { CatalogModel } from "../../state/ports.js";
 import type { TimelineStore } from "../../state/timeline-store.js";
-import { agentName } from "../agent/agent-display.js";
+import { agentName, shortPath } from "../agent/agent-display.js";
+import type { AgentSeed } from "../management-controller.js";
 import type { CreateDeps } from "./create-agent.js";
 import type { CommandItem, CommandStep } from "./registry.js";
 
@@ -15,10 +16,15 @@ export interface HistoryCommandContext {
   store: TimelineStore;
   models?(provider: string): Promise<CatalogModel[]>;
   createAgent?: Pick<CreateDeps, "create" | "opened" | "failed">;
+  /** The New workspace steps (host, project, placement) for a fork into a new workspace. */
+  forkWorkspace?(seed: AgentSeed): CommandStep;
+  /** Scrolls the agent's pane to the prompt at `seq` of the prompt index `epoch`. */
+  goto?(epoch: string, seq: number): void;
 }
-/** Set thinking, rewind and fork, each shown only when the daemon and agent support it. */
+/** Jump to prompt, set thinking, rewind and fork, each shown only when the daemon and agent support it. */
 export function historyCommands(context: HistoryCommandContext): CommandItem[] {
   return [
+    jumpCommand(context),
     thinkingCommand(context),
     rewindCommand(context),
     forkCommand(context),
@@ -104,7 +110,7 @@ function promptStep(
     index: TimelinePromptIndex,
     prompt: TimelinePrompt,
     hasEarlier: boolean,
-  ) => CommandStep,
+  ) => undefined | CommandStep,
 ): CommandStep {
   return {
     kind: "choice",
@@ -122,6 +128,34 @@ function promptStep(
         }))
         .reverse();
     },
+  };
+}
+
+/**
+ * The prompt list that scrolls the pane to the chosen prompt (paging older history
+ * in first); null without the daemon's prompt index (`agentTimelinePromptIndex`).
+ */
+export function promptJumpStep({
+  store,
+  goto,
+}: HistoryCommandContext): CommandStep | null {
+  const { prompts, reveal } = store;
+  if (!prompts || !reveal || !goto) return null;
+  return promptStep("Jump to prompt", prompts, (index, prompt) => {
+    goto(index.epoch, prompt.seq);
+    return undefined;
+  });
+}
+function jumpCommand(context: HistoryCommandContext): CommandItem | null {
+  const step = promptJumpStep(context);
+  if (!step) return null;
+  return {
+    id: "jump-prompt",
+    group: "Agent",
+    title: "Jump to prompt…",
+    keywords: ["timeline", "messages", "goto", "prompts"],
+    action: { type: "prompts.open" },
+    run: () => step,
   };
 }
 
@@ -173,10 +207,12 @@ function forkCommand({
   agent,
   store,
   createAgent,
+  forkWorkspace,
 }: HistoryCommandContext): CommandItem | null {
   const { prompts, fork } = store;
   const model = agent.model;
   if (!prompts || !fork || !createAgent || !model) return null;
+  const forkFrom = fork;
   /** Thinking is copied only when the daemon can set it (`agentThinkingUpdate`). */
   const thinkingOptionId =
     store.setThinking && agent.thinkingOptionId
@@ -204,25 +240,67 @@ function forkCommand({
           },
           cwd: agent.cwd,
         },
-        submit(text): undefined {
-          void fork({ epoch: index.epoch, seq: prompt.seq }, hasEarlier)
-            .then((seed) =>
-              createAgent.create({
-                provider: agent.provider,
-                model,
-                modeId: agent.currentModeId,
-                ...(thinkingOptionId ? { thinkingOptionId } : {}),
-                cwd: agent.cwd,
-                title: `Fork of ${agentName(agent)}`,
-                prompt: text.trim() ? text : seed.text,
-                attachments: seed.attachment ? [seed.attachment] : [],
-              }),
-            )
-            .then(createAgent.opened, (error: unknown) =>
-              createAgent.failed(
-                error instanceof Error ? error.message : String(error),
-              ),
-            );
+        submit(text): CommandStep {
+          const boundary = { epoch: index.epoch, seq: prompt.seq };
+          const settings = {
+            provider: agent.provider,
+            model,
+            modeId: agent.currentModeId,
+            ...(thinkingOptionId ? { thinkingOptionId } : {}),
+            title: `Fork of ${agentName(agent)}`,
+          };
+          /** The prompt and chat history the fork starts from. */
+          async function seed() {
+            const forked = await forkFrom(boundary, hasEarlier);
+            return {
+              prompt: text.trim() ? text : forked.text,
+              attachments: forked.attachment ? [forked.attachment] : [],
+            };
+          }
+          return {
+            kind: "choice",
+            title: "Fork into",
+            items: () => [
+              {
+                id: "fork:here",
+                group: "Agent",
+                title: "This workspace",
+                subtitle: shortPath(agent.cwd),
+                run(): undefined {
+                  void seed()
+                    .then((start) =>
+                      createAgent.create({
+                        ...settings,
+                        cwd: agent.cwd,
+                        prompt: start.prompt,
+                        attachments: start.attachments,
+                      }),
+                    )
+                    .then(createAgent.opened, (error: unknown) =>
+                      createAgent.failed(
+                        error instanceof Error ? error.message : String(error),
+                      ),
+                    );
+                },
+              },
+              ...(forkWorkspace
+                ? [
+                    {
+                      id: "fork:workspace",
+                      group: "Agent" as const,
+                      title: "New workspace…",
+                      subtitle: "Pick a host, project and Local or Worktree",
+                      run: () =>
+                        forkWorkspace({
+                          ...settings,
+                          modeId: agent.currentModeId ?? null,
+                          start: seed,
+                        }),
+                    },
+                  ]
+                : []),
+            ],
+          };
         },
       })),
   };

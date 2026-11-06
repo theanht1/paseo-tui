@@ -20,6 +20,15 @@ export interface TimelineRow {
 export type TurnState =
   | { kind: "idle" }
   | { kind: "running"; turnId?: string }
+  /**
+   * Stop pressed: `requested` until the daemon takes the cancel, `acknowledged` until
+   * the turn ends, `stalled` once that takes long enough that a retry is offered.
+   */
+  | {
+      kind: "stopping";
+      turnId?: string;
+      phase: "requested" | "acknowledged" | "stalled";
+    }
   | { kind: "failed"; message: string };
 interface TimelineContents {
   rows: readonly TimelineRow[];
@@ -56,6 +65,8 @@ function pageRows(page: TimelinePage): TimelineRow[] {
 }
 
 const MAX_LIVE_ROWS = 500;
+/** How long an acknowledged stop may take before the pane offers a retry. */
+const STOP_STALL_MS = 5000;
 const OLDER_PAGE = 200;
 const GONE = "That message is no longer in the history";
 export interface ForkSeed {
@@ -87,6 +98,8 @@ export function createTimelineStore(port: AgentPort) {
   let opening: Promise<void> | null = null;
   /** Oldest sequence paged in by `reveal`; rows from it on survive the live-row cap. */
   let floor: number | null = null;
+  /** Older history has all been paged in since the last tail fetch. */
+  let complete = false;
   function cap(rows: TimelineRow[]) {
     const start = floor;
     return start === null
@@ -115,11 +128,16 @@ export function createTimelineStore(port: AgentPort) {
   function seedAgent(
     page: TimelinePage,
   ): Pick<TimelineContents, "turn" | "pendingPermissions"> {
-    if (page.agent)
+    if (page.agent) {
+      const turn = snapshotTurn(page.agent);
+      // The listing still says running until the daemon finishes the stop.
+      const stopping =
+        snapshot.turn.kind === "stopping" && turn.kind === "running";
       return {
-        turn: snapshotTurn(page.agent),
+        turn: stopping ? snapshot.turn : turn,
         pendingPermissions: page.agent.pendingPermissions,
       };
+    }
     return {
       turn: snapshot.turn,
       pendingPermissions: snapshot.pendingPermissions,
@@ -130,6 +148,7 @@ export function createTimelineStore(port: AgentPort) {
     if (!isActive()) return;
     if (page.error) throw new Error(page.error);
     floor = null;
+    complete = false;
     const rows = cap(pageRows(page));
     cursor = {
       epoch: page.epoch,
@@ -339,6 +358,12 @@ export function createTimelineStore(port: AgentPort) {
     if (prompt.length === 0) return;
     await action(() => port.steer(prompt));
   }
+  /** Interrupts the running turn with a new message. */
+  async function interrupt(text: string) {
+    const prompt = text.trim();
+    if (prompt.length === 0) return;
+    await action(() => port.interrupt(prompt));
+  }
   async function respond(requestId: string, response: AgentPermissionResponse) {
     await action(async () => {
       await port.respondToPermission(requestId, response);
@@ -347,6 +372,58 @@ export function createTimelineStore(port: AgentPort) {
   }
   async function cancel() {
     await action(() => port.cancel());
+  }
+  let stall: ReturnType<typeof setTimeout> | null = null;
+  function clearStall() {
+    if (stall) clearTimeout(stall);
+    stall = null;
+  }
+  /** Stops the running turn, showing `stopping` at once; repeats only retry a stalled stop. */
+  async function stop() {
+    const turn = snapshot.turn;
+    const retry = turn.kind === "stopping" && turn.phase === "stalled";
+    if (!isActive() || (turn.kind !== "running" && !retry)) return;
+    const turnId = turn.turnId;
+    clearStall();
+    publish({
+      ...snapshot,
+      lastNotice: null,
+      turn: { kind: "stopping", turnId, phase: "requested" },
+    });
+    try {
+      await port.cancel();
+    } catch (error) {
+      if (!isActive()) return;
+      publish({
+        ...snapshot,
+        lastActionError: errorMessage(error),
+        turn:
+          snapshot.turn.kind === "stopping"
+            ? { kind: "running", turnId }
+            : snapshot.turn,
+      });
+      return;
+    }
+    if (!isActive()) return;
+    if (snapshot.turn.kind !== "stopping") {
+      publish({ ...snapshot, lastActionError: null });
+      return;
+    }
+    publish({
+      ...snapshot,
+      lastActionError: null,
+      turn: { ...snapshot.turn, phase: "acknowledged" },
+    });
+    stall = setTimeout(() => {
+      stall = null;
+      const current = snapshot.turn;
+      if (
+        isActive() &&
+        current.kind === "stopping" &&
+        current.phase === "acknowledged"
+      )
+        publish({ ...snapshot, turn: { ...current, phase: "stalled" } });
+    }, STOP_STALL_MS);
   }
   async function setMode(modeId: string) {
     await action(async () => {
@@ -388,6 +465,33 @@ export function createTimelineStore(port: AgentPort) {
     queue = run.catch(() => {});
     return run;
   }
+  /** Pages the next older page in; resolves whether more history remains before it. */
+  function older(history: AgentHistoryPort): Promise<boolean> {
+    const run = queue.then(async () => {
+      const first = snapshot.rows[0];
+      const epoch = snapshot.epoch;
+      if (!isActive() || complete || !first || epoch === null) return false;
+      const page = await history.fetchBefore(
+        { epoch, seq: first.seq },
+        OLDER_PAGE,
+      );
+      if (!isActive() || page.epoch !== epoch) return !complete;
+      if (page.error) throw Error(page.error);
+      const rows = pageRows(page).filter((row) => row.seq < first.seq);
+      const oldest = rows[0];
+      if (!page.hasOlder || !oldest) complete = true;
+      if (oldest) {
+        floor = oldest.seq;
+        publish({ ...snapshot, rows: [...rows, ...snapshot.rows] });
+      }
+      return !complete;
+    });
+    queue = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
   /** The user prompt at `prompt.seq`, read straight from the daemon. */
   async function promptItem(prompt: TimelineCursor) {
     const page = await port.fetchAfter(
@@ -406,9 +510,10 @@ export function createTimelineStore(port: AgentPort) {
   const rewindTo = history?.rewind;
   const forkContext = history?.forkContext;
   const setThinkingOption = history?.setThinking;
+  const revealSeq = history ? (seq: number) => reveal(history, seq) : null;
   const search =
-    history && searchHistory
-      ? { find: searchHistory, reveal: (seq: number) => reveal(history, seq) }
+    revealSeq && searchHistory
+      ? { find: searchHistory, reveal: revealSeq }
       : null;
   const rewind = rewindTo
     ? (prompt: TimelineCursor, mode: RewindMode) =>
@@ -441,6 +546,7 @@ export function createTimelineStore(port: AgentPort) {
     : null;
   function close() {
     if (phase === "closed") return;
+    clearStall();
     phase = "closed";
     buffered = null;
     stopSubscription();
@@ -457,12 +563,18 @@ export function createTimelineStore(port: AgentPort) {
     close,
     send,
     steer,
+    interrupt,
     respond,
     cancel,
+    stop,
     setMode,
     setModel,
     rename,
     archive,
+    /** Pages older history in (copy mode reaching the top); null without a history port. */
+    older: history ? () => older(history) : null,
+    /** Pages older history in until `seq` is loaded; null without a history port. */
+    reveal: revealSeq,
     /** Full-history search (`agentHistorySearch`) and paging to a match. */
     search,
     prompts: listPrompts ?? null,

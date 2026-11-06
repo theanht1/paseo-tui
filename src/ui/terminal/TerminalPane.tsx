@@ -20,16 +20,21 @@ export function TerminalPane({
   focused,
   paneFocused,
   onFocus,
+  onExit,
 }: {
   terminal: PaseoTerminalHandle;
   stream: TerminalStreamPort;
   focused: boolean;
   paneFocused: boolean;
   onFocus(): void;
+  /** The terminal's process exited (vim `:q`, lazygit `q`). */
+  onExit?(): void;
 }) {
   const surface = useRef<TerminalSurfaceRenderable>(null);
+  const exitRef = useRef(onExit);
+  exitRef.current = onExit;
   const store = useMemo(
-    () => createTerminalStore(terminal.id, stream),
+    () => createTerminalStore(terminal.id, stream, () => exitRef.current?.()),
     [terminal.id, stream],
   );
   useEffect(() => {

@@ -7,12 +7,23 @@ const COPY_BINDINGS: readonly Binding[] = (
     ["v", "Select chars"],
     ["V", "Select lines"],
     ["Esc / q", "Exit copy mode"],
-    ["h j k l", "Move cursor"],
-    ["w / b / e", "Word forward / back / end"],
-    ["0 / $", "Line start / end"],
+    ["Space", "Start a selection"],
+    ["Ctrl-v", "Toggle rectangle selection"],
+    ["o", "Other end of the selection"],
+    ["h j k l", "Move cursor (a count repeats: 5j)"],
+    ["w / b / e · W / B / E", "Word / WORD forward, back, end"],
+    ["0 / ^ / $", "Line start / first non-blank / end"],
+    ["{ / }", "Previous / next paragraph"],
+    ["%", "Matching bracket"],
+    ["f F t T · ; ,", "Find a character on the line · repeat / reverse"],
+    ["/ ? · n N", "Search down / up · next / previous match"],
+    ["* / #", "Search the word under the cursor down / up"],
+    ["H / M / L", "Top / middle / bottom of the screen"],
     ["g g / G", "Top / bottom"],
-    ["Ctrl-u / Ctrl-d", "Half page up / down"],
-    ["g f", "Open file path under cursor in vim"],
+    ["u / d · Ctrl-u / Ctrl-d", "Half page up / down"],
+    ["Ctrl-b / Ctrl-f · PgUp / PgDn", "Page up / down"],
+    ["Ctrl-y / Ctrl-e · K / J", "Scroll a line up / down"],
+    ["g f", "Open file or link under cursor"],
   ] as const
 ).map(([keys, description]) => ({
   keys,
@@ -23,7 +34,7 @@ const COPY_BINDINGS: readonly Binding[] = (
 }));
 const HINT_BINDINGS: readonly Binding[] = (
   [
-    ["a s d f …", "Open the labelled file in vim"],
+    ["a s d f …", "Open the labelled file or link"],
     ["Esc / Ctrl-C", "Cancel file hints"],
   ] as const
 ).map(([keys, description]) => ({
@@ -34,6 +45,29 @@ const HINT_BINDINGS: readonly Binding[] = (
   description,
   inert: true,
 }));
+export type PositionModifier = "Super" | "Meta";
+/**
+ * Modifiers that jump to a workspace by position: Command on macOS (Alt too, for
+ * terminals that keep Command to themselves), Alt elsewhere.
+ */
+export function positionModifiers(
+  platform: NodeJS.Platform,
+): readonly PositionModifier[] {
+  return platform === "darwin" ? ["Super", "Meta"] : ["Meta"];
+}
+export function workspaceJumpBindings(
+  modifiers: readonly PositionModifier[],
+): readonly Binding[] {
+  return Array.from(
+    { length: 9 },
+    (_, index): Binding => ({
+      keys: modifiers.map((modifier) => `${modifier}-${index + 1}`).join(" / "),
+      modes: ["normal", "insert"],
+      action: { type: "workspace.select", index },
+      description: `Open workspace ${index + 1}`,
+    }),
+  );
+}
 export const BINDINGS: readonly Binding[] = [
   {
     keys: "Z Q",
@@ -220,9 +254,44 @@ export const BINDINGS: readonly Binding[] = [
   },
   {
     keys: "Ctrl-X",
-    modes: ["normal"],
+    modes: ["normal", "insert"],
     action: { type: "stop" },
     description: "Stop running turn",
+  },
+  {
+    keys: "Ctrl-S",
+    modes: ["insert"],
+    context: "pane",
+    action: { type: "queue.send" },
+    description: "Send the queued message now (into the running turn)",
+  },
+  {
+    keys: "Ctrl-R",
+    modes: ["insert"],
+    context: "pane",
+    action: { type: "queue.edit" },
+    description: "Edit the queued message",
+  },
+  {
+    keys: "Ctrl-O",
+    modes: ["insert"],
+    context: "pane",
+    action: { type: "queue.remove" },
+    description: "Remove the queued message",
+  },
+  {
+    keys: "Ctrl-Up",
+    modes: ["insert"],
+    context: "pane",
+    action: { type: "queue.select", delta: -1 },
+    description: "Select the previous queued message",
+  },
+  {
+    keys: "Ctrl-Down",
+    modes: ["insert"],
+    context: "pane",
+    action: { type: "queue.select", delta: 1 },
+    description: "Select the next queued message",
   },
   {
     keys: "j / Down",
@@ -395,17 +464,43 @@ export const BINDINGS: readonly Binding[] = [
     description: "Open changes (lazygit)",
   },
   {
+    keys: "g e",
+    modes: ["normal"],
+    action: { type: "workspace.editor" },
+    description: "Open workspace in editor",
+  },
+  {
     keys: "F",
     modes: ["normal"],
     context: "pane",
     action: { type: "hint.start" },
-    description: "Open a file path from the chat (hints)",
+    description: "Open a file or link from the chat (hints)",
   },
   {
     keys: "U",
     modes: ["normal"],
     action: { type: "attention.next" },
     description: "Jump to next agent that needs you",
+  },
+  {
+    keys: "t",
+    modes: ["normal"],
+    context: "pane",
+    action: { type: "prompts.open" },
+    description: "Jump to a prompt in this session",
+  },
+  {
+    keys: "H",
+    modes: ["normal"],
+    action: { type: "history.open" },
+    description: "Session history",
+  },
+  {
+    keys: "u",
+    modes: ["normal"],
+    context: "pane",
+    action: { type: "agent.unarchive" },
+    description: "Unarchive agent",
   },
   {
     keys: "S",
@@ -434,15 +529,7 @@ export const BINDINGS: readonly Binding[] = [
       description: `Select tab ${index + 1}`,
     }),
   ),
-  ...Array.from(
-    { length: 9 },
-    (_, index): Binding => ({
-      keys: `Meta-${index + 1}`,
-      modes: ["normal", "insert"],
-      action: { type: "workspace.select", index },
-      description: `Open workspace ${index + 1}`,
-    }),
-  ),
+  ...workspaceJumpBindings(positionModifiers(process.platform)),
   ...COPY_BINDINGS,
   ...HINT_BINDINGS,
 ];

@@ -160,3 +160,37 @@ export function blockText(block: Block): string {
       return block.text;
   }
 }
+
+type ToolCallDetail = ToolCallTimelineItem["detail"];
+/** The one-line summary a collapsed tool call shows. */
+export function toolSummary(detail: ToolCallDetail): string {
+  switch (detail.type) {
+    case "shell":
+      return detail.command;
+    case "read":
+    case "edit":
+    case "write":
+      return detail.filePath;
+    case "search":
+      return detail.query;
+    case "fetch":
+      return detail.url;
+    case "sub_agent":
+      return detail.description ?? detail.subAgentType ?? "";
+    case "plan":
+      return detail.text;
+    case "plain_text":
+      return detail.text ?? detail.label ?? "";
+    default:
+      return "";
+  }
+}
+export function toolGlyph(status: ToolCallTimelineItem["status"]): string {
+  return status === "running"
+    ? "◌"
+    : status === "completed"
+      ? "✓"
+      : status === "failed"
+        ? "✗"
+        : "·";
+}

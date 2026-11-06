@@ -164,6 +164,8 @@ describe("subagents", () => {
     const { app } = await setup(family);
     app.stdin.write("?");
     await settle();
+    app.stdin.write("/");
+    await settle();
     app.stdin.write("subagents");
     await settle();
     expect(app.lastFrame()).toContain("Subagents");

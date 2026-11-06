@@ -1,5 +1,10 @@
 import type { Block } from "../timeline/blocks.js";
-import { findPathMentions, type PathMention, resolvePath } from "./detect.js";
+import {
+  findPathMentions,
+  findUrlMentions,
+  type PathMention,
+  resolvePath,
+} from "./detect.js";
 
 export interface FileLink {
   /** Absolute, or `~/…` for the daemon host's home. */
@@ -10,6 +15,22 @@ export interface FileLink {
   raw: string;
   /** Tool calls name files explicitly; text mentions still need an existence check. */
   source: "tool" | "text";
+}
+
+/** A web link; it opens in the browser of the machine running the TUI. */
+export interface UrlLink {
+  kind: "url";
+  url: string;
+  /** The text as it appears on screen (the URL, or a markdown link's label). */
+  raw: string;
+}
+export type ChatLink = (FileLink & { kind: "file" }) | UrlLink;
+/** A link found in one line of screen text. */
+export interface LinkSpan {
+  start: number;
+  end: number;
+  raw: string;
+  link: ChatLink;
 }
 
 function toolLink(block: Extract<Block, { kind: "tool" }>, cwd: string) {
@@ -47,6 +68,53 @@ export function timelineLinks(
       source: "text",
     }));
   });
+}
+
+const MARKDOWN_LINK = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+/**
+ * Web link targets of markdown links by label: the chat draws `[label](url)` as just
+ * `label`, so a label on screen still leads to its URL.
+ */
+export function markdownUrlLabels(
+  blocks: readonly Block[],
+): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const block of blocks) {
+    const text =
+      block.kind === "assistant" || block.kind === "plan" ? block.text : null;
+    if (!text) continue;
+    for (const match of text.matchAll(MARKDOWN_LINK)) {
+      const label = match[1]?.trim();
+      const target = match[2] ?? "";
+      const [url] = findUrlMentions(target);
+      if (label && url?.raw === target) labels.set(label, url.url);
+    }
+  }
+  return labels;
+}
+const WORD = /[\p{L}\p{N}_]/u;
+function labelSpans(text: string, labels: ReadonlyMap<string, string>) {
+  const spans: LinkSpan[] = [];
+  for (const [label, url] of labels) {
+    for (
+      let start = text.indexOf(label);
+      start >= 0;
+      start = text.indexOf(label, start + 1)
+    ) {
+      const end = start + label.length;
+      const before = text[start - 1];
+      const after = text[end];
+      if ((before && WORD.test(before)) || (after && WORD.test(after)))
+        continue;
+      spans.push({
+        start,
+        end,
+        raw: label,
+        link: { kind: "url", url, raw: label },
+      });
+    }
+  }
+  return spans;
 }
 
 /** Existing files, most recent mention first, once per path and line. */
@@ -141,6 +209,7 @@ export function fileResolver(
   links: readonly FileLink[],
   cwd: string,
   exists: (path: string) => boolean,
+  urlLabels: ReadonlyMap<string, string> = new Map(),
 ) {
   const trusted = new Set(
     links.filter((link) => link.source === "tool").map((link) => link.path),
@@ -148,19 +217,54 @@ export function fileResolver(
   function isFile(path: string) {
     return trusted.has(path) || exists(path);
   }
+  function resolve(mention: PathMention): FileLink | null {
+    const path = resolvePath(mention.path, cwd);
+    return isFile(path)
+      ? {
+          path,
+          line: mention.line,
+          col: mention.col,
+          raw: mention.raw,
+          source: "text",
+        }
+      : null;
+  }
+  /** Links in one line of screen text, in order: URLs, then link labels, then files. */
+  function linksIn(text: string): LinkSpan[] {
+    const spans: LinkSpan[] = findUrlMentions(text).map((mention) => ({
+      start: mention.start,
+      end: mention.end,
+      raw: mention.raw,
+      link: { kind: "url", url: mention.url, raw: mention.raw },
+    }));
+    const free = (span: { start: number; end: number }) =>
+      spans.every(
+        (taken) => span.end <= taken.start || span.start >= taken.end,
+      );
+    for (const span of labelSpans(text, urlLabels))
+      if (free(span)) spans.push(span);
+    for (const mention of findPathMentions(text)) {
+      const file = free(mention) ? resolve(mention) : null;
+      if (file)
+        spans.push({
+          start: mention.start,
+          end: mention.end,
+          raw: mention.raw,
+          link: { kind: "file", ...file },
+        });
+    }
+    return spans.sort((a, b) => a.start - b.start);
+  }
   return {
     isFile,
-    resolve(mention: PathMention): FileLink | null {
-      const path = resolvePath(mention.path, cwd);
-      return isFile(path)
-        ? {
-            path,
-            line: mention.line,
-            col: mention.col,
-            raw: mention.raw,
-            source: "text",
-          }
-        : null;
+    resolve,
+    linksIn,
+    /** The link drawn at column `col` of a screen line. */
+    resolveAt(line: string, col: number): ChatLink | null {
+      return (
+        linksIn(line).find((span) => col >= span.start && col < span.end)
+          ?.link ?? null
+      );
     },
     files: () => chatFiles(links, (link) => isFile(link.path)),
   };

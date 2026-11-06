@@ -82,9 +82,7 @@ function terminalApi(): NonNullable<AppProps["terminals"]> {
     kill: async () => {},
   };
   return {
-    list: async () => ({ requestId: "r", entries: [] }),
     ref: () => terminal,
-    create: async () => terminal,
   };
 }
 

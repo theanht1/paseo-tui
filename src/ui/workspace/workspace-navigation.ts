@@ -47,8 +47,16 @@ export function createWorkspaceNavigation(
     agents: readonly PaseoAgent[],
     terminals: readonly PaseoTerminal[],
     subagents: readonly SubagentTab[] = [],
+    /** Archived sessions open as view-only tabs. */
+    archived: readonly PaseoAgent[] = [],
   ): WorkspaceTab | null {
-    const tabs = workspaceTabs(workspace.id, agents, terminals, subagents);
+    const tabs = workspaceTabs(
+      workspace.id,
+      agents,
+      terminals,
+      subagents,
+      archived,
+    );
     const tab =
       tabs.find((tab) => tab.key === remembered.get(workspace.id)) ??
       tabs[0] ??
@@ -79,6 +87,8 @@ export function createWorkspaceNavigation(
     agents: readonly PaseoAgent[],
     terminals: readonly PaseoTerminal[],
     subagents: readonly SubagentTab[] = [],
+    /** Archived sessions open as view-only tabs. */
+    archived: readonly PaseoAgent[] = [],
   ): NavigationSnapshot {
     const ids = new Set(workspaces.map((workspace) => workspace.id));
     for (const id of previousIds) {
@@ -101,7 +111,13 @@ export function createWorkspaceNavigation(
     }
     const workspaceId = surviving(snapshot.workspaceId);
     const cursorId = surviving(snapshot.cursorId);
-    const tabs = workspaceTabs(workspaceId, agents, terminals, subagents);
+    const tabs = workspaceTabs(
+      workspaceId,
+      agents,
+      terminals,
+      subagents,
+      archived,
+    );
     const currentKey = snapshot.tab?.key;
     const returnKey =
       currentKey && !tabs.some((tab) => tab.key === currentKey)

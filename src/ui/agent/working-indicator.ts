@@ -24,3 +24,17 @@ export function createWorkingIndicator(startedAt = Date.now()) {
     },
   };
 }
+/** The pane's line while a stop is under way; `key` is the stop key's label. */
+export function stopText(
+  phase: "requested" | "acknowledged" | "stalled",
+  key: string,
+): string {
+  switch (phase) {
+    case "requested":
+      return "Stopping…";
+    case "acknowledged":
+      return "Stop requested.";
+    case "stalled":
+      return `Agent still stopping; press ${key} again to retry`;
+  }
+}

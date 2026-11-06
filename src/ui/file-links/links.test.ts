@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { toBlocks } from "../timeline/blocks.js";
-import { chatFiles, linkifyMarkdown, timelineLinks } from "./links.js";
+import {
+  chatFiles,
+  fileResolver,
+  linkifyMarkdown,
+  markdownUrlLabels,
+  timelineLinks,
+} from "./links.js";
 
 function tool(
   callId: string,
@@ -122,5 +128,54 @@ describe("fileResolver", () => {
       "src/a.ts:12",
       "/repo/src/read.ts",
     ]);
+  });
+});
+
+describe("chat links", () => {
+  const chat = toBlocks(
+    [
+      {
+        type: "assistant_message" as const,
+        text: "Read [the guide](https://x.dev/guide) and [src/a.ts](src/a.ts).",
+      },
+    ].map((item, index) => ({ seq: index + 1, item })),
+  );
+  const resolver = fileResolver(
+    timelineLinks(chat, "/repo"),
+    "/repo",
+    (path) => path === "/repo/src/a.ts",
+    markdownUrlLabels(chat),
+  );
+  it("collects only web link targets by their label", () => {
+    expect([...markdownUrlLabels(chat)]).toEqual([
+      ["the guide", "https://x.dev/guide"],
+    ]);
+  });
+  it("resolves a markdown link's label on screen to its URL", () => {
+    const line = "Read the guide and src/a.ts.";
+    expect(resolver.resolveAt(line, 8)).toEqual({
+      kind: "url",
+      url: "https://x.dev/guide",
+      raw: "the guide",
+    });
+    expect(resolver.resolveAt("Read theguidebook", 8)).toBeNull();
+  });
+  it("resolves a URL and a path on the same row, URLs first", () => {
+    const line = "see https://y.dev/src/a.ts then src/a.ts:3";
+    expect(
+      resolver.linksIn(line).map((span) => [span.start, span.link.kind]),
+    ).toEqual([
+      [4, "url"],
+      [32, "file"],
+    ]);
+    expect(resolver.resolveAt(line, 10)).toMatchObject({
+      kind: "url",
+      url: "https://y.dev/src/a.ts",
+    });
+    expect(resolver.resolveAt(line, 34)).toMatchObject({
+      kind: "file",
+      path: "/repo/src/a.ts",
+      line: 3,
+    });
   });
 });

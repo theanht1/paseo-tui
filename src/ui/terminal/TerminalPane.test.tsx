@@ -270,3 +270,70 @@ it("replays a larger saved screen into a smaller pane, keeping the cursor row an
     syntaxStyle.destroy();
   }
 });
+
+it("sends shifted letters as text after the app enables the kitty keyboard protocol (lazygit J/K)", async () => {
+  const test = await createTestRenderer({
+    width: 40,
+    height: 10,
+    exitOnCtrlC: false,
+  });
+  const theme = createTheme({});
+  const syntaxStyle = createSyntaxStyle(test.renderer, theme);
+  const root = createRoot(test.renderer);
+  let receive: (event: TerminalStreamEvent) => void = () => {};
+  const input: string[] = [];
+  const terminal: PaseoTerminalHandle = {
+    id: "t",
+    current: () => null,
+    refresh: async () => null,
+    write: () => 0,
+    sendKeys: () => 0,
+    kill: async () => {},
+    capture: async () => ({
+      terminalId: "t",
+      lines: [],
+      totalLines: 0,
+      requestId: "r",
+    }),
+  };
+  try {
+    flushSync(() =>
+      root.render(
+        <ThemeContext value={{ theme, syntaxStyle }}>
+          <TerminalPane
+            terminal={terminal}
+            stream={{
+              observe(_id, handler) {
+                receive = handler;
+                return { ready: Promise.resolve(), async close() {} };
+              },
+              write(_id, data) {
+                input.push(data);
+              },
+              resize() {},
+            }}
+            focused
+            paneFocused
+            onFocus={() => {}}
+          />
+        </ThemeContext>,
+      ),
+    );
+    await test.renderOnce();
+    receive({
+      terminalId: "t",
+      subscriptionId: "s",
+      type: "output",
+      data: new TextEncoder().encode("\x1b[>1u"),
+    });
+    await test.renderOnce();
+    test.mockInput.pressKey("J");
+    test.mockInput.pressKey("k", { shift: true });
+    test.mockInput.pressKey("\t", { shift: true });
+    await test.renderOnce();
+    expect(input).toEqual(["J", "K", "\x1b[9;2u"]);
+  } finally {
+    await test.dispose();
+    syntaxStyle.destroy();
+  }
+});

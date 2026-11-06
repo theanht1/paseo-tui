@@ -9,7 +9,8 @@ import type { CatalogModel, CreateAgentInput } from "../../state/ports.js";
 import type { ForkSeed } from "../../state/timeline-store.js";
 import { at } from "../../test/at.js";
 import { agent, timelineStore } from "../../test/fixtures.js";
-import { historyCommands } from "./agent-history.js";
+import type { AgentSeed } from "../management-controller.js";
+import { historyCommands, promptJumpStep } from "./agent-history.js";
 import type { CommandItem, CommandStep } from "./registry.js";
 
 const prompts = {
@@ -55,6 +56,7 @@ function setup(value: PaseoAgent, enabled = true, createError?: Error) {
   const created: CreateAgentInput[] = [];
   const failures: string[] = [];
   const opened: string[] = [];
+  const seeds: AgentSeed[] = [];
   const store = timelineStore(
     enabled
       ? {
@@ -95,8 +97,12 @@ function setup(value: PaseoAgent, enabled = true, createError?: Error) {
         failures.push(message);
       },
     },
+    forkWorkspace(seed) {
+      seeds.push(seed);
+      return { kind: "confirm", title: "New workspace", confirm() {} };
+    },
   });
-  return { items, calls, created, failures, opened };
+  return { items, calls, created, failures, opened, seeds };
 }
 function find(items: readonly CommandItem[], id: string) {
   const item = items.find((candidate) => candidate.id === id);
@@ -106,6 +112,17 @@ function find(items: readonly CommandItem[], id: string) {
 async function choices(step: undefined | CommandStep) {
   if (step?.kind !== "choice") throw Error("expected a choice");
   return step.items();
+}
+/** Answers "Fork into" after the fork prompt. */
+async function into(step: undefined | CommandStep, title: string) {
+  const options = await choices(step);
+  expect(options.map((option) => option.title)).toEqual([
+    "This workspace",
+    "New workspace…",
+  ]);
+  const option = options.find((candidate) => candidate.title === title);
+  if (!option) throw Error(`missing ${title}`);
+  return option.run();
 }
 async function settle() {
   await new Promise((resolve) => setImmediate(resolve));
@@ -188,7 +205,7 @@ describe("history commands", () => {
     const list = await choices(find(items, "fork").run());
     const input = at(list, 0).run();
     if (input?.kind !== "input") throw Error("expected a prompt input");
-    input.submit("  ");
+    await into(input.submit("  "), "This workspace");
     await settle();
     expect(calls).toEqual([["fork", { epoch: "e", seq: 9 }, true]]);
     expect(created).toEqual([
@@ -210,7 +227,7 @@ describe("history commands", () => {
     const list = await choices(find(items, "fork").run());
     const input = at(list, 1).run();
     if (input?.kind !== "input") throw Error("expected a prompt input");
-    input.submit("try another way");
+    await into(input.submit("try another way"), "This workspace");
     await settle();
     expect(calls).toEqual([["fork", { epoch: "e", seq: 2 }, false]]);
     expect(created[0]).toMatchObject({
@@ -219,6 +236,36 @@ describe("history commands", () => {
       modeId: null,
     });
     expect(created[0]).not.toHaveProperty("thinkingOptionId");
+  });
+  it("forks into a new workspace with the agent's settings, forking the chat when it is created", async () => {
+    const { items, calls, created, seeds } = setup(
+      agent("a", {
+        title: "Alpha",
+        model: "big",
+        currentModeId: "auto",
+        thinkingOptionId: "high",
+      }),
+    );
+    const list = await choices(find(items, "fork").run());
+    const input = at(list, 0).run();
+    if (input?.kind !== "input") throw Error("expected a prompt input");
+    const next = await into(input.submit("go on"), "New workspace…");
+    expect(next).toMatchObject({ kind: "confirm", title: "New workspace" });
+    expect(calls).toEqual([]);
+    const [seed] = seeds;
+    expect(seed).toMatchObject({
+      provider: "codex",
+      model: "big",
+      modeId: "auto",
+      thinkingOptionId: "high",
+      title: "Fork of Alpha",
+    });
+    expect(await seed?.start()).toEqual({
+      prompt: "go on",
+      attachments: [attachment],
+    });
+    expect(calls).toEqual([["fork", { epoch: "e", seq: 9 }, true]]);
+    expect(created).toEqual([]);
   });
   it("reports fork failures", async () => {
     const { items, failures, opened } = setup(
@@ -229,9 +276,44 @@ describe("history commands", () => {
     const list = await choices(find(items, "fork").run());
     const step = at(list, 0).run();
     if (step?.kind !== "input") throw Error("expected a prompt input");
-    step.submit("x");
+    await into(step.submit("x"), "This workspace");
     await settle();
     expect(failures).toEqual(["Provider unavailable"]);
     expect(opened).toEqual([]);
+  });
+});
+
+describe("jump to prompt", () => {
+  function jumpSetup(prompted = true) {
+    const gone: [string, number][] = [];
+    const store = timelineStore({
+      ...(prompted ? { prompts: async () => prompts } : {}),
+      reveal: async () => {},
+    });
+    const context = {
+      agent: agent("a"),
+      store,
+      goto(epoch: string, seq: number) {
+        gone.push([epoch, seq]);
+      },
+    };
+    return { items: historyCommands(context), context, gone };
+  }
+  it("lists prompts newest first and jumps to the chosen one, closing the palette", async () => {
+    const { items, gone } = jumpSetup();
+    const command = find(items, "jump-prompt");
+    expect(command).toMatchObject({
+      title: "Jump to prompt…",
+      action: { type: "prompts.open" },
+    });
+    const list = await choices(command.run());
+    expect(list.map((item) => item.title)).toEqual(["second ask", "first ask"]);
+    expect(at(list, 1).run()).toBeUndefined();
+    expect(gone).toEqual([["e", 2]]);
+  });
+  it("is offered only when the daemon has the prompt index", () => {
+    const { items, context } = jumpSetup(false);
+    expect(items.some((item) => item.id === "jump-prompt")).toBe(false);
+    expect(promptJumpStep(context)).toBeNull();
   });
 });

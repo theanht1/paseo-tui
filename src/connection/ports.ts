@@ -1,4 +1,9 @@
-import type { PaseoAgentHandle, TerminalStreamEvent } from "@getpaseo/client";
+import type {
+  PaseoAgent,
+  PaseoAgentHandle,
+  PaseoProject,
+  TerminalStreamEvent,
+} from "@getpaseo/client";
 import type {
   ProviderSubagentDescriptorPayload,
   SessionOutboundMessage,
@@ -18,6 +23,22 @@ export type {
   TerminalActivity,
   UsageReportEntry,
 };
+export interface HistoryEntry {
+  agent: PaseoAgent;
+  projectName: string | null;
+  workspaceName: string | null;
+}
+export interface HistoryPage {
+  entries: HistoryEntry[];
+  truncated: boolean;
+}
+/** Past sessions, archived ones included, newest first. */
+export interface HistoryPort {
+  /** False when the daemon lacks `agentHistorySearch`; `list` then ignores `query`. */
+  searchable: boolean;
+  list(query: string): Promise<HistoryPage>;
+  unarchive(agentId: string): Promise<void>;
+}
 /** Provider usage/quota reports; absent unless the daemon has `usageSources` or `providerUsageList`. */
 export interface UsagePort {
   /** `forceRefresh` bypasses the daemon's five-minute report cache. */
@@ -90,10 +111,12 @@ export interface CompletionPort {
   files(cwd: string, query: string): Promise<FileEntry[]>;
 }
 export interface TerminalStreamPort {
+  /** `onExit` runs as soon as the terminal's process exits cleanly, before the daemon's lists catch up. */
   observe(
     id: string,
     receive: (event: TerminalStreamEvent) => void,
     onError: (error: unknown) => void,
+    onExit?: () => void,
   ): { ready: Promise<void>; close(): Promise<void> };
   write(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;
@@ -193,4 +216,11 @@ export interface AgentFeaturesPort {
   setThinking:
     | ((agentId: string, optionId: string) => Promise<string | null>)
     | null;
+}
+/** Project registry operations; `add` and `remove` are null when the daemon lacks `projectAdd` / `projectRemove`. */
+export interface ProjectPort {
+  add: ((cwd: string) => Promise<PaseoProject>) | null;
+  remove: ((projectId: string) => Promise<void>) | null;
+  /** Directories on the host matching `query`, best first. */
+  directories(query: string): Promise<string[]>;
 }

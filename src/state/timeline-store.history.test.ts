@@ -85,6 +85,7 @@ function setup(history: AgentHistoryPort | null = new FakeHistory()) {
     subscribe: () => Object.assign(() => {}, { ready: Promise.resolve() }),
     send: async () => {},
     steer: async () => {},
+    interrupt: async () => {},
     respondToPermission: async () => {},
     setMode: async () => null,
     setModel: async () => {},
@@ -109,7 +110,22 @@ describe("timeline store history", () => {
       store.rewind,
       store.fork,
       store.setThinking,
-    ]).toEqual([null, null, null, null, null]);
+      store.older,
+      store.reveal,
+    ]).toEqual([null, null, null, null, null, null, null]);
+  });
+  it("reveals a sequence with history paging alone, without daemon search", async () => {
+    const history = new FakeHistory();
+    const { store } = setup({
+      ...history,
+      fetchBefore: (cursor, limit) => history.fetchBefore(cursor, limit),
+      search: null,
+    });
+    await store.open();
+    expect(store.search).toBeNull();
+    await store.reveal?.(450);
+    expect(seqs(store)[0]).toBeLessThanOrEqual(450);
+    expect(history.beforeCalls.map((cursor) => cursor.seq)).toEqual([801, 601]);
   });
   it("pages older rows in until the revealed sequence is loaded", async () => {
     const history = new FakeHistory();
@@ -121,6 +137,19 @@ describe("timeline store history", () => {
     expect(history.beforeCalls.map((cursor) => cursor.seq)).toEqual([801, 601]);
     await store.search?.reveal(900);
     expect(history.beforeCalls).toHaveLength(2);
+  });
+  it("pages one older page in at a time until the start of the history", async () => {
+    const history = new FakeHistory();
+    history.all = range(1, 500);
+    const { store, port } = setup(history);
+    port.fetchTail = async () => page(range(301, 500));
+    await store.open();
+    expect(await store.older?.()).toBe(true);
+    expect(seqs(store)).toEqual(range(101, 500));
+    expect(await store.older?.()).toBe(false);
+    expect(seqs(store)).toEqual(range(1, 500));
+    expect(await store.older?.()).toBe(false);
+    expect(history.beforeCalls.map((cursor) => cursor.seq)).toEqual([301, 101]);
   });
   it("keeps revealed rows when live rows arrive, and drops them on a tail refetch", async () => {
     const events: ((event: PaseoAgentTimelineEvent) => void)[] = [];

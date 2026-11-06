@@ -1,6 +1,17 @@
 import { expect, it } from "vitest";
-import { helpRows } from "../input/keymap.js";
+import { helpRows, type Stroke } from "../input/keymap.js";
 import { createShortcutSearch, filterShortcuts } from "./shortcut-search.js";
+
+function key(name: string, extra: Partial<Stroke> = {}): Stroke {
+  return {
+    name,
+    sequence: name.length === 1 ? name : "",
+    ctrl: false,
+    meta: false,
+    shift: false,
+    ...extra,
+  };
+}
 
 it("fuzzy matches keys, descriptions, and sections", () => {
   const rows = helpRows("Ctrl-B");
@@ -19,42 +30,65 @@ it("fuzzy matches keys, descriptions, and sections", () => {
   ).toBe(true);
   expect(filterShortcuts(rows, "zzzzzzzz")).toEqual([]);
 });
-it("keeps q editable in search, clears before closing, and only closes q on empty results focus", () => {
+
+it("opens in normal mode where vim keys scroll instead of typing", () => {
   const search = createShortcutSearch();
-  expect(
-    search.key({
-      name: "q",
-      sequence: "q",
-      ctrl: false,
-      meta: false,
-      shift: false,
-    }),
-  ).toBe("pass");
-  search.change("quit");
-  expect(search.escape()).toBe("handled");
+  expect(search.getSnapshot()).toEqual({ query: "", focus: "results" });
+  expect(search.key(key("j"))).toEqual({ scroll: "line", dir: 1 });
+  expect(search.key(key("down"))).toEqual({ scroll: "line", dir: 1 });
+  expect(search.key(key("k"))).toEqual({ scroll: "line", dir: -1 });
+  expect(search.key(key("up"))).toEqual({ scroll: "line", dir: -1 });
+  expect(search.key(key("d", { ctrl: true }))).toEqual({
+    scroll: "half",
+    dir: 1,
+  });
+  expect(search.key(key("u", { ctrl: true }))).toEqual({
+    scroll: "half",
+    dir: -1,
+  });
+  expect(search.key(key("f", { ctrl: true }))).toEqual({
+    scroll: "page",
+    dir: 1,
+  });
+  expect(search.key(key("pageup"))).toEqual({ scroll: "page", dir: -1 });
+  expect(search.key(key("g"))).toBe("handled");
+  expect(search.key(key("g"))).toEqual({ scroll: "edge", dir: -1 });
+  expect(search.key(key("g", { shift: true, sequence: "G" }))).toEqual({
+    scroll: "edge",
+    dir: 1,
+  });
+  expect(search.key(key("x"))).toBe("handled");
   expect(search.getSnapshot().query).toBe("");
-  search.toggleFocus();
-  expect(
-    search.key({
-      name: "q",
-      sequence: "q",
-      ctrl: false,
-      meta: false,
-      shift: false,
-    }),
-  ).toBe("close");
-  expect(search.escape()).toBe("close");
 });
 
-it("Ctrl-C leaves the search field for the results and passes from results", () => {
+it("/ starts a search; Enter or Esc returns to normal keeping the filter", () => {
   const search = createShortcutSearch();
-  const ctrlC = {
-    name: "c",
-    sequence: "\u0003",
-    ctrl: true,
-    meta: false,
-    shift: false,
-  };
+  expect(search.key(key("/", { sequence: "/" }))).toBe("handled");
+  expect(search.getSnapshot().focus).toBe("search");
+  expect(search.key(key("j"))).toBe("pass");
+  search.change("diff");
+  expect(search.key(key("return"))).toBe("handled");
+  expect(search.getSnapshot()).toEqual({ query: "diff", focus: "results" });
+  search.key(key("i"));
+  expect(search.getSnapshot().focus).toBe("search");
+  expect(search.key(key("escape"))).toBe("handled");
+  expect(search.getSnapshot()).toEqual({ query: "diff", focus: "results" });
+});
+
+it("Esc clears the filter before closing; q closes from normal mode", () => {
+  const search = createShortcutSearch();
+  search.change("quit");
+  expect(search.key(key("escape"))).toBe("handled");
+  expect(search.getSnapshot().query).toBe("");
+  expect(search.key(key("escape"))).toBe("close");
+  search.change("quit");
+  expect(search.key(key("q"))).toBe("close");
+});
+
+it("Ctrl-C leaves the search field and passes from normal mode", () => {
+  const search = createShortcutSearch();
+  const ctrlC = key("c", { ctrl: true, sequence: "\u0003" });
+  search.focus("search");
   search.change("ne");
   expect(search.key(ctrlC)).toBe("handled");
   expect(search.getSnapshot()).toEqual({ query: "ne", focus: "results" });

@@ -1,7 +1,7 @@
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import { describe, expect, it } from "vitest";
 import { agents, settle, setup } from "../test/app-harness.js";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
 describe("Ctrl-C in text inputs", () => {
@@ -34,6 +34,7 @@ describe("Ctrl-C in text inputs", () => {
   });
   it("closes the rename and new-workspace prompts", async () => {
     const management: NonNullable<AppProps["management"]> = {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
       openFile: async () => {
         throw Error("Unexpected");
@@ -71,7 +72,7 @@ describe("Ctrl-C in text inputs", () => {
   });
   it("leaves the shortcut search field, then arms quit from the results", async () => {
     const { app } = await setup();
-    await press(app, "\r", "?", "n", "e", "\u0003");
+    await press(app, "\r", "?", "/", "n", "e", "\u0003");
     expect(app.lastFrame()).toContain("Keyboard shortcuts");
     expect(app.lastFrame()).not.toContain(quitNotice);
     await press(app, "\u0003");

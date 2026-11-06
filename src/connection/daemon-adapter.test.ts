@@ -211,6 +211,47 @@ test("streams terminal replay, forwards resize and releases the observation", as
   expect(released).toBe(true);
 });
 
+test("reports a terminal's process exit at once, and an exit error as an error", async () => {
+  const { createTerminalStreamAdapter } = await import("./daemon-adapter.js");
+  let update: (message: {
+    type: "terminal_stream_exit";
+    payload: { terminalId: string; error?: string };
+  }) => void = () => {};
+  const adapter = createTerminalStreamAdapter({
+    observeTerminal() {
+      return {
+        subscriptionId: "s",
+        ready: Promise.resolve({
+          terminalId: "t",
+          subscriptionId: "s",
+          requestId: "r",
+          slot: 1,
+          error: null,
+        }),
+        subscribe(observer) {
+          update = (message) => observer.update?.(message);
+          return () => {};
+        },
+        async release() {},
+      };
+    },
+    sendTerminalInput() {},
+  });
+  const seen: unknown[] = [];
+  adapter.observe(
+    "t",
+    () => {},
+    (error) => seen.push(["error", error]),
+    () => seen.push("exit"),
+  );
+  update({ type: "terminal_stream_exit", payload: { terminalId: "t" } });
+  update({
+    type: "terminal_stream_exit",
+    payload: { terminalId: "t", error: "spawn failed" },
+  });
+  expect(seen).toEqual(["exit", ["error", "spawn failed"]]);
+});
+
 test("lists agent slash commands and workspace files for prompt completion", async () => {
   const calls: unknown[] = [];
   const adapter = createCompletionAdapter({

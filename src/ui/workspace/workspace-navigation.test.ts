@@ -193,3 +193,31 @@ it("keeps the original return tab when an open tool terminal is focused again", 
   nav.reconcile([main], agents, []);
   expect(nav.getSnapshot().tab?.key).toBe("agent:b");
 });
+it("keeps an archived view's tab selected while the view is open", async () => {
+  const { createWorkspaceNavigation } = await import(
+    "./workspace-navigation.js"
+  );
+  const nav = createWorkspaceNavigation();
+  const live = [agent("a", { workspaceId: "main" })];
+  const old = agent("old", { workspaceId: "main", archivedAt: "2026-11-04" });
+  nav.selectWorkspace(main, live, []);
+  nav.selectTab({ kind: "agent", key: "agent:old", agent: old });
+  expect(nav.reconcile([main], live, [], [], [old]).tab?.key).toBe("agent:old");
+  expect(nav.reconcile([main], live, []).tab?.key).toBe("agent:a");
+});
+
+it("returns to a workspace whose remembered tab is an open archived view", async () => {
+  const { createWorkspaceNavigation } = await import(
+    "./workspace-navigation.js"
+  );
+  const nav = createWorkspaceNavigation();
+  const live = [
+    agent("a", { workspaceId: "main" }),
+    agent("c", { workspaceId: "branch" }),
+  ];
+  const old = agent("old", { workspaceId: "main", archivedAt: "2026-11-04" });
+  nav.selectWorkspace(main, live, [], [], [old]);
+  nav.selectTab({ kind: "agent", key: "agent:old", agent: old });
+  nav.selectWorkspace(branch, live, [], [], [old]);
+  expect(nav.selectWorkspace(main, live, [], [], [old])?.key).toBe("agent:old");
+});

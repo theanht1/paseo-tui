@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { agents, settle, setup } from "../test/app-harness.js";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
 describe("file links", () => {
-  async function fileSetup() {
+  async function fileSetup(
+    text = "Edit `src/app.ts:7` now, not src/gone.ts",
+    extra: Partial<AppProps> = {},
+  ) {
     const opened: unknown[] = [];
     const vim = {
       id: "vim",
@@ -33,8 +36,10 @@ describe("file links", () => {
       kill: async () => {},
     });
     const listed: string[] = [];
+    const copied: string[] = [];
     let setTerminals: (terminals: (typeof vim)[]) => void = () => {};
     const management: NonNullable<AppProps["management"]> = {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: [], defaultBranch: null }),
       createWorkspace: async () => {
         throw Error("Unexpected");
@@ -60,14 +65,18 @@ describe("file links", () => {
       {},
       undefined,
       {
-        list: async () => ({ requestId: "r", entries: [] }),
         ref: (terminal) =>
           handle(typeof terminal === "string" ? terminal : terminal.id),
-        create: async () => handle("vim"),
       },
       management,
       undefined,
       {
+        clipboard: {
+          copyToClipboardOSC52(text: string) {
+            copied.push(text);
+            return true;
+          },
+        },
         directories: {
           async list(directory) {
             listed.push(directory);
@@ -76,6 +85,7 @@ describe("file links", () => {
               : [];
           },
         },
+        ...extra,
       },
       (id) =>
         id === "alpha"
@@ -83,7 +93,7 @@ describe("file links", () => {
               { type: "user_message", text: "hello alpha" },
               {
                 type: "assistant_message",
-                text: "Edit `src/app.ts:7` now, not src/gone.ts",
+                text,
               },
             ]
           : null,
@@ -95,7 +105,7 @@ describe("file links", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       await settle();
     }
-    return { ...result, opened, listed, shell };
+    return { ...result, opened, listed, shell, copied };
   }
   const expected = {
     workspace: "one",
@@ -142,7 +152,7 @@ describe("file links", () => {
     app.stdin.write("F");
     await settle();
     expect(app.lastFrame()).toContain("HINT");
-    expect(app.lastFrame()).toContain("Open the labelled file in vim");
+    expect(app.lastFrame()).toContain("Open the labelled file or link");
     const spans = test.captureSpans().lines.flatMap((line) => line.spans);
     expect(
       spans.some(
@@ -154,6 +164,98 @@ describe("file links", () => {
     app.stdin.write("a");
     await expectEditorTab(test, app.lastFrame);
     expect(opened).toEqual([expected]);
+  });
+
+  it("copies the workspace path and the editor tab's file path from the Command Center", async () => {
+    const { app, test, copied } = await fileSetup();
+    app.stdin.write("F");
+    await settle();
+    app.stdin.write("a");
+    await expectEditorTab(test, app.lastFrame);
+    for (const [query, path] of [
+      ["copy workspace path", "/repo/one"],
+      ["copy file path relative", "src/app.ts"],
+      ["copy file path absolute", "/repo/one/src/app.ts"],
+    ] as const) {
+      for (const key of ["\u001d", "\u000b", query]) {
+        app.stdin.write(key);
+        await settle();
+      }
+      expect(app.lastFrame()).toContain(path);
+      app.stdin.write("\r");
+      await settle();
+      expect(copied.at(-1)).toBe(path);
+    }
+    expect(app.lastFrame()).toContain("Copied 20 chars");
+  });
+
+  function fakeBrowser() {
+    const urls: string[] = [];
+    return {
+      urls,
+      browser: {
+        async open(url: string) {
+          urls.push(url);
+          return null;
+        },
+      },
+    };
+  }
+  const linkChat =
+    "See [the docs](https://docs.dev/guide), https://x.dev/a?q=1 now, `src/app.ts:7`";
+  it("labels URLs and markdown link labels with F and opens them in the browser", async () => {
+    const { urls, browser } = fakeBrowser();
+    const { app, test, opened } = await fileSetup(linkChat, { browser });
+    expect(app.lastFrame()).toContain("the docs");
+    for (const [label, url] of [
+      ["a", "https://docs.dev/guide"],
+      ["s", "https://x.dev/a?q=1"],
+    ] as const) {
+      app.stdin.write("F");
+      await settle();
+      expect(app.lastFrame()).toContain("HINT");
+      expect(test.renderer.root.findDescendantById("file-hint:f")).toBeFalsy();
+      app.stdin.write(label);
+      await settle();
+      expect(urls.at(-1)).toBe(url);
+      expect(app.lastFrame()).toContain("NORMAL");
+    }
+    expect(opened).toEqual([]);
+    app.stdin.write("F");
+    await settle();
+    app.stdin.write("d");
+    await expectEditorTab(test, app.lastFrame);
+    expect(opened).toEqual([expected]);
+  });
+  it("opens a clicked URL in the browser and warns about localhost from a remote host", async () => {
+    const { urls, browser } = fakeBrowser();
+    const { app, test } = await fileSetup(
+      "Served at http://localhost:5173/app now, done",
+      { browser, isRemoteAgent: (agentId) => agentId === "alpha" },
+    );
+    const lines = app.lastFrame().split("\n");
+    const row = lines.findIndex((line) => line.includes("localhost:5173"));
+    const col = lines[row]?.indexOf("localhost:5173") ?? 0;
+    await test.mockMouse.click(col, row);
+    await settle();
+    expect(urls).toEqual(["http://localhost:5173/app"]);
+    expect(app.lastFrame()).toContain(
+      "Opened locally; localhost refers to this machine",
+    );
+  });
+  it("reports a missing browser opener", async () => {
+    const { app } = await fileSetup("See https://x.dev/a now, done", {
+      browser: {
+        open: async () => "no browser opener found: install xdg-utils",
+      },
+    });
+    app.stdin.write("F");
+    await settle();
+    app.stdin.write("a");
+    await settle();
+    expect(app.lastFrame()).toContain(
+      "no browser opener found: install xdg-utils",
+    );
   });
 
   it("cancels hints with Esc", async () => {

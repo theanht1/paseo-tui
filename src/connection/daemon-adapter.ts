@@ -1,3 +1,4 @@
+import type { PaseoAgent, PaseoProject } from "@getpaseo/client";
 import type { createHostClient } from "@getpaseo/client/node";
 import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
 import type {
@@ -5,6 +6,8 @@ import type {
   CompletionPort,
   DirectoryPort,
   DraftCommandConfig,
+  HistoryPort,
+  ProjectPort,
   ProviderSubagentPort,
   ProviderSubagentTimelinePage,
   ProviderSubagentUpdate,
@@ -155,6 +158,62 @@ export function requireWorkspaceCapabilities(
     );
 }
 
+export interface ProjectDaemon {
+  getLastServerInfoMessage(): {
+    features?: { projectAdd?: boolean; projectRemove?: boolean };
+  } | null;
+  addProject(cwd: string): Promise<{
+    project: PaseoProject | null;
+    error: string | null;
+    errorCode?: "directory_not_found" | null;
+  }>;
+  removeProject(projectId: string): Promise<unknown>;
+  getDirectorySuggestions(options: {
+    query: string;
+    includeFiles?: boolean;
+    includeDirectories?: boolean;
+    limit?: number;
+  }): Promise<{
+    entries: readonly { path: string; kind: "file" | "directory" }[];
+    error: string | null;
+  }>;
+}
+export function createProjectAdapter(daemon: ProjectDaemon): ProjectPort {
+  const features = daemon.getLastServerInfoMessage()?.features;
+  return {
+    add:
+      features?.projectAdd === true
+        ? async (cwd) => {
+            const result = await daemon.addProject(cwd);
+            if (result.project) return result.project;
+            throw Error(
+              result.errorCode === "directory_not_found"
+                ? `Directory not found: ${cwd}`
+                : (result.error ?? "Adding the project failed"),
+            );
+          }
+        : null,
+    remove:
+      features?.projectRemove === true
+        ? async (projectId) => {
+            await daemon.removeProject(projectId);
+          }
+        : null,
+    async directories(query) {
+      const result = await daemon.getDirectorySuggestions({
+        query,
+        includeDirectories: true,
+        includeFiles: false,
+        limit: 30,
+      });
+      if (result.error) throw Error(result.error);
+      return result.entries.flatMap((entry) =>
+        entry.kind === "directory" ? [entry.path] : [],
+      );
+    },
+  };
+}
+
 export function createManagementAdapter(
   daemon: Pick<
     ReturnType<typeof createHostClient>,
@@ -188,17 +247,14 @@ export function createTerminalStreamAdapter(
   >,
 ): TerminalStreamPort {
   return {
-    observe(id, receive, onError) {
+    observe(id, receive, onError, onExit) {
       const subscription = daemon.observeTerminal(id, receive);
       const unsubscribe = subscription.subscribe({
         snapshot() {},
         update(message) {
-          if (
-            message.type === "terminal_stream_exit" &&
-            message.payload.error
-          ) {
-            onError(message.payload.error);
-          }
+          if (message.type !== "terminal_stream_exit") return;
+          if (message.payload.error) onError(message.payload.error);
+          else onExit?.();
         },
         error: onError,
       });
@@ -427,6 +483,50 @@ export function createUsageAdapter(daemon: UsageDaemon): UsagePort | null {
   return {
     async list(options = {}) {
       return (await daemon.listUsageReports(options)).reports;
+    },
+  };
+}
+
+export interface HistoryDaemon {
+  fetchAgentHistory(
+    options: Parameters<HostClient["fetchAgentHistory"]>[0],
+  ): Promise<{
+    entries: readonly {
+      agent: PaseoAgent;
+      project: { projectName: string; workspaceName?: string | null };
+    }[];
+    pageInfo: { hasMore: boolean };
+    searchTruncated?: boolean | undefined;
+  }>;
+  refreshAgent(agentId: string): Promise<unknown>;
+  getLastServerInfoMessage(): {
+    features?: { agentHistorySearch?: boolean };
+  } | null;
+}
+export function createHistoryAdapter(daemon: HistoryDaemon): HistoryPort {
+  const searchable =
+    daemon.getLastServerInfoMessage()?.features?.agentHistorySearch === true;
+  return {
+    searchable,
+    async list(query) {
+      const search = searchable ? query.trim() : "";
+      const result = await daemon.fetchAgentHistory({
+        filter: { includeArchived: true },
+        ...(search ? { search } : {}),
+        sort: [{ key: "updated_at", direction: "desc" }],
+        page: { limit: 200 },
+      });
+      return {
+        entries: result.entries.map((entry) => ({
+          agent: entry.agent,
+          projectName: entry.project.projectName,
+          workspaceName: entry.project.workspaceName ?? null,
+        })),
+        truncated: result.pageInfo.hasMore || result.searchTruncated === true,
+      };
+    },
+    async unarchive(agentId) {
+      await daemon.refreshAgent(agentId);
     },
   };
 }

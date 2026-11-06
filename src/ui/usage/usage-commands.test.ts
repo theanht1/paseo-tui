@@ -68,3 +68,18 @@ test("a failed refresh is shown above the last reports", async () => {
     "Refresh now",
   ]);
 });
+
+test("the config filters the item subtitle but not the view rows", async () => {
+  const { store } = fakeUsage({ kind: "ready", reports: [claude] });
+  const [entry] = usageCommands(
+    store,
+    () => NOW,
+    new Map([["claude", "hidden"]]),
+  );
+  expect(entry?.subtitle).toBe("No provider reports usage");
+  const step = entry?.run();
+  if (step?.kind !== "choice") throw Error("Expected a choice step");
+  const rows = await step.items();
+  expect(rows[0]?.title).toBe("Claude · Session 62%");
+  expect(rows[0]?.subtitle).toContain("id claude.session · hidden");
+});

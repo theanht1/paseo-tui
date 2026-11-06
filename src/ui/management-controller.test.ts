@@ -1,7 +1,12 @@
 import { expect, it } from "vitest";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { CommandStep } from "./command-center/registry.js";
 import { createManagementController } from "./management-controller.js";
+import {
+  createWorkspaceActions,
+  type ManagementApi,
+  type WorkspaceActions,
+} from "./workspace/workspace-actions.js";
 
 function submit(step: CommandStep, text: string) {
   if (step.kind !== "input") throw Error("Expected input");
@@ -25,6 +30,7 @@ it("prefills rename, runs the operation, refreshes data and exposes failures", a
     tab: null,
     catalog: null,
     actions: {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
       openFile: async () => {
         throw Error("Unexpected");
@@ -150,6 +156,7 @@ it("requires confirmation for the captured tab, cancels safely and reports faile
     tab,
     catalog: null,
     actions: {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
       openFile: async () => {
         throw Error("Unexpected");
@@ -204,6 +211,52 @@ it("requires confirmation for the captured tab, cancels safely and reports faile
   expect(events).toEqual(["close:agent:a", "closed:agent:a", "refresh"]);
 });
 
+it("closes an archived agent's tab at once without archiving it again", async () => {
+  const tab = {
+    kind: "agent" as const,
+    key: "agent:old",
+    agent: agent("old", { archivedAt: "2026-11-04" }),
+  };
+  const events: string[] = [];
+  const controller = createManagementController(() => ({
+    projects: [],
+    agents: [],
+    workspaces: [],
+    workspace: null,
+    tab,
+    catalog: null,
+    actions: {
+      ...NO_PROJECT_ACTIONS,
+      baseBranches: async () => ({ branches: [], defaultBranch: null }),
+      openFile: async () => {
+        throw Error("Unexpected");
+      },
+      createWorkspace: async () => {
+        throw Error("Unexpected");
+      },
+      createAgent: async () => agent("a"),
+      createTerminal: async () => {
+        throw Error("Unexpected");
+      },
+      renameWorkspace: async () => {},
+      renameTab: async () => {},
+      archiveWorkspace: async () => {},
+      closeTab: async (target) => {
+        events.push(`close:${target.key}`);
+      },
+    },
+    refresh: async () => {},
+    opened() {},
+    closed(target) {
+      events.push(`closed:${target.key}`);
+    },
+  }));
+  controller.closeTab();
+  await controller.settled();
+  expect(controller.getSnapshot().overlay.kind).toBe("closed");
+  expect(events).toEqual(["closed:agent:old"]);
+});
+
 it("confirms workspace archive before mutation and refreshes after success", async () => {
   const workspace = {
     id: "w",
@@ -221,6 +274,7 @@ it("confirms workspace archive before mutation and refreshes after success", asy
     tab: null,
     catalog: null,
     actions: {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
       openFile: async () => {
         throw Error("Unexpected");
@@ -286,6 +340,7 @@ it("creates a new agent tab immediately from the current tab's config and keeps 
     tab: { kind: "agent", key: "agent:current", agent: current },
     catalog: null,
     actions: {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
       openFile: async () => {
         throw Error("Unexpected");
@@ -351,7 +406,7 @@ async function walk(step: CommandStep, picks: readonly string[]) {
   }
   return current;
 }
-function placementSetup() {
+function placementSetup(real?: WorkspaceActions) {
   const project = {
     projectId: "p",
     projectDisplayName: "Repo",
@@ -397,7 +452,8 @@ function placementSetup() {
       ],
       modes: async () => [],
     },
-    actions: {
+    actions: real ?? {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({
         branches: ["master", "dev"],
         defaultBranch: "master",
@@ -442,7 +498,7 @@ function placementSetup() {
   }
   return { controller, start, calls, opened };
 }
-it("asks Local or Worktree; Local creates the agent in the project's main checkout", async () => {
+it("asks Local or Worktree; Local creates a new workspace in the main checkout each time", async () => {
   const { controller, start, calls, opened } = placementSetup();
   const step = start();
   expect(step).toMatchObject({ kind: "choice", title: "Workspace" });
@@ -453,10 +509,16 @@ it("asks Local or Worktree; Local creates the agent in the project's main checko
   ]);
   await walk(step, ["Local", "Codex", "Best", "Provider default", "", "go"]);
   await controller.settled();
-  expect(calls).toEqual([
+  await walk(start(), ["Local", "Codex", "Best", "Provider default", "", ""]);
+  await controller.settled();
+  const local = {
+    kind: "workspace",
+    project: "p",
+    placement: { kind: "local" },
+  };
+  expect(calls).toMatchObject([
     {
-      kind: "agent",
-      workspace: "main",
+      ...local,
       input: {
         provider: "codex",
         model: "best",
@@ -466,8 +528,12 @@ it("asks Local or Worktree; Local creates the agent in the project's main checko
         prompt: "go",
       },
     },
+    local,
   ]);
-  expect(opened).toEqual([["main", "agent:local"]]);
+  expect(opened).toEqual([
+    ["new", "agent:first"],
+    ["new", "agent:first"],
+  ]);
 });
 it("creates a Worktree from the default base branch first, or a picked branch with a name", async () => {
   const { controller, start, calls } = placementSetup();
@@ -536,6 +602,7 @@ it("opens a file in an editor terminal of the given workspace and asks for termi
     tab: null,
     catalog: null,
     actions: {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: [], defaultBranch: null }),
       renameWorkspace: async () => {},
       renameTab: async () => {},
@@ -596,6 +663,7 @@ it("opens the diff tool in the workspace once and refocuses its open tab", async
     tab: null,
     catalog: null,
     actions: {
+      ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: [], defaultBranch: null }),
       renameWorkspace: async () => {},
       renameTab: async () => {},
@@ -636,5 +704,137 @@ it("opens the diff tool in the workspace once and refocuses its open tab", async
   expect(opened).toEqual([
     { key: "terminal:lg", input: true },
     { key: "terminal:lg", input: true },
+  ]);
+});
+
+it("openEditor creates a terminal running the configured editor and opens it with input", async () => {
+  const workspace = {
+    id: "w",
+    projectId: "p",
+    projectRootPath: "/repo",
+    workspaceDirectory: "/trees/w",
+    name: "W",
+  };
+  const requests: unknown[] = [];
+  const opened: unknown[] = [];
+  const controller = createManagementController(() => ({
+    projects: [],
+    agents: [],
+    workspaces: [workspace],
+    workspace,
+    tab: null,
+    catalog: null,
+    actions: {
+      ...NO_PROJECT_ACTIONS,
+      baseBranches: async () => ({ branches: [], defaultBranch: null }),
+      renameWorkspace: async () => {},
+      renameTab: async () => {},
+      archiveWorkspace: async () => {},
+      closeTab: async () => {},
+      createWorkspace: async () => {
+        throw Error("Unexpected");
+      },
+      createAgent: async () => agent("a"),
+      createTerminal: async () => {
+        throw Error("Unexpected");
+      },
+      openFile: async (target, tool) => {
+        requests.push({ target: target.id, tool });
+        return { id: "ed", name: tool.name, workspaceId: target.id, cwd: "/" };
+      },
+    },
+    refresh: async () => {},
+    opened(result) {
+      opened.push({ key: result.tab?.key, input: result.input });
+    },
+  }));
+  controller.openEditor("hx", [
+    { id: "elsewhere", name: "hx", workspaceId: "x", cwd: "/x" },
+  ]);
+  await controller.settled();
+  expect(requests).toEqual([
+    {
+      target: "w",
+      tool: { name: "hx", command: "sh", args: ["-c", "hx ."] },
+    },
+  ]);
+  expect(opened).toEqual([{ key: "terminal:ed", input: true }]);
+});
+
+it("new workspace title step says it names the workspace and tab", async () => {
+  const { start } = placementSetup();
+  const title = await walk(start(), [
+    "Local",
+    "Codex",
+    "Best",
+    "Provider default",
+  ]);
+  expect(title).toMatchObject({
+    kind: "input",
+    title: "Title",
+    placeholder: "Workspace and tab title (optional)",
+  });
+});
+
+it("fork into a new workspace names the workspace after the fork", async () => {
+  const created: unknown[] = [];
+  const api: ManagementApi = {
+    createWorkspace: async (options) => {
+      created.push(options);
+      return {
+        workspace: {
+          id: "new",
+          projectId: "p",
+          projectRootPath: "/repo",
+          workspaceDirectory: "/repo",
+          name: "new",
+        },
+        agent: null,
+      };
+    },
+    createAgent: async () => {
+      throw Error("Unexpected");
+    },
+    createTerminal: async () => {
+      throw Error("Unexpected");
+    },
+    renameWorkspace: async () => {},
+    renameAgent: async () => {},
+    renameTerminal: async () => {},
+    archiveAgent: async () => {},
+    archiveWorkspace: async () => {},
+    killTerminal: async () => {},
+    branches: async () => ({ branches: [], baseRef: null }),
+    projects: { add: null, remove: null, directories: async () => [] },
+  };
+  const { controller } = placementSetup(
+    createWorkspaceActions(api, {
+      create: true,
+      thinking: true,
+      workspace: true,
+      terminal: true,
+    }),
+  );
+  controller.createWorkspace(
+    {
+      projectId: "p",
+      projectDisplayName: "Repo",
+      projectRootPath: "/repo",
+      projectKind: "git",
+    },
+    {
+      provider: "codex",
+      model: "best",
+      modeId: null,
+      title: "Fork of Alpha",
+      start: async () => ({ prompt: "carry on", attachments: [] }),
+    },
+  );
+  const state = controller.getSnapshot();
+  if (state.overlay.kind !== "wizard") throw Error("Expected wizard");
+  await walk(state.overlay.step, ["Local"]);
+  await controller.settled();
+  expect(created).toMatchObject([
+    { title: "Fork of Alpha", agent: { title: "Fork of Alpha" } },
   ]);
 });

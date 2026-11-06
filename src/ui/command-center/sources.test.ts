@@ -2,9 +2,9 @@ import type { PaseoAgent } from "@getpaseo/client";
 import { describe, expect, it } from "vitest";
 import { createTimelineStore } from "../../state/timeline-store.js";
 import { at } from "../../test/at.js";
-import { agent, page } from "../../test/fixtures.js";
+import { agent, page, timelineStore } from "../../test/fixtures.js";
 import { BINDINGS } from "../input/bindings.js";
-import type { Action } from "../input/keymap.js";
+import { type Action, shortcutFor } from "../input/keymap.js";
 import {
   assign,
   initialLayout,
@@ -94,17 +94,78 @@ describe("built-in commands", () => {
       result.actions.length = 0;
       row.run();
       expect(result.actions).toHaveLength(1);
+      const ran = result.actions[0];
       const bound = BINDINGS.filter(
-        (b) => JSON.stringify(b.action) === JSON.stringify(result.actions[0]),
+        (b) =>
+          JSON.stringify(b.action) ===
+          JSON.stringify(ran?.type === "exit" ? { type: "quit" } : ran),
       );
       expect(bound.length).toBeGreaterThan(0);
+      const shortcut = row.action
+        ? shortcutFor(row.action, BINDINGS, "Ctrl-A")
+        : null;
       for (const binding of bound)
-        expect(row.shortcut).toContain(
+        expect(shortcut).toContain(
           binding.modes.includes("prefix")
             ? `Ctrl-A ${binding.keys}`
-            : binding.keys,
+            : ran?.type === "exit"
+              ? `${binding.keys} ${binding.keys}`
+              : binding.keys,
         );
     }
+  });
+  it("gives every hand-built item that has a key binding its shortcut", () => {
+    const value = agent("alpha", {
+      archivedAt: "2026-11-04T00:00:00Z",
+      availableModes: [
+        { id: "ask", label: "Ask" },
+        { id: "edit", label: "Edit" },
+      ],
+    });
+    const items = builtinSource({
+      workspaces: [],
+      groups: [],
+      waiting: [],
+      focusedAgent: value,
+      focusedStore: timelineStore(),
+      prefixLabel: "Ctrl-B",
+      history: {
+        history: {
+          searchable: true,
+          list: async () => ({ entries: [], truncated: false, hostErrors: [] }),
+        },
+        now: Date.now,
+        open() {},
+      },
+      files: { list: () => [], open() {} },
+      unarchive() {},
+      open() {},
+      changeLayout() {},
+      workspace() {},
+      act() {},
+    }).items();
+    const shortcuts = new Map(
+      items.map((item) => [
+        item.id,
+        item.action ? shortcutFor(item.action, BINDINGS, "Ctrl-B") : null,
+      ]),
+    );
+    expect(shortcuts.get("history")).toBe("H");
+    expect(shortcuts.get("unarchive")).toBe("u");
+    expect(shortcuts.get("open-chat-file")).toBe("F");
+    expect(shortcuts.get("expand-all")).toBeNull();
+    for (const item of items)
+      if (
+        item.action &&
+        BINDINGS.some(
+          (binding) =>
+            JSON.stringify(binding.action) === JSON.stringify(item.action),
+        )
+      )
+        expect(
+          shortcutFor(item.action, BINDINGS, "Ctrl-B"),
+          item.title,
+        ).not.toBeNull();
   });
 });
 
@@ -117,6 +178,7 @@ function controls(value: PaseoAgent) {
     subscribe: () => Object.assign(() => {}, { ready: Promise.resolve() }),
     send: async () => {},
     steer: async () => {},
+    interrupt: async () => {},
     respondToPermission: async () => {},
     cancel: async () => {},
     setMode: async () => null,
@@ -160,13 +222,82 @@ it("marks the current mode in choices", async () => {
   expect(at(await step.items(), 0).subtitle).toContain("current");
   expect(at(await step.items(), 1).subtitle).not.toContain("current");
 });
-it("requires archive confirmation before calling the port", async () => {
-  const result = controls(agent("a"));
-  const step = result.items.find((item) => item.id === "archive")?.run();
-  if (step?.kind !== "confirm") throw Error("missing confirmation");
-  expect(result.archived()).toBe(0);
-  step.confirm();
-  expect(result.archived()).toBe(1);
+it("leaves archiving an agent to Close tab, and archives the open workspace instead", () => {
+  expect(controls(agent("a")).items.some((item) => item.id === "archive")).toBe(
+    false,
+  );
+  const workspace = {
+    id: "w",
+    projectId: "repo",
+    projectRootPath: "/repo",
+    workspaceDirectory: "/repo",
+    name: "main",
+  };
+  const ran: unknown[] = [];
+  const manage = {
+    workspace,
+    hosts: true,
+    archiveWorkspace: (target: typeof workspace) =>
+      ran.push(["archive", target.id]),
+    addProject: () => ran.push("add-project"),
+    listProjects: () => ran.push("projects"),
+    removeProject: () => ran.push("remove-project"),
+    listHosts: () => ran.push("hosts"),
+    addHost: () => ran.push("add-host"),
+    forkWorkspace: () => ({
+      kind: "confirm" as const,
+      title: "",
+      confirm() {},
+    }),
+  };
+  const items = builtinSource({
+    groups: [],
+    waiting: [],
+    workspaces: [],
+    focusedAgent: undefined,
+    prefixLabel: "Ctrl-B",
+    focusedStore: null,
+    open: () => {},
+    changeLayout: () => {},
+    workspace: () => {},
+    act: () => {},
+    manage,
+  }).items();
+  const titles = [
+    "Archive workspace…",
+    "Add project…",
+    "Projects…",
+    "Remove project…",
+    "Hosts…",
+    "Add host…",
+  ];
+  for (const title of titles) items.find((item) => item.title === title)?.run();
+  expect(ran).toEqual([
+    ["archive", "w"],
+    "add-project",
+    "projects",
+    "remove-project",
+    "hosts",
+    "add-host",
+  ]);
+  const without = builtinSource({
+    groups: [],
+    waiting: [],
+    workspaces: [],
+    focusedAgent: undefined,
+    prefixLabel: "Ctrl-B",
+    focusedStore: null,
+    open: () => {},
+    changeLayout: () => {},
+    workspace: () => {},
+    act: () => {},
+    manage: { ...manage, workspace: null, hosts: false },
+  })
+    .items()
+    .map((item) => item.title);
+  expect(without).not.toContain("Archive workspace…");
+  expect(without).not.toContain("Hosts…");
+  expect(without).toContain("Add project…");
 });
 it("offers daemon workspaces with no agents in Command Center", () => {
   const empty = {
@@ -245,5 +376,113 @@ describe("open file from this chat", () => {
     ]);
     choices[1]?.run();
     expect(opened).toEqual(["/repo/src/old.ts"]);
+  });
+});
+describe("session history commands", () => {
+  function items(focusedAgent: PaseoAgent) {
+    const unarchived: string[] = [];
+    const source = builtinSource({
+      workspaces: [],
+      groups: [],
+      waiting: [],
+      focusedAgent,
+      focusedStore: null,
+      prefixLabel: "Ctrl-A",
+      open() {},
+      changeLayout() {},
+      workspace() {},
+      act() {},
+      history: {
+        history: {
+          searchable: true,
+          list: async () => ({ entries: [], truncated: false, hostErrors: [] }),
+        },
+        now: () => 0,
+        open() {},
+      },
+      unarchive: () => unarchived.push(focusedAgent.id),
+    });
+    return { items: source.items(), unarchived };
+  }
+  it("lists History… and offers Unarchive only for an archived focused agent", () => {
+    const live = items(agent("live"));
+    expect(live.items.find((item) => item.id === "history")?.title).toBe(
+      "History…",
+    );
+    expect(live.items.some((item) => item.id === "unarchive")).toBe(false);
+    const archived = items(agent("old", { archivedAt: "2026-11-04" }));
+    const unarchive = archived.items.find((item) => item.id === "unarchive");
+    expect(unarchive).toMatchObject({ group: "Agent", title: "Unarchive" });
+    unarchive?.run();
+    expect(archived.unarchived).toEqual(["old"]);
+  });
+});
+
+describe("archived focused agent", () => {
+  function ids(archivedAt: string | null) {
+    const value = agent("old", {
+      archivedAt,
+      model: "best",
+      capabilities: {
+        supportsStreaming: true,
+        supportsSessionPersistence: true,
+        supportsDynamicModes: false,
+        supportsMcpServers: false,
+        supportsReasoningStream: true,
+        supportsToolInvocations: true,
+        supportsRewindConversation: true,
+      },
+      availableModes: [
+        { id: "ask", label: "Ask" },
+        { id: "auto", label: "Auto" },
+      ],
+    });
+    const source = builtinSource({
+      workspaces: [],
+      groups: [],
+      waiting: [],
+      focusedAgent: value,
+      focusedStore: timelineStore({
+        prompts: async () => ({ epoch: "e", prompts: [] }),
+        rewind: async () => {},
+        fork: async () => {
+          throw Error("Unexpected fork");
+        },
+        setThinking: async () => {},
+      }),
+      models: async () => [],
+      createAgent: {
+        providers: async () => [],
+        models: async () => [],
+        modes: async () => [],
+        create: async () => value,
+        workspaces: [],
+        defaultCwd: null,
+        opened() {},
+        failed() {},
+      },
+      prefixLabel: "Ctrl-A",
+      open() {},
+      changeLayout() {},
+      workspace() {},
+      act() {},
+      unarchive() {},
+    });
+    return source.items().map((item) => item.id);
+  }
+  const mutating = [
+    "set-mode",
+    "set-model",
+    "set-thinking",
+    "rewind",
+    "rename",
+  ];
+  it("lists Fork and Unarchive but nothing that changes the agent", () => {
+    const live = ids(null);
+    for (const id of [...mutating, "fork"]) expect(live).toContain(id);
+    const archived = ids("2026-11-04");
+    expect(archived).toContain("fork");
+    expect(archived).toContain("unarchive");
+    for (const id of mutating) expect(archived).not.toContain(id);
   });
 });

@@ -5,6 +5,7 @@ import { toBlocks } from "./blocks.js";
 import {
   combineMatches,
   createHistorySearch,
+  createRevealTracker,
   type HistoryState,
   nextTarget,
   searchStatus,
@@ -226,5 +227,62 @@ describe("history search controller", () => {
       pending: null,
       notice: "That message is no longer in the history",
     });
+  });
+});
+
+describe("reveal tracker", () => {
+  it("does nothing without history paging", () => {
+    const tracker = createRevealTracker(null);
+    tracker.reveal(3);
+    expect(tracker.getSnapshot()).toEqual({ pending: null, notice: null });
+  });
+  it("tracks the pending sequence until it is shown", () => {
+    const reveals: number[] = [];
+    const tracker = createRevealTracker(async (seq) => {
+      reveals.push(seq);
+    });
+    tracker.reveal(5);
+    expect(tracker.getSnapshot()).toEqual({ pending: 5, notice: null });
+    tracker.shown();
+    expect(tracker.getSnapshot().pending).toBeNull();
+    expect(reveals).toEqual([5]);
+  });
+  it("reports a failed reveal only while that sequence is still pending", async () => {
+    const pages = [deferred<void>(), deferred<void>()];
+    let call = 0;
+    const tracker = createRevealTracker(
+      () => pages[call++]?.promise ?? Promise.resolve(),
+    );
+    tracker.reveal(1);
+    tracker.reveal(2);
+    pages[0]?.reject(Error("stale"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(tracker.getSnapshot()).toEqual({ pending: 2, notice: null });
+    pages[1]?.reject(Error("That message is no longer in the history"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(tracker.getSnapshot()).toEqual({
+      pending: null,
+      notice: "That message is no longer in the history",
+    });
+    tracker.notify("History changed; reopen the prompt list");
+    expect(tracker.getSnapshot().notice).toBe(
+      "History changed; reopen the prompt list",
+    );
+  });
+  it("feeds the search snapshot, so search matches and prompt jumps share one page-in", () => {
+    const tracker = createRevealTracker(async () => {});
+    const search = createHistorySearch(
+      {
+        find: async () => ({ epoch: "e", seqs: [], truncated: false }),
+        reveal: async () => {},
+      },
+      tracker,
+    );
+    tracker.reveal(7);
+    expect(search.getSnapshot().pending).toBe(7);
+    search.shown();
+    expect(tracker.getSnapshot().pending).toBeNull();
   });
 });

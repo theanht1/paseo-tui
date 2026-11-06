@@ -8,17 +8,30 @@ import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CompletionPort,
   DirectoryPort,
+  HistoryEntry,
   ProviderSubagent,
   SchedulePort,
   TerminalStreamPort,
 } from "../connection/ports.js";
 import type { AgentsSnapshot } from "../state/agents-store.js";
+import { createMessageQueues } from "../state/message-queue.js";
 import type { AgentsPort } from "../state/ports.js";
 import type { ProviderSubagentStore } from "../state/provider-subagents.js";
 import type { TimelineRegistry } from "../state/timeline-registry.js";
 import { createTimelineStore } from "../state/timeline-store.js";
 import type { UsageStore } from "../state/usage-store.js";
 import { AgentPane } from "./agent/AgentPane.js";
+import { shortPath } from "./agent/agent-display.js";
+import {
+  type ArchivedViews,
+  addArchivedView,
+  historyOpenTarget,
+  mutatesAgent,
+  pruneArchivedViews,
+  removeArchivedView,
+  type UnarchiveState,
+  withArchivedViews,
+} from "./agent/archived-views.js";
 import {
   agentIndicator,
   attentionQueue,
@@ -29,35 +42,51 @@ import {
   nextAttention,
   workspaceBucket,
 } from "./agent/attention.js";
+import { contextWindow } from "./agent/context-window.js";
 import { Sidebar } from "./agent/Sidebar.js";
 import {
   type SidebarGrouping,
   sidebarSections,
 } from "./agent/sidebar-sections.js";
 import type { ThinkingPreference } from "./agent/thinking-preference.js";
+import { promptJumpStep } from "./command-center/agent-history.js";
 import { CommandCenter } from "./command-center/CommandCenter.js";
 import type { CreateDeps } from "./command-center/create-agent.js";
 import {
   type CommandRegistry,
+  type CommandStep,
   createCommandRegistry,
 } from "./command-center/registry.js";
-import { builtinSource } from "./command-center/sources.js";
+import {
+  type SessionHistory,
+  type SessionHistoryContext,
+  sessionHistoryStep,
+} from "./command-center/session-history.js";
+import {
+  builtinSource,
+  type ManageCommands,
+} from "./command-center/sources.js";
+import type { UsageConfig } from "./config/user-config.js";
 import {
   type ClipboardWriter,
   copyText,
   type SystemClipboard,
 } from "./copy/clipboard.js";
+import type { Browser } from "./file-links/browser.js";
 import { type FileLinks, FileLinksContext } from "./file-links/context.js";
 import {
+  type ChatLink,
   type FileLink,
   fileResolver,
   timelineLinks,
 } from "./file-links/links.js";
 import { createPathVerifier } from "./file-links/verify.js";
+import type { HostsPort } from "./hosts/hosts.js";
 import { BINDINGS } from "./input/bindings.js";
 import { createKeyRouter, KeyRouterContext } from "./input/key-router.js";
 import {
   type Action,
+  actionMode,
   type Binding,
   globalAction,
   interrupt as interruptMode,
@@ -65,6 +94,7 @@ import {
   paletteReturnMode,
   parsePrefix,
   type Stroke,
+  shortcutFor,
 } from "./input/keymap.js";
 import { confirmQuit } from "./input/quit-confirmation.js";
 import { useKeymap } from "./input/use-keymap.js";
@@ -132,6 +162,7 @@ import { DEFAULT_DIFF_TOOL } from "./workspace/diff-tool.js";
 import { WorkspaceTabs } from "./workspace/WorkspaceTabs.js";
 import type { WorkspaceActions } from "./workspace/workspace-actions.js";
 import type { DirectorySnapshot } from "./workspace/workspace-directory.js";
+import { DEFAULT_EDITOR } from "./workspace/workspace-editor.js";
 import {
   createWorkspaceNavigation,
   reconcileWorkspaceLayout,
@@ -150,7 +181,7 @@ export interface AppProps {
   connection: ExternalStore<ConnectionState>;
   agents: ExternalStore<AgentsSnapshot>;
   directory: ExternalStore<DirectorySnapshot>;
-  terminals?: PaseoApi["terminals"];
+  terminals?: Pick<PaseoApi["terminals"], "ref">;
   terminalStream?: TerminalStreamPort;
   management?: WorkspaceActions;
   refresh?(): Promise<void>;
@@ -173,20 +204,38 @@ export interface AppProps {
   clipboard?: ClipboardWriter;
   /** The local clipboard (pbcopy, wl-copy, xclip…); OSC 52 is still sent alongside. */
   systemClipboard?: SystemClipboard;
+  /** Opens chat URLs (F hints, clicks) in the local default browser. */
+  browser?: Browser;
+  /** True when the agent runs on another machine, so its `localhost` is not this one. */
+  isRemoteAgent?(agentId: string): boolean;
   /** Provider-owned subagents; absent when the daemon lacks `providerSubagents`. */
-  subagents?: ProviderSubagentStore;
+  subagents?: Pick<
+    ProviderSubagentStore,
+    "getSnapshot" | "subscribe" | "track" | "timelinePort"
+  >;
   /** Desktop notification for an agent that starts waiting while you look elsewhere. */
   notify?(notification: AttentionNotification): void;
   /** Shell command the diff tab runs in the workspace (`g d`). */
   diffTool?: string;
+  /** Shell command the editor tab runs on the workspace (`g e`). */
+  editor?: string;
   /** The effective key table (defaults plus config `keys`). */
   bindings?: readonly Binding[];
   /** Per-workspace split layouts and tabs, kept across restarts. */
   layouts?: LayoutMemory;
   /** Provider usage meters; absent when the daemon reports no usage. */
   usage?: UsageStore;
+  usageConfig?: UsageConfig;
   /** Daemon schedules for the Command Center's Schedules view. */
   schedules?: SchedulePort;
+  /** Past sessions across hosts (`H`); archived ones open view-only. */
+  history?: SessionHistory;
+  /** True while the jump modifier is held; the sidebar then shows each workspace's number. */
+  positionHints?: ExternalStore<boolean>;
+  /** Every host; absent with a single daemon connection (tests). */
+  hosts?: HostsPort;
+  /** The workspace the window shows, so host-less requests go to its host. */
+  onActiveWorkspace?(workspaceId: string | null): void;
   onExit(): void;
 }
 export function App({
@@ -210,13 +259,21 @@ export function App({
   editPrompt,
   clipboard,
   systemClipboard,
+  browser,
+  isRemoteAgent = () => false,
   subagents,
   notify,
   diffTool = DEFAULT_DIFF_TOOL,
+  editor = DEFAULT_EDITOR,
   bindings = BINDINGS,
   layouts,
   usage,
+  usageConfig,
   schedules,
+  history,
+  positionHints = NO_HINTS,
+  hosts,
+  onActiveWorkspace,
 }: AppProps) {
   const renderer = useRenderer();
   const router = useMemo(() => createKeyRouter(), []);
@@ -263,6 +320,10 @@ export function App({
     [commands],
   );
   const returnMode = useRef<Mode>({ kind: "normal", pending: "" });
+  /** A key binding's label from the effective table (`g d`, `Ctrl-B z`). */
+  function shortcut(action: Action) {
+    return shortcutFor(action, bindings, prefixLabel(prefix));
+  }
   const context = useContext(ThemeContext);
   if (!context) throw Error("ThemeContext required");
   const { theme } = context;
@@ -322,6 +383,26 @@ export function App({
   >(new Map());
   /** Provider subagent chats opened as tabs; client-side, closing archives nothing. */
   const [subagentTabs, setSubagentTabs] = useState<readonly SubagentTab[]>([]);
+  const [archivedViews, setArchivedViews] = useState<ArchivedViews>(new Map());
+  const [unarchiving, setUnarchiving] = useState<
+    ReadonlyMap<string, UnarchiveState>
+  >(new Map());
+  const archivedList = useMemo(
+    () => [...archivedViews.values()],
+    [archivedViews],
+  );
+  /** Listed agents plus open archived views: what panes and tabs look agents up in. */
+  const viewable = useMemo(
+    () => withArchivedViews(flat, archivedViews),
+    [flat, archivedViews],
+  );
+  useEffect(() => {
+    // An unarchived agent's live listing takes over its view (same tab slot).
+    setArchivedViews((previous) => pruneArchivedViews(previous, flat));
+    setUnarchiving((previous) => pruneArchivedViews(previous, flat));
+  }, [flat]);
+  /** The Command Center's first step when a key opens it on one (History). */
+  const [paletteStep, setPaletteStep] = useState<CommandStep | undefined>();
   const [focus, setFocus] = useState<Focus>({ pane: "list" }),
     [mode, setMode] = useState<Mode>({ kind: "normal", pending: "" });
   const [promptEdit, setPromptEdit] = useState(0);
@@ -338,6 +419,8 @@ export function App({
   );
   useEffect(() => () => paneTimelines.close(), [paneTimelines]);
   const stores = useStore(paneTimelines);
+  const queues = useMemo(() => createMessageQueues(timelines), [timelines]);
+  useEffect(() => () => queues.close(), [queues]);
   const pending = useMemo(() => createPendingAgents(), []);
   const [createError, setCreateError] = useState<{ message: string } | null>(
     null,
@@ -353,6 +436,8 @@ export function App({
   );
   /** Editor terminal tabs; when one exits, input leaves with it. */
   const editorTabs = useRef(new Set<string>());
+  /** The file each editor tab was opened with, by tab key. */
+  const editorFiles = useRef(new Map<string, string>());
   const quitDeadline = useRef<number | null>(null);
   const [quitNotice, setQuitNotice] = useState<number | null>(null);
   const [requestedWidth, setRequestedWidth] = useState<number | undefined>();
@@ -377,21 +462,21 @@ export function App({
   }
   const all = panes(layout);
   useEffect(() => {
-    pending.prune(panes(layout), flat, Date.now());
+    pending.prune(panes(layout), viewable, Date.now());
     let timer: ReturnType<typeof setTimeout> | undefined;
     // Timers can fire a little before Date.now() reaches the expiry; sweep again until none is fresh.
     function sweep() {
       const now = Date.now();
-      setLayout((previous) => pending.clearMissing(previous, flat, now));
+      setLayout((previous) => pending.clearMissing(previous, viewable, now));
       const wait = pending.untilExpiry(now);
       if (wait !== null) timer = setTimeout(sweep, wait);
     }
     sweep();
     return () => clearTimeout(timer);
-  }, [pending, flat, layout]);
+  }, [pending, viewable, layout]);
   useEffect(() => {
-    paneTimelines.sync(panes(layout), flat);
-  }, [paneTimelines, layout, flat]);
+    paneTimelines.sync(panes(layout), viewable);
+  }, [paneTimelines, layout, viewable]);
   useEffect(() => {
     if (focus.pane !== "prompt") setMode({ kind: "normal", pending: "" });
   }, [focus]);
@@ -408,17 +493,19 @@ export function App({
     workspaces.find((workspace) => workspace.id === activeWorkspace)?.id ??
     workspaces[0]?.id ??
     null;
+  useEffect(() => {
+    onActiveWorkspace?.(activeWorkspaceId);
+  }, [onActiveWorkspace, activeWorkspaceId]);
   const tabs = workspaceTabs(
     activeWorkspaceId,
     flat,
     visibleTerminals,
     subagentTabs,
+    archivedList,
   );
   const current = all.find((p) => p.id === layout.focusedId);
   useEffect(() => {
-    const assigned = flat.find(
-      (agent) => agent.id === current?.agentId && agent.archivedAt == null,
-    );
+    const assigned = viewable.find((agent) => agent.id === current?.agentId);
     if (
       assigned &&
       workspaces.some((workspace) => workspace.id === assigned.workspaceId) &&
@@ -436,6 +523,7 @@ export function App({
       flat,
       visibleTerminals,
       subagentTabs,
+      archivedList,
     );
     if (
       before &&
@@ -447,9 +535,10 @@ export function App({
     }
     setLayout((previous) =>
       reconcileWorkspaceLayout(previous, {
-        agents: flat,
+        agents: viewable,
         tab: next.tab,
-        pendingAgentIds: new Set(pending.ids()),
+        // Archived views stay put like pending agents, even if their workspace went away.
+        pendingAgentIds: new Set([...pending.ids(), ...archivedViews.keys()]),
         isWorkspaceRemoved: navigation.isWorkspaceRemoved,
       }),
     );
@@ -458,6 +547,9 @@ export function App({
     pending,
     workspaces,
     flat,
+    viewable,
+    archivedList,
+    archivedViews,
     visibleTerminals,
     subagentTabs,
     current?.agentId,
@@ -556,8 +648,9 @@ export function App({
     ),
     grouping,
   );
-  /** Workspaces in sidebar order: what j/k, [ ] and Alt-digits walk. */
+  /** Workspaces in sidebar order: what j/k, [ ] and Cmd/Alt-digits walk. */
   const sidebarOrder = sections.flatMap((section) => section.workspaces);
+  const hinting = useStore(positionHints);
   const waiting = attentionQueue(liveAgents, acknowledged).map((agent) => ({
     agent,
     reason: attentionWait(agent, acknowledged)?.body ?? "",
@@ -583,8 +676,56 @@ export function App({
     if (current?.agentId === agent.id) {
       timelines.reopen(agent.id);
       const request = timeline?.getSnapshot().pendingPermissions[0];
-      if (request) setFocus({ pane: "permission", requestId: request.id });
+      // An archived view shows no permission prompts to answer.
+      if (request && agent.archivedAt == null)
+        setFocus({ pane: "permission", requestId: request.id });
     }
+  }
+  /** A History row: a listed live agent opens as usual, anything else as a view-only archived view. */
+  function openFromHistory({ agent, workspaceName }: HistoryEntry) {
+    reopenAgentTab(agent.id);
+    const target = historyOpenTarget(agent, flat, workspaces);
+    if (target.kind === "live") {
+      open(target.agent);
+      return;
+    }
+    setArchivedViews((previous) => addArchivedView(previous, target.agent));
+    setUnarchiving((previous) => {
+      const next = new Map(previous);
+      next.delete(target.agent.id);
+      return next;
+    });
+    if (target.workspace) openWorkspace(target.workspace);
+    else
+      setNotice({
+        text: `Workspace ${workspaceName ?? shortPath(agent.cwd)} is archived; showing the session here`,
+      });
+    // View-only: closing the Command Center must not land in insert mode.
+    returnMode.current = { kind: "normal", pending: "" };
+    open(target.agent);
+  }
+  /** A tab closed this run (archiving its agent) comes back once History opens or unarchives it. */
+  function reopenAgentTab(agentId: string) {
+    setClosedTabs((previous) => {
+      if (!previous.has(`agent:${agentId}`)) return previous;
+      const next = new Set(previous);
+      next.delete(`agent:${agentId}`);
+      return next;
+    });
+  }
+  function setUnarchiveState(agentId: string, state: UnarchiveState) {
+    setUnarchiving((previous) => new Map(previous).set(agentId, state));
+  }
+  function unarchive(agent: PaseoAgent) {
+    if (!history || unarchiving.get(agent.id)?.kind === "pending") return;
+    setUnarchiveState(agent.id, { kind: "pending" });
+    reopenAgentTab(agent.id);
+    history.unarchive(agent.id).catch((error: unknown) =>
+      setUnarchiveState(agent.id, {
+        kind: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
   }
   /** The tab a pane shows: its provider subagent's while one is open, else its agent's. */
   function paneTabKey(pane: PaneNode | undefined): string | null {
@@ -614,7 +755,13 @@ export function App({
     }
   }
   function openWorkspace(workspace: WorkspaceRow) {
-    const tab = navigation.selectWorkspace(workspace, flat, visibleTerminals);
+    const tab = navigation.selectWorkspace(
+      workspace,
+      flat,
+      visibleTerminals,
+      subagentTabs,
+      archivedList,
+    );
     if (tab) openTab(tab);
     else
       setLayout((l) => (current?.agentId ? clearAgent(l, current.agentId) : l));
@@ -734,7 +881,13 @@ export function App({
   /** A pane's strip lists the tabs of its agent's workspace (the active one when empty). */
   function paneTabs(agent: PaseoAgent | undefined) {
     return agent?.workspaceId && agent.workspaceId !== activeWorkspaceId
-      ? workspaceTabs(agent.workspaceId, flat, visibleTerminals, subagentTabs)
+      ? workspaceTabs(
+          agent.workspaceId,
+          flat,
+          visibleTerminals,
+          subagentTabs,
+          archivedList,
+        )
       : tabs;
   }
   const managementInputs: ManagementContext = {
@@ -748,6 +901,14 @@ export function App({
     catalog: catalog ?? null,
     thinkingPreference,
     actions: management,
+    ...(hosts ? { hosts } : {}),
+    ...(directoryState.hosts
+      ? {
+          placements: (projectId: string) =>
+            directoryState.hosts?.placements.get(projectId) ?? [],
+        }
+      : {}),
+    notify: (text) => setNotice({ text }),
     refresh: async () => {
       await refresh?.();
     },
@@ -755,6 +916,14 @@ export function App({
       setArchivedWorkspaces((previous) => new Set([...previous, workspace.id]));
     },
     closed(tab) {
+      if (tab.kind === "agent" && archivedViews.has(tab.agent.id)) {
+        setArchivedViews((previous) =>
+          removeArchivedView(previous, tab.agent.id),
+        );
+        setMode({ kind: "normal", pending: "" });
+        setFocus({ pane: "timeline" });
+        return;
+      }
       if (tab.kind === "subagent") {
         setSubagentTabs((previous) =>
           previous.filter((candidate) => candidate.key !== tab.key),
@@ -771,6 +940,8 @@ export function App({
       setFocus({ pane: "timeline" });
     },
     opened(result) {
+      if (result.tab && result.file)
+        editorFiles.current.set(result.tab.key, result.file);
       if (result.tab?.kind === "terminal" && result.input) {
         editorTabs.current.add(result.tab.key);
         navigation.selectTab(result.tab, tabKey ?? undefined);
@@ -801,8 +972,26 @@ export function App({
       workspaces.find((workspace) => workspace.id === activeWorkspaceId);
     if (workspace) manager.openFile(workspace, link);
   }
-  const openFileRef = useRef(openFile);
-  openFileRef.current = openFile;
+  function openLink(agentId: string, link: ChatLink) {
+    if (link.kind === "file") {
+      openFile(agentId, link);
+      return;
+    }
+    if (!browser) {
+      setNotice({ text: `No browser to open ${link.url}` });
+      return;
+    }
+    const local =
+      isRemoteAgent(agentId) && LOCALHOST.test(new URL(link.url).hostname)
+        ? "Opened locally; localhost refers to this machine"
+        : null;
+    void browser.open(link.url).then((error) => {
+      const text = error ?? local;
+      if (text) setNotice({ text });
+    });
+  }
+  const openFileRef = useRef(openLink);
+  openFileRef.current = openLink;
   const fileLinks = useMemo<FileLinks | null>(
     () =>
       verifier
@@ -815,7 +1004,19 @@ export function App({
     [verifier],
   );
   function act(action: Action) {
+    if (focusedArchived && mutatesAgent(action)) {
+      viewOnly();
+      return;
+    }
+    // From the Command Center, an action that starts a mode returns to it on close.
+    const entered = mode.kind === "palette" ? actionMode(action) : null;
+    if (entered) returnMode.current = entered;
     switch (action.type) {
+      case "exit":
+        // Quitting loses queued messages: ask for the Ctrl-C confirmation instead.
+        if (queues.total()) interrupt();
+        else onExit();
+        break;
       case "workspace.create":
         manager.createWorkspace();
         break;
@@ -841,10 +1042,15 @@ export function App({
         setHelp(false);
         manager.openDiffTool(diffTool, visibleTerminals);
         break;
+      case "workspace.editor":
+        setHelp(false);
+        manager.openEditor(editor, visibleTerminals);
+        break;
       case "palette.open":
         manager.close();
         setHelp(false);
         if (mode.kind !== "palette") {
+          setPaletteStep(undefined);
           returnMode.current = paletteReturnMode(mode);
           setMode({ kind: "palette" });
         }
@@ -856,11 +1062,10 @@ export function App({
         setMode({ kind: "normal", pending: "" });
         break;
       case "copy.start":
-        if (terminalId || !timeline) setMode({ kind: "normal", pending: "" });
-        else {
-          if (mode.kind === "palette") returnMode.current = { kind: "copy" };
-          controls.current.get(layout.focusedId)?.act(action);
-        }
+        if (terminalId || !timeline) {
+          returnMode.current = { kind: "normal", pending: "" };
+          setMode({ kind: "normal", pending: "" });
+        } else controls.current.get(layout.focusedId)?.act(action);
         break;
       case "prompt.edit":
         if (terminalId || !timeline || !promptEditor) break;
@@ -874,8 +1079,10 @@ export function App({
         setMode({ kind: "normal", pending: "" });
         break;
       case "hint.start":
-        if (terminalId || !timeline) setMode({ kind: "normal", pending: "" });
-        else controls.current.get(layout.focusedId)?.act(action);
+        if (terminalId || !timeline) {
+          returnMode.current = { kind: "normal", pending: "" };
+          setMode({ kind: "normal", pending: "" });
+        } else controls.current.get(layout.focusedId)?.act(action);
         break;
       case "quit":
         interrupt();
@@ -937,6 +1144,49 @@ export function App({
         break;
       case "insert":
         if (timeline || terminalId) setFocus({ pane: "prompt" });
+        break;
+      case "history.open":
+        if (!history || mode.kind === "palette") break;
+        manager.close();
+        setHelp(false);
+        setPaletteStep(sessionHistoryStep(historyContext(history)));
+        returnMode.current = paletteReturnMode(mode);
+        setMode({ kind: "palette" });
+        break;
+      case "agent.unarchive":
+        if (focusedArchived) unarchive(focusedArchived);
+        break;
+      case "prompts.open": {
+        if (mode.kind === "palette" || terminalId || !timeline || !focusedAgent)
+          break;
+        const focusedPane = all.find((pane) => pane.id === layout.focusedId);
+        if (focusedPane && providerView(focusedPane)) {
+          setNotice({ text: "Open the parent agent to browse its prompts" });
+          break;
+        }
+        const step = promptJumpStep({
+          agent: focusedAgent,
+          store: timeline,
+          goto: gotoPrompt,
+        });
+        if (!step) {
+          setNotice({ text: "Update the Paseo daemon to browse prompts" });
+          break;
+        }
+        manager.close();
+        setHelp(false);
+        setPaletteStep(step);
+        returnMode.current = paletteReturnMode(mode);
+        setMode({ kind: "palette" });
+        break;
+      }
+      case "queue.edit":
+        if (terminalId || !timeline) break;
+        // The queued text lands in the prompt, so editing continues there.
+        if (mode.kind === "palette") returnMode.current = { kind: "insert" };
+        else setMode({ kind: "insert" });
+        setFocus({ pane: "prompt" });
+        controls.current.get(layout.focusedId)?.act(action);
         break;
       case "normal":
         setFocus({ pane: "timeline" });
@@ -1015,7 +1265,24 @@ export function App({
     : undefined;
   const focusedAgent = terminalId
     ? undefined
-    : flat.find((a) => a.id === current?.agentId);
+    : viewable.find((a) => a.id === current?.agentId);
+  const focusedArchived =
+    focusedAgent?.archivedAt != null ? focusedAgent : undefined;
+  function viewOnly() {
+    returnMode.current = { kind: "normal", pending: "" };
+    setMode({ kind: "normal", pending: "" });
+    setFocus({ pane: "timeline" });
+    setNotice({ text: "This agent is archived; press u to unarchive" });
+  }
+  /** Scrolls the focused pane to a prompt of the prompt index `epoch`. */
+  function gotoPrompt(epoch: string, seq: number) {
+    controls.current
+      .get(layout.focusedId)
+      ?.act({ type: "timeline.goto", epoch, seq });
+  }
+  function historyContext(source: SessionHistory): SessionHistoryContext {
+    return { history: source, now: Date.now, open: openFromHistory };
+  }
   const chatFiles =
     verifier && focusedAgent && timeline
       ? {
@@ -1031,16 +1298,47 @@ export function App({
           open: (link: FileLink) => openFile(focusedAgent.id, link),
         }
       : undefined;
+  function manageCommands(): ManageCommands {
+    return {
+      workspace:
+        workspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
+        null,
+      hosts: hosts !== undefined,
+      archiveWorkspace: (workspace) => manager.archiveWorkspace(workspace),
+      addProject: () => manager.addProject(),
+      listProjects: () => manager.listProjects(),
+      removeProject: () => manager.removeProject(),
+      listHosts: () => manager.listHosts(),
+      addHost: () => manager.addHost(),
+      forkWorkspace: (seed) => manager.seededWorkspaceStep(seed),
+    };
+  }
+  function workspacePaths() {
+    const workspace = workspaces.find(
+      (candidate) => candidate.id === activeWorkspaceId,
+    );
+    return {
+      workspace: workspace
+        ? (workspace.workspaceDirectory ?? workspace.projectRootPath)
+        : null,
+      file: terminalId
+        ? (editorFiles.current.get(`terminal:${terminalId}`) ?? null)
+        : null,
+      copy,
+    };
+  }
   const sourceContext = useRef({
     files: chatFiles,
     createAgent,
     groups,
     waiting,
     workspaces,
-    focusedAgent: terminalId
-      ? undefined
-      : flat.find((a) => a.id === current?.agentId),
+    focusedAgent,
     focusedStore: terminalId ? null : timeline,
+    queued:
+      focusedAgent && !terminalId
+        ? queues.forAgent(focusedAgent).getSnapshot().items.length
+        : 0,
     models: catalog?.models,
     prefixLabel: prefixLabel(prefix),
     bindings,
@@ -1054,6 +1352,14 @@ export function App({
         createAgent,
       }),
     usage,
+    usageConfig,
+    paths: workspacePaths(),
+    manage: manageCommands(),
+    history: history && historyContext(history),
+    unarchive() {
+      if (focusedArchived) unarchive(focusedArchived);
+    },
+    goto: gotoPrompt,
     open,
     changeLayout: setLayout,
     workspace(workspace: WorkspaceRow) {
@@ -1069,10 +1375,12 @@ export function App({
     groups,
     waiting,
     workspaces,
-    focusedAgent: terminalId
-      ? undefined
-      : flat.find((a) => a.id === current?.agentId),
+    focusedAgent,
     focusedStore: terminalId ? null : timeline,
+    queued:
+      focusedAgent && !terminalId
+        ? queues.forAgent(focusedAgent).getSnapshot().items.length
+        : 0,
     models: catalog?.models,
     prefixLabel: prefixLabel(prefix),
     bindings,
@@ -1086,6 +1394,14 @@ export function App({
         createAgent,
       }),
     usage,
+    usageConfig,
+    paths: workspacePaths(),
+    manage: manageCommands(),
+    history: history && historyContext(history),
+    unarchive() {
+      if (focusedArchived) unarchive(focusedArchived);
+    },
+    goto: gotoPrompt,
     open,
     workspace(workspace: WorkspaceRow) {
       setSidebarVisible(true);
@@ -1212,6 +1528,18 @@ export function App({
                 onContext={(workspace, x, y) =>
                   manager.menu({ kind: "workspace", workspace }, x, y)
                 }
+                {...(directoryState.hosts
+                  ? { hosts: directoryState.hosts.labels }
+                  : {})}
+                positions={
+                  hinting
+                    ? new Map(
+                        sidebarOrder
+                          .slice(0, 9)
+                          .map((workspace, index) => [workspace.id, index + 1]),
+                      )
+                    : undefined
+                }
               />
             ) : null}
             <box width={area.width} height={area.height} flexDirection="column">
@@ -1238,6 +1566,12 @@ export function App({
                   onFocus={() => {
                     if (focus.pane === "list") setFocus({ pane: "timeline" });
                   }}
+                  onExit={() => {
+                    // Close now; the daemon's terminal list drops it a moment later.
+                    const key = `terminal:${terminalHandle.id}`;
+                    setClosedTabs((previous) => new Set([...previous, key]));
+                    void refresh?.();
+                  }}
                   focused={
                     !overlayOpen &&
                     focus.pane === "prompt" &&
@@ -1251,7 +1585,7 @@ export function App({
                     const rect =
                       layout.zoomedId === pane.id ? area : rects.get(pane.id);
                     if (!rect) return null;
-                    const agent = flat.find((a) => a.id === pane.agentId);
+                    const agent = viewable.find((a) => a.id === pane.agentId);
                     const store = stores.get(`${pane.id}:${pane.agentId}`);
                     const focusedPane = pane.id === layout.focusedId;
                     const provider = providerView(pane);
@@ -1387,6 +1721,13 @@ export function App({
                                   : new Map(previous).set(pane.id, status),
                               )
                             }
+                            unarchive={unarchiving.get(agent.id)}
+                            onUnarchive={() => unarchive(agent)}
+                            queue={queues.forAgent(agent)}
+                            shortcut={shortcut}
+                            stopShortcut={
+                              shortcut({ type: "stop" }) ?? "the stop key"
+                            }
                           />
                         ) : (
                           <text fg={foregroundProp(theme.fg)}>
@@ -1428,7 +1769,9 @@ export function App({
           {mode.kind === "palette" ? (
             <CommandCenter
               registry={registry}
+              initialStep={paletteStep}
               completions={completions}
+              shortcut={shortcut}
               onClose={() => setMode(returnMode.current)}
             />
           ) : null}
@@ -1445,6 +1788,7 @@ export function App({
             label={statusLabel({
               label,
               quitPending: quitNotice !== null,
+              queued: quitNotice === null ? 0 : queues.total(),
               notice: notice?.text ?? null,
               operation:
                 managementState.operation.kind === "idle"
@@ -1454,6 +1798,8 @@ export function App({
             })}
             connection={connection}
             usage={usage}
+            usageConfig={usageConfig}
+            contextWindow={contextWindow(focusedAgent?.lastUsage)}
             timeline={terminalId ? null : timeline}
             mode={mode}
             terminalInput={terminalInput}
@@ -1467,6 +1813,11 @@ export function App({
   );
 }
 const DEFAULT_PREFIX = parsePrefix("C-b");
+const LOCALHOST = /^(localhost|127(\.\d+){3}|\[::1\]|0\.0\.0\.0)$/i;
+const NO_HINTS: ExternalStore<boolean> = {
+  subscribe: () => () => {},
+  getSnapshot: () => false,
+};
 const NO_PROVIDER_SUBAGENTS: readonly ProviderSubagent[] = [];
 const NO_SUBAGENTS: ExternalStore<readonly ProviderSubagent[]> = {
   subscribe: () => () => {},

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
 it("opens the diff tool in a workspace tab with gd, refocuses it, and returns when it exits", async () => {
@@ -14,6 +14,7 @@ it("opens the diff tool in a workspace tab with gd, refocuses it, and returns wh
   const tool = { id: "lg", workspaceId: "one", cwd: "/repo/one", name: "tig" };
   let setTerminals: (terminals: (typeof shell)[]) => void = () => {};
   const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
     baseBranches: async () => ({ branches: [], defaultBranch: null }),
     createWorkspace: async () => {
       throw Error("Unexpected");
@@ -53,10 +54,8 @@ it("opens the diff tool in a workspace tab with gd, refocuses it, and returns wh
     {},
     undefined,
     {
-      list: async () => ({ requestId: "r", entries: [] }),
       ref: (terminal) =>
         handle(typeof terminal === "string" ? terminal : terminal.id),
-      create: async () => handle("lg"),
     },
     management,
     undefined,
@@ -97,4 +96,83 @@ it("opens the diff tool in a workspace tab with gd, refocuses it, and returns wh
   await settle();
   expect(app.lastFrame()).not.toContain("tig main view");
   expect(app.lastFrame()).toContain("NORMAL");
+});
+
+it("closes the tab as soon as the tool's process exits, before the directory catches up", async () => {
+  const shell = {
+    id: "shell",
+    workspaceId: "one",
+    cwd: "/repo/one",
+    name: "Shell",
+  };
+  const tool = { id: "lg", workspaceId: "one", cwd: "/repo/one", name: "tig" };
+  let refreshes = 0;
+  let setTerminals: (terminals: (typeof shell)[]) => void = () => {};
+  const handle = (id: string) => ({
+    id,
+    current: () => null,
+    refresh: async () => null,
+    write: (data: string) => data.length,
+    sendKeys: () => 0,
+    capture: async () => ({
+      terminalId: id,
+      requestId: "r",
+      lines: [id === "lg" ? "tig main view" : "$"],
+      totalLines: 1,
+    }),
+    kill: async () => {},
+  });
+  const result = await setup(
+    agents,
+    24,
+    false,
+    {},
+    undefined,
+    {
+      ref: (terminal) =>
+        handle(typeof terminal === "string" ? terminal : terminal.id),
+    },
+    {
+      ...NO_PROJECT_ACTIONS,
+      baseBranches: async () => ({ branches: [], defaultBranch: null }),
+      createWorkspace: async () => {
+        throw Error("Unexpected");
+      },
+      createAgent: async () => agent("a"),
+      createTerminal: async () => {
+        throw Error("Unexpected");
+      },
+      openFile: async () => {
+        setTerminals([shell, tool]);
+        return tool;
+      },
+      renameWorkspace: async () => {},
+      closeTab: async () => {},
+      archiveWorkspace: async () => {},
+      renameTab: async () => {},
+    },
+    undefined,
+    {
+      diffTool: "tig status",
+      refresh: async () => {
+        refreshes++;
+      },
+    },
+  );
+  setTerminals = result.setTerminals;
+  const { app, test } = result;
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "Alpha agent");
+  for (const key of ["g", "d"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  await settleUntil(app.lastFrame, "tig main view");
+  const before = refreshes;
+  result.exitTerminal("lg");
+  await settle();
+  expect(app.lastFrame()).not.toContain("tig main view");
+  expect(app.lastFrame()).toContain("NORMAL");
+  expect(test.renderer.root.findDescendantById("tab:terminal:lg")).toBeFalsy();
+  expect(refreshes).toBeGreaterThan(before);
 });

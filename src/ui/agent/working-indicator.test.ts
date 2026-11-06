@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createWorkingIndicator } from "./working-indicator.js";
+import { createWorkingIndicator, stopText } from "./working-indicator.js";
 
 it("animates while mounted and stops on disposal", () => {
   vi.useFakeTimers();
@@ -24,4 +24,11 @@ it("includes elapsed time for a running turn", () => {
   expect(indicator.elapsed()).toBe("1m 7s");
   stop();
   vi.useRealTimers();
+});
+it("describes each stop phase, offering a retry once it stalls", () => {
+  expect(stopText("requested", "Ctrl-X")).toBe("Stopping…");
+  expect(stopText("acknowledged", "Ctrl-X")).toBe("Stop requested.");
+  expect(stopText("stalled", "Ctrl-Q")).toBe(
+    "Agent still stopping; press Ctrl-Q again to retry",
+  );
 });

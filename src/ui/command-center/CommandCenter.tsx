@@ -1,5 +1,9 @@
-import { TextAttributes } from "@opentui/core";
-import { useRenderer, useTerminalDimensions } from "@opentui/react";
+import {
+  decodePasteBytes,
+  InputRenderable,
+  TextAttributes,
+} from "@opentui/core";
+import { usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
 import {
   Fragment,
   useContext,
@@ -10,6 +14,7 @@ import {
 } from "react";
 import type { CompletionPort } from "../../connection/ports.js";
 import { useKeyOwner } from "../input/key-router.js";
+import type { Action } from "../input/keymap.js";
 import {
   CLOSED_COMPLETIONS,
   createCompletionStore,
@@ -20,11 +25,13 @@ import {
   ThemeContext,
 } from "../render/theme.js";
 import { useStore } from "../use-store.js";
+import { paletteSize } from "./palette-size.js";
 import {
   type CommandItem,
   type CommandRegistry,
   type CommandStep,
   rankCommands,
+  rowShortcut,
 } from "./registry.js";
 import { back, breadcrumb, push, type StackEntry } from "./steps.js";
 export function CommandCenter({
@@ -32,9 +39,12 @@ export function CommandCenter({
   initialStep,
   title = "Command Center",
   completions,
+  shortcut = NO_SHORTCUT,
   onClose,
 }: {
   registry: CommandRegistry;
+  /** Labels an item's equivalent key binding, e.g. `g d`; none without it. */
+  shortcut?(action: Action): string | null;
   initialStep?: CommandStep;
   title?: string;
   /** Serves `/` and `@` suggestions for input steps that ask for them. */
@@ -43,11 +53,21 @@ export function CommandCenter({
 }) {
   const renderer = useRenderer();
   const [previousFocus] = useState(() => renderer.currentFocusedRenderable);
+  /** Every input this has drawn (one per step); React clears refs before cleanup runs. */
+  const inputs = useRef(new Set<InputRenderable>());
   useEffect(
     () => () => {
-      if (previousFocus && !previousFocus.isDestroyed) previousFocus.focus();
+      // Hand focus back only if it is still ours: a dialog this opened (Add host…)
+      // already focused its own input and must keep it.
+      const now = renderer.currentFocusedRenderable;
+      const ours =
+        !now ||
+        now.isDestroyed ||
+        (now instanceof InputRenderable && inputs.current.has(now));
+      if (ours && previousFocus && !previousFocus.isDestroyed)
+        previousFocus.focus();
     },
-    [previousFocus],
+    [previousFocus, renderer],
   );
   const context = useContext(ThemeContext);
   if (!context) throw Error("ThemeContext required");
@@ -90,12 +110,40 @@ export function CommandCenter({
       active = false;
     };
   }, [step]);
+  useEffect(() => {
+    if (step?.kind !== "search") return;
+    let active = true;
+    const timer = setTimeout(() => {
+      step.search(query).then(
+        (items) => {
+          if (active) setChoices({ kind: "ready", items });
+        },
+        (error: unknown) => {
+          if (active)
+            setChoices({
+              kind: "error",
+              message: error instanceof Error ? error.message : String(error),
+            });
+        },
+      );
+    }, SEARCH_DELAY_MS);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [step, query]);
+  const listed = step?.kind === "choice" || step?.kind === "search";
   const candidates = step
-    ? step.kind === "choice" && choices.kind === "ready"
+    ? listed && choices.kind === "ready"
       ? choices.items
       : []
     : registry.items();
-  const results = rankCommands(candidates, query);
+  function rank(items: readonly CommandItem[], text: string) {
+    return step?.kind === "search"
+      ? items.map((item) => ({ item, titleRanges: [] }))
+      : rankCommands(items, text);
+  }
+  const results = rank(candidates, query);
   const completion = useMemo(
     () =>
       step?.kind === "input" && step.completion && completions
@@ -117,6 +165,7 @@ export function CommandCenter({
   const selection = useRef(index);
   selection.current = index;
   function change(query: string, selected: number) {
+    setMissing(null);
     const current = stackRef.current;
     const last = current.at(-1);
     if (last) {
@@ -142,6 +191,7 @@ export function CommandCenter({
     setChoices({ kind: "loading" });
   }
   function goBack() {
+    setMissing(null);
     const current = stackRef.current;
     if (!current.length || (initialStep && current.length === 1)) {
       onClose();
@@ -152,22 +202,52 @@ export function CommandCenter({
     setStack(next);
   }
   const boxWidth = Math.max(1, Math.floor(width * 0.6));
-  const boxHeight = Math.min(20, height);
-  const capacity = Math.max(1, Math.floor((boxHeight - 4) / 3));
+  const { height: boxHeight, capacity } = paletteSize(
+    height,
+    step?.kind === "search" && step.tall === true,
+  );
   const start = Math.max(0, index - capacity + 1);
   function run(at: number) {
     const latest = stackRef.current.at(-1)?.query ?? rootRef.current.query;
-    const row = (latest === query ? results : rankCommands(candidates, latest))[
-      at
-    ];
+    const row = (latest === query ? results : rank(candidates, latest))[at];
     if (!row) return;
     proceed(row.item.run());
   }
+  const [missing, setMissing] = useState<string | null>(null);
   function submitInput() {
-    if (step?.kind === "input")
-      proceed(step.submit(stackRef.current.at(-1)?.query ?? ""));
+    if (step?.kind !== "input") return;
+    const value = stackRef.current.at(-1)?.query ?? "";
+    if (step.required && !value.trim()) {
+      setMissing(`${step.required} is required`);
+      return;
+    }
+    setMissing(null);
+    proceed(step.submit(value));
   }
+  const secret = step?.kind === "input" && step.secret === true;
+  usePaste((event) => {
+    if (!secret) return;
+    event.preventDefault();
+    const text = decodePasteBytes(event.bytes).replace(/[\r\n]+/g, "");
+    change((stackRef.current.at(-1)?.query ?? "") + text, 0);
+  });
   useKeyOwner(true, (stroke) => {
+    // A secret field is drawn as dots, so it edits its value here instead of in an <input>.
+    if (secret && stroke.name !== "return" && stroke.name !== "escape") {
+      const value = stackRef.current.at(-1)?.query ?? "";
+      if (stroke.name === "backspace")
+        change(Array.from(value).slice(0, -1).join(""), 0);
+      else if (stroke.ctrl && stroke.name === "u") change("", 0);
+      else if (
+        !stroke.ctrl &&
+        !stroke.meta &&
+        !stroke.super &&
+        Array.from(stroke.sequence).length === 1 &&
+        !/\p{Cc}/u.test(stroke.sequence)
+      )
+        change(value + stroke.sequence, 0);
+      return true;
+    }
     if (completion && popup.kind === "open") {
       if (stroke.name === "down" || (stroke.ctrl && stroke.name === "n")) {
         completion.move(1);
@@ -261,8 +341,24 @@ export function CommandCenter({
               Confirm · y confirm · n/Esc back
             </text>
           </box>
+        ) : secret ? (
+          <text
+            id="command:secret"
+            height={1}
+            wrapMode="none"
+            fg={foregroundProp(query ? theme.fg : theme.muted)}
+          >
+            {query
+              ? `${"•".repeat(Array.from(query).length)}▌`
+              : step?.kind === "input"
+                ? step.placeholder
+                : ""}
+          </text>
         ) : (
           <input
+            ref={(node: InputRenderable | null) => {
+              if (node) inputs.current.add(node);
+            }}
             key={stack.length}
             textColor={foregroundProp(theme.fg)}
             focusedTextColor={foregroundProp(theme.fg)}
@@ -271,7 +367,9 @@ export function CommandCenter({
             placeholderColor={foregroundProp(theme.muted)}
             focused
             placeholder={
-              step?.kind === "input" ? step.placeholder : "Search commands…"
+              step?.kind === "input" || step?.kind === "search"
+                ? step.placeholder
+                : "Search commands…"
             }
             value={query}
             onInput={setInput}
@@ -327,6 +425,11 @@ export function CommandCenter({
             ))}
           </box>
         ) : null}
+        {missing ? (
+          <text id="command:missing" fg={foregroundProp(theme.error)}>
+            ! {missing}
+          </text>
+        ) : null}
         {step?.kind === "input" ? (
           <text
             id="command:submit"
@@ -340,15 +443,17 @@ export function CommandCenter({
             [ Apply ]{" "}
           </text>
         ) : null}
-        {step?.kind === "choice" && choices.kind === "loading" ? (
+        {listed && choices.kind === "loading" ? (
           <text fg={foregroundProp(theme.muted)}>Loading…</text>
         ) : null}
-        {step?.kind === "choice" && choices.kind === "error" ? (
+        {listed && choices.kind === "error" ? (
           <text fg={foregroundProp(theme.error)}>! {choices.message}</text>
         ) : null}
-        {(!step || (step.kind === "choice" && choices.kind === "ready")) &&
+        {(!step || (listed && choices.kind === "ready")) &&
         results.length === 0 ? (
-          <text fg={foregroundProp(theme.muted)}>No commands match</text>
+          <text fg={foregroundProp(theme.muted)}>
+            {step?.kind === "search" ? "No matches" : "No commands match"}
+          </text>
         ) : null}
         {results.slice(start, start + capacity).map((row, offset) => {
           const at = start + offset;
@@ -372,12 +477,19 @@ export function CommandCenter({
                   run(at);
                 }}
               >
-                <box flexDirection="row" height={1}>
+                <box
+                  flexDirection="row"
+                  justifyContent="space-between"
+                  height={1}
+                >
                   <text
                     fg={foregroundProp(theme.fg)}
                     flexGrow={1}
+                    flexShrink={1}
+                    minWidth={0}
                     height={1}
                     wrapMode="none"
+                    truncate
                   >
                     {row.titleRanges.map((range, index) => (
                       <Fragment key={`${row.item.id}:${range.start}`}>
@@ -405,9 +517,16 @@ export function CommandCenter({
                         : 0,
                     )}
                   </text>
-                  <text height={1} fg={foregroundProp(theme.faint)}>
-                    {row.item.shortcut ?? ""}
-                  </text>
+                  {rowShortcut(row.item, shortcut) ? (
+                    <text
+                      height={1}
+                      flexShrink={0}
+                      wrapMode="none"
+                      fg={foregroundProp(theme.faint)}
+                    >
+                      {`  ${rowShortcut(row.item, shortcut)}`}
+                    </text>
+                  ) : null}
                 </box>
                 <text
                   height={1}
@@ -425,6 +544,11 @@ export function CommandCenter({
   );
 }
 
+function NO_SHORTCUT() {
+  return null;
+}
+/** Pause after typing before asking the host, so each keystroke doesn't search. */
+const SEARCH_DELAY_MS = 150;
 function rangeEnd(range: { start: number; length: number } | undefined) {
   return range ? range.start + range.length : 0;
 }

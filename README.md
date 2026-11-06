@@ -37,6 +37,8 @@ Set `NO_COLOR=1` for terminal-default colors.
 
 The optional config file is JSON. Flags override `prefix` and `notify`; any problem (unknown setting or action, bad key or color, key conflict) stops startup with a list of every issue.
 
+The optional `editor` setting (default `nvim`) is the command `g e` (or **Open workspace in editor** in the Command Center) runs as `sh -c "<editor> ."` in a terminal tab in the selected workspace's directory on the daemon host, so it may carry arguments, e.g. `{ "editor": "code -w" }`. If an editor tab is already open there, `g e` focuses it.
+
 ```json
 {
   "prefix": "C-a",
@@ -59,6 +61,18 @@ The optional config file is JSON. Flags override `prefix` and `notify`; any prob
 
 - `keys` maps an action to a key or a list of keys, replacing its defaults; `[]` unbinds it. Actions are named by their type plus arguments joined with `:`, for example `help`, `palette.open`, `pane.split:right`, `pane.focus:left`, `pane.select:3`, `tab.select:0`, `workspace.cycle:-1`, `scroll.half:1`, `list.edge:top`; an unknown name prints the full list. Keys use the help popup's format: `x`, `X`, `Ctrl-x`, `Meta-x` (or `Alt-x`), `Enter`, `Esc`, `Tab`, `Shift-Tab`, `Up`, `PgDn`, `F1`. A rebound action keeps its default modes, so prefix actions still follow the prefix and always-on actions (`tab.create`, `palette.open`) need a `Ctrl-` or `Meta-` key. Multi-key chords cannot be bound; `Ctrl-C`, `Z Q`, `g t` / `g T`, `Ctrl-w <dir>`, and `g` / `Z` / `Ctrl-w` in normal mode stay fixed. The help popup, status hints and Command Center show the effective keys.
 - `theme` overrides colors with hex values (`#rgb`, `#rrggbb`, `#rrggbbaa`): top-level fields (`fg`, `muted`, `faint`, `accent`, `user`, `userBg`, `assistant`, `tool`, `reasoning`, `error`, `warn`, `success`, `border`, `borderFocused`, `selectionBg`, `cursorBg`, `cursorFg`, `codeBg`, `copySelectionBg`, `copySelectionFg`, `copyCursorBg`, `copyCursorFg`), `status` (`running`, `idle`, `error`, `attention`, `question`), `syntax` (highlight styles such as `keyword`, `string`, `comment`) and up to three `heading` levels. `NO_COLOR` still wins.
+
+The optional `usage` setting picks which provider meters the status bar shows, in the order listed: `true` keeps a provider's default window, an array of window, balance or detail ids shows exactly those, and `false` hides it. Without `usage`, every reporting provider shows its default window. The Command Center's "Provider usage" view still lists everything and ends each row with `id <provider>.<id>`, plus `· hidden` when `usage` leaves it out of the status bar:
+
+```json
+{
+  "usage": {
+    "claude": ["five_hour", "seven_day"],
+    "codex": true,
+    "openrouter": false
+  }
+}
+```
 
 Each workspace remembers its split layout, the agent in each pane, zoom and the selected tab when you leave it, and again after a restart. Layouts are saved to `$XDG_STATE_HOME/paseo-tui/layouts.json` (else `~/.local/state/paseo-tui/layouts.json`); panes whose agents no longer exist are dropped on restore.
 
@@ -95,60 +109,78 @@ Imports only point downward, `ui/` → `state/` → `connection/`, and Biome enf
 
 The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc` returns to normal. `?` shows the same binding table in the app.
 
-| Context                    | Key                                        | Action                                |
-| -------------------------- | ------------------------------------------ | ------------------------------------- |
-| Normal                     | `\`                                        | Toggle sidebar                        |
-| Normal                     | `q`                                        | Quit                                  |
-| Any mode                   | `Ctrl-C`                                   | Quit                                  |
-| Normal                     | `?`                                        | Help                                  |
-| Normal                     | `Tab`                                      | Switch sidebar/pane                   |
-| Command Center             | `New agent…`                               | Create in an existing workspace       |
-| Command Center             | `Set mode…`                                | Pick an available mode                |
-| Command Center             | `Set model…`                               | Pick a model (with catalog access)    |
-| Command Center             | `Set thinking…`                            | Pick a thinking option                |
-| Command Center             | `Rewind to prompt…`                        | Undo back to before a prompt          |
-| Command Center             | `Fork from prompt…`                        | New agent from earlier history        |
-| Command Center             | `Rename…`                                  | Edit the agent title                  |
-| Command Center             | `Archive…`                                 | Confirm with `y` or click Confirm     |
-| Normal pane                | `Shift-Tab`                                | Cycle agent mode                      |
-| Normal                     | `Ctrl-X`                                   | Stop running turn                     |
-| Normal                     | `U`                                        | Jump to next agent that needs you     |
-| Normal                     | `S`                                        | Group sidebar by project / status     |
-| Normal                     | `]` / `[`                                  | Next / previous workspace             |
-| Normal                     | `1`–`9`                                    | Select tab by position                |
-| Normal                     | `g d`                                      | Open changes in lazygit (a tab)       |
-| Normal or insert           | `Alt-1`–`Alt-9`                            | Open workspace by sidebar position    |
-| Sidebar                    | `j` / `↓`                                  | Next agent                            |
-| Sidebar                    | `k` / `↑`                                  | Previous agent                        |
-| Sidebar                    | `g g`                                      | First agent                           |
-| Sidebar                    | `G`                                        | Last agent                            |
-| Sidebar                    | `Enter` / `l`                              | Open agent                            |
-| Pane                       | `j` / `↓`                                  | Scroll down                           |
-| Pane                       | `k` / `↑`                                  | Scroll up                             |
-| Pane                       | `Ctrl-d` / `Ctrl-u`                        | Half page down / up                   |
-| Pane                       | `Ctrl-f` / `PgDn`                          | Page down                             |
-| Pane                       | `PgUp` (also `Ctrl-b` with another prefix) | Page up                               |
-| Pane                       | `g g`                                      | History top                           |
-| Pane                       | `G`                                        | Bottom and follow                     |
-| Pane                       | `{` / `}`                                  | Previous / next expandable block      |
-| Pane                       | `o` / `Enter`                              | Toggle selected block                 |
-| Pane                       | `O`                                        | Expand/collapse all                   |
-| Pane                       | `i` / `a`                                  | Edit prompt                           |
-| Pane                       | `Esc`                                      | Focus sidebar                         |
-| Insert                     | `Esc`                                      | Leave insert mode and discard prompt  |
-| Insert                     | `Enter`                                    | Send prompt                           |
-| Insert                     | `Shift-Enter` / `Ctrl-J`                   | Newline                               |
-| Insert                     | Arrows / `Home` / `End`, paste             | Edit text, preserving multiline paste |
-| Permission with actions    | `1`–`9`                                    | Choose action                         |
-| Permission without actions | `y` / `n`                                  | Allow / deny                          |
-| Question without actions   | `n`                                        | Deny; answer in the app               |
-| Permission or question     | `m`, type, `Enter`                         | Steer: reply with a message instead   |
-| Permission                 | `Esc`                                      | Defer; reopen the agent to return     |
-| Help                       | `?` / `Esc`                                | Close help                            |
+| Context                    | Key                                        | Action                                          |
+| -------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| Normal                     | `\`                                        | Toggle sidebar                                  |
+| Normal                     | `q`                                        | Quit                                            |
+| Any mode                   | `Ctrl-C`                                   | Quit                                            |
+| Normal                     | `?`                                        | Help                                            |
+| Normal                     | `Tab`                                      | Switch sidebar/pane                             |
+| Command Center             | `New agent…`                               | Create in an existing workspace                 |
+| Command Center             | `Set mode…`                                | Pick an available mode                          |
+| Command Center             | `Set model…`                               | Pick a model (with catalog access)              |
+| Command Center             | `Set thinking…`                            | Pick a thinking option                          |
+| Command Center             | `Jump to prompt…`                          | Scroll the pane to an earlier prompt            |
+| Command Center             | `Rewind to prompt…`                        | Undo back to before a prompt                    |
+| Command Center             | `Fork from prompt…`                        | New agent from earlier history                  |
+| Command Center             | `Rename…`                                  | Edit the agent title                            |
+| Command Center             | `Archive…`                                 | Confirm with `y` or click Confirm               |
+| Normal pane                | `Shift-Tab`                                | Cycle agent mode                                |
+| Normal or insert           | `Ctrl-X`                                   | Stop running turn (again retries a slow stop)   |
+| Normal                     | `U`                                        | Jump to next agent that needs you               |
+| Normal                     | `S`                                        | Group sidebar by project / status               |
+| Normal                     | `]` / `[`                                  | Next / previous workspace                       |
+| Normal                     | `1`–`9`                                    | Select tab by position                          |
+| Normal                     | `g d`                                      | Open changes in lazygit (a tab)                 |
+| Normal                     | `g e`                                      | Open workspace in editor                        |
+| Normal                     | `H`                                        | Session history                                 |
+| Normal pane                | `t`                                        | Jump to a prompt in this session                |
+| Normal pane                | `F`                                        | Open a file (vim tab) or link (browser) by hint |
+| Normal pane                | `u`                                        | Unarchive agent                                 |
+| Normal or insert           | `Alt-1`–`Alt-9`                            | Open workspace by sidebar position              |
+| Sidebar                    | `j` / `↓`                                  | Next agent                                      |
+| Sidebar                    | `k` / `↑`                                  | Previous agent                                  |
+| Sidebar                    | `g g`                                      | First agent                                     |
+| Sidebar                    | `G`                                        | Last agent                                      |
+| Sidebar                    | `Enter` / `l`                              | Open agent                                      |
+| Pane                       | `j` / `↓`                                  | Scroll down                                     |
+| Pane                       | `k` / `↑`                                  | Scroll up                                       |
+| Pane                       | `Ctrl-d` / `Ctrl-u`                        | Half page down / up                             |
+| Pane                       | `Ctrl-f` / `PgDn`                          | Page down                                       |
+| Pane                       | `PgUp` (also `Ctrl-b` with another prefix) | Page up                                         |
+| Pane                       | `g g`                                      | History top                                     |
+| Pane                       | `G`                                        | Bottom and follow                               |
+| Pane                       | `{` / `}`                                  | Previous / next expandable block                |
+| Pane                       | `o` / `Enter`                              | Toggle selected block                           |
+| Pane                       | `O`                                        | Expand/collapse all                             |
+| Pane                       | `i` / `a`                                  | Edit prompt                                     |
+| Pane                       | `Esc`                                      | Focus sidebar                                   |
+| Insert                     | `Esc`                                      | Leave insert mode and discard prompt            |
+| Insert                     | `Enter`                                    | Send prompt; queue it while the agent works     |
+| Insert, messages queued    | `Ctrl-S`                                   | Send the queued message now (steer)             |
+| Insert, messages queued    | `Ctrl-R`                                   | Move the queued message into the prompt         |
+| Insert, messages queued    | `Ctrl-O`                                   | Remove the queued message                       |
+| Insert, messages queued    | `Ctrl-Up` / `Ctrl-Down`                    | Select a queued message                         |
+| Command Center             | `Interrupt and send queued message`        | Stop the turn and send the message instead      |
+| Command Center             | `Clear message queue`                      | Drop every queued message                       |
+| Insert                     | `Shift-Enter` / `Ctrl-J`                   | Newline                                         |
+| Insert                     | Arrows / `Home` / `End`, paste             | Edit text, preserving multiline paste           |
+| Permission with actions    | `1`–`9`                                    | Choose action                                   |
+| Permission without actions | `y` / `n`                                  | Allow / deny                                    |
+| Question without actions   | `n`                                        | Deny; answer in the app                         |
+| Permission or question     | `m`, type, `Enter`                         | Steer: reply with a message instead             |
+| Permission                 | `Esc`                                      | Defer; reopen the agent to return               |
+| Help                       | `?` / `Esc`                                | Close help                                      |
 
 Plan approvals show the proposed plan as markdown (`↑`/`↓` scroll it; `y` implements, `n` rejects). Instead of answering any permission, plan or question, press `m` to type a message: it is sent into the running turn (`activeTurnBehavior: "steer"`), the daemon denies the pending request, and the agent continues with your message, as in the Paseo app. `Esc` or `Ctrl-C` closes the message field. A plan you rejected or steered past stays in the timeline as a collapsed "Rejected plan" block (`}` then `o` expands it); this row comes from the daemon, so it survives reloads.
 
 New permissions for the open agent take focus automatically.
+
+While the agent works, `Enter` adds the message to a queue shown above the prompt instead of sending it. When the turn ends, the oldest queued message goes out, one per turn. After a failed or stopped turn the queue pauses ("Queue paused · Enter to resume"); `Enter` on an empty prompt resumes it. The queue lives in the TUI only (the daemon has no queue to list or edit), so quitting asks for a second `Ctrl-C` and says how many queued messages would be lost. `Ctrl-X` shows "Stopping…" at once; if the daemon has taken the stop but the turn has not ended after about five seconds, press `Ctrl-X` again to retry.
+
+`t` (or **Jump to prompt…** in the Command Center) lists every prompt of the session, newest first, from the daemon's prompt index; picking one pages older history in when needed and selects and expands that message. It needs a daemon with `agentTimelinePromptIndex`.
+
+`F` labels the file paths and `http(s)` links on screen. A file opens in a vim tab on the daemon host; a link opens in the default browser of the machine running the TUI (`open`, `xdg-open` or `rundll32`, started without a shell), so a `localhost` link from an agent on a remote host refers to this machine. Clicking a link and `g f` in copy mode do the same.
 
 `g d` (or **Open changes (lazygit)** in the Command Center) runs the diff tool in a terminal tab in the selected workspace's directory, or focuses its tab if one is already open there. Quitting the tool closes the tab and returns to the tab you came from. Pick another tool with `--diff-tool "tig status"` or `PASEO_TUI_DIFF_TOOL`; the command runs through `sh -c` on the daemon host.
 

@@ -1,6 +1,6 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { WorkspaceRow } from "../workspace/workspaces.js";
-import { setupTag, workspaceMeta } from "./workspace-meta.js";
+import { hostTag, setupTag, workspaceMeta } from "./workspace-meta.js";
 
 const base: WorkspaceRow = {
   id: "w",
@@ -94,4 +94,12 @@ it("tags worktree setup that is running, failed, or blocked, and nothing once it
   });
   expect(setupTag({ ...base, setupStatus: "completed" })).toBeNull();
   expect(setupTag(base)).toBeNull();
+});
+
+describe("hostTag", () => {
+  it("keeps a short host name and shortens a long one to an ellipsis", () => {
+    expect(hostTag("local")).toBe("local");
+    expect(hostTag("build-server-eu-west")).toBe("build-ser…");
+    expect(hostTag("  GPU box ")).toBe("GPU box");
+  });
 });

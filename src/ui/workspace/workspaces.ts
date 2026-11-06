@@ -80,12 +80,21 @@ export function workspaceTabs(
   agents: readonly PaseoAgent[],
   terminals: readonly PaseoTerminal[],
   subagents: readonly SubagentTab[] = [],
+  archived: readonly PaseoAgent[] = [],
 ): WorkspaceTab[] {
+  const live = agents.filter(
+    (agent) => agent.workspaceId === workspaceId && agent.archivedAt == null,
+  );
+  const liveIds = new Set(live.map((agent) => agent.id));
+  const extra = archived.filter(
+    (agent) => agent.workspaceId === workspaceId && !liveIds.has(agent.id),
+  );
   return [
-    ...agents
-      .filter(
-        (agent) =>
-          agent.workspaceId === workspaceId && agent.archivedAt == null,
+    ...[...live, ...extra]
+      .toSorted(
+        (x, y) =>
+          Date.parse(x.createdAt) - Date.parse(y.createdAt) ||
+          x.id.localeCompare(y.id),
       )
       .map(
         (agent): WorkspaceTab => ({

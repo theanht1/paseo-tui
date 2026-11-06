@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { findPathMentions, mentionAt, resolvePath } from "./detect.js";
+import {
+  findPathMentions,
+  findUrlMentions,
+  mentionAt,
+  resolvePath,
+  urlAt,
+} from "./detect.js";
 
 function raws(text: string) {
   return findPathMentions(text).map((mention) => mention.raw);
@@ -82,6 +88,43 @@ describe("mentionAt", () => {
     const line = "open src/app.ts:3 please";
     expect(mentionAt(line, 8)?.raw).toBe("src/app.ts:3");
     expect(mentionAt(line, 2)).toBeNull();
+  });
+});
+
+describe("findUrlMentions", () => {
+  function urls(text: string) {
+    return findUrlMentions(text).map((mention) => mention.url);
+  }
+  it.each([
+    ["see https://example.com/a?b=1 now", "https://example.com/a?b=1"],
+    ["at http://x.io/readme.md.", "http://x.io/readme.md"],
+    ["(docs: https://x.dev/guide)", "https://x.dev/guide"],
+    ["(see https://x.y/a_(b))", "https://x.y/a_(b)"],
+    ["<https://x.y/z>", "https://x.y/z"],
+    ["[label](https://x.y/z)", "https://x.y/z"],
+    ["really? https://x.y/q?!", "https://x.y/q"],
+  ])("finds %j", (text, url) => {
+    expect(urls(text)).toEqual([url]);
+  });
+  it.each([
+    "ftp://x.y/file",
+    "file:///tmp/a.txt",
+    "javascript:alert(1)",
+    "xhttps://x.y",
+    "https://",
+    "src/a.ts:12",
+  ])("ignores %j", (text) => {
+    expect(urls(text)).toEqual([]);
+  });
+  it("reports offsets, and urlAt finds the URL under a column", () => {
+    const line = "open https://a.dev/x then src/a.ts:12";
+    const [mention] = findUrlMentions(line);
+    expect(mention && line.slice(mention.start, mention.end)).toBe(
+      "https://a.dev/x",
+    );
+    expect(urlAt(line, 8)?.url).toBe("https://a.dev/x");
+    expect(urlAt(line, 30)).toBeNull();
+    expect(mentionAt(line, 30)?.raw).toBe("src/a.ts:12");
   });
 });
 

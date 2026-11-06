@@ -4,9 +4,17 @@ import type { WorkspaceGroup } from "../../state/agents-store.js";
 import type { CatalogModel } from "../../state/ports.js";
 import type { TimelineStore } from "../../state/timeline-store.js";
 import { agentName, shortPath } from "../agent/agent-display.js";
+import { viewOnlyCommands } from "../agent/archived-views.js";
+import {
+  contextDetailRows,
+  contextMeterText,
+  contextWindow,
+} from "../agent/context-window.js";
+import type { UsageConfig } from "../config/user-config.js";
 import type { FileLink } from "../file-links/links.js";
 import { type Action, type Binding, paletteActions } from "../input/keymap.js";
 import { assign, type Layout, split } from "../layout/split-tree.js";
+import type { AgentSeed } from "../management-controller.js";
 import {
   type ScheduleDeps,
   scheduleCommands,
@@ -15,7 +23,12 @@ import { type UsageSource, usageCommands } from "../usage/usage-commands.js";
 import type { WorkspaceRow } from "../workspace/workspaces.js";
 import { historyCommands } from "./agent-history.js";
 import { type CreateDeps, createAgentStep } from "./create-agent.js";
-import type { CommandItem, CommandSource } from "./registry.js";
+import { type PathContext, pathCommands } from "./path-commands.js";
+import type { CommandItem, CommandSource, CommandStep } from "./registry.js";
+import {
+  type SessionHistoryContext,
+  sessionHistoryCommand,
+} from "./session-history.js";
 export interface BuiltinContext {
   groups: readonly WorkspaceGroup[];
   /** Agents waiting on you, most urgent first, with what each waits on. */
@@ -26,6 +39,8 @@ export interface BuiltinContext {
   /** The effective key table; defaults to the built-in bindings. */
   bindings?: readonly Binding[];
   focusedStore: TimelineStore | null;
+  /** Messages queued for the focused agent's running turn. */
+  queued?: number;
   createAgent?: CreateDeps;
   models?(provider: string): Promise<CatalogModel[]>;
   open(agent: PaseoAgent): void;
@@ -38,6 +53,102 @@ export interface BuiltinContext {
   schedules?: ScheduleDeps;
   /** Provider usage reports; absent when the daemon reports no usage. */
   usage?: UsageSource;
+  usageConfig?: UsageConfig;
+  /** The open workspace's directory and editor tab's file, to copy. */
+  paths?: PathContext;
+  /** Workspace, project and host management (each opens its own dialog). */
+  manage?: ManageCommands;
+  /** Past sessions (History…); absent when no host serves history. */
+  history?: SessionHistoryContext;
+  /** Unarchives the focused agent; offered while it is archived. */
+  unarchive?(): void;
+  /** Scrolls the focused pane to a prompt (Jump to prompt…). */
+  goto?(epoch: string, seq: number): void;
+}
+export interface ManageCommands {
+  /** The open workspace, which Archive workspace… archives. */
+  workspace: WorkspaceRow | null;
+  /** Hosts can be listed and added. */
+  hosts: boolean;
+  archiveWorkspace(workspace: WorkspaceRow): void;
+  addProject(): void;
+  listProjects(): void;
+  removeProject(): void;
+  listHosts(): void;
+  addHost(): void;
+  /** The New workspace steps for Fork into a new workspace. */
+  forkWorkspace(seed: AgentSeed): CommandStep;
+}
+function manageCommands(manage: ManageCommands): CommandItem[] {
+  const item = (
+    id: string,
+    title: string,
+    subtitle: string,
+    keywords: readonly string[],
+    run: () => void,
+  ): CommandItem => ({
+    id,
+    group: "Workspaces",
+    title,
+    subtitle,
+    keywords,
+    run(): undefined {
+      run();
+    },
+  });
+  const { workspace } = manage;
+  return [
+    ...(workspace
+      ? [
+          item(
+            "archive-workspace",
+            "Archive workspace…",
+            workspace.title || workspace.name,
+            ["archive", "remove", "close"],
+            () => manage.archiveWorkspace(workspace),
+          ),
+        ]
+      : []),
+    item(
+      "add-project",
+      "Add project…",
+      "Find a directory on a host",
+      ["project", "new", "open", "folder", "repository"],
+      manage.addProject,
+    ),
+    item(
+      "list-projects",
+      "Projects…",
+      "This host's projects: new workspace or remove",
+      ["project", "list"],
+      manage.listProjects,
+    ),
+    item(
+      "remove-project",
+      "Remove project…",
+      "Archive its workspaces and delete their worktrees",
+      ["project", "delete", "archive"],
+      manage.removeProject,
+    ),
+    ...(manage.hosts
+      ? [
+          item(
+            "list-hosts",
+            "Hosts…",
+            "Switch to another Paseo daemon",
+            ["host", "server", "daemon", "switch", "remote"],
+            manage.listHosts,
+          ),
+          item(
+            "add-host",
+            "Add host…",
+            "Connect to another Paseo daemon",
+            ["host", "server", "daemon", "remote", "ssh"],
+            manage.addHost,
+          ),
+        ]
+      : []),
+  ];
 }
 export function builtinSource(context: BuiltinContext): CommandSource {
   return {
@@ -103,25 +214,35 @@ export function builtinSource(context: BuiltinContext): CommandSource {
           keywords: ["create", "new"],
           run: () => createAgentStep(createAgent),
         });
+      if (context.history) items.push(sessionHistoryCommand(context.history));
       items.push(...agentCommands(context), ...fileCommands(context));
+      if (context.paths) items.push(...pathCommands(context.paths));
+      if (context.manage) items.push(...manageCommands(context.manage));
       if (context.schedules) items.push(...scheduleCommands(context.schedules));
-      if (context.usage) items.push(...usageCommands(context.usage, Date.now));
+      if (context.usage)
+        items.push(
+          ...usageCommands(context.usage, Date.now, context.usageConfig),
+        );
       for (const entry of paletteActions(context.prefixLabel, context.bindings))
         items.push({
           id: `action:${JSON.stringify(entry.action)}`,
           group: "Actions",
           title: entry.title,
-          shortcut: entry.shortcut,
+          action: entry.action,
+          keywords: entry.keywords,
           run(): undefined {
             context.act(entry.action);
           },
         });
+      if (context.focusedAgent && context.queued)
+        items.push(...queueCommands(context.queued, context.act));
       if (context.focusedAgent) {
         items.push(
           {
             id: "expand-all",
             group: "View",
             title: "Expand all",
+            action: { type: "block.expandAll" },
             run(): undefined {
               context.act({ type: "block.expandAll" });
             },
@@ -130,6 +251,7 @@ export function builtinSource(context: BuiltinContext): CommandSource {
             id: "collapse-all",
             group: "View",
             title: "Collapse all",
+            action: { type: "block.collapseAll" },
             run(): undefined {
               context.act({ type: "block.collapseAll" });
             },
@@ -141,17 +263,80 @@ export function builtinSource(context: BuiltinContext): CommandSource {
   };
 }
 
+/** The focused agent's message queue; each runs the same action as its key. */
+function queueCommands(
+  count: number,
+  act: (action: Action) => void,
+): CommandItem[] {
+  const subtitle = `${count} queued message${count === 1 ? "" : "s"}`;
+  return (
+    [
+      ["queue-send", "Send queued message now", { type: "queue.send" }],
+      [
+        "queue-interrupt",
+        "Interrupt and send queued message",
+        { type: "queue.interrupt" },
+      ],
+      ["queue-edit", "Edit queued message", { type: "queue.edit" }],
+      ["queue-clear", "Clear message queue", { type: "queue.clear" }],
+    ] as const
+  ).map(([id, title, action]) => ({
+    id,
+    group: "Agent",
+    title,
+    subtitle,
+    keywords: ["queue", "pending", "message"],
+    action,
+    run(): undefined {
+      act(action);
+    },
+  }));
+}
+
 function agentCommands(context: BuiltinContext): CommandItem[] {
   const items: CommandItem[] = [];
   const agent = context.focusedAgent,
     store = context.focusedStore;
+  const unarchive = context.unarchive;
+  if (agent?.archivedAt != null && unarchive)
+    items.push({
+      id: "unarchive",
+      group: "Agent",
+      title: "Unarchive",
+      action: { type: "agent.unarchive" },
+      run(): undefined {
+        unarchive();
+      },
+    });
+  if (agent) {
+    const window = contextWindow(agent.lastUsage);
+    const step: CommandStep = {
+      kind: "choice",
+      title: "Context window",
+      items: () =>
+        contextDetailRows(window).map((row) => ({
+          id: `context:${row}`,
+          group: "Agent",
+          title: row,
+          run: () => step,
+        })),
+    };
+    items.push({
+      id: "context-window",
+      group: "Agent",
+      title: "Context window",
+      subtitle: contextMeterText(window) || "No context data",
+      keywords: ["tokens", "cost", "context"],
+      run: () => step,
+    });
+  }
   if (agent && store) {
     if (agent.availableModes.length >= 2)
       items.push({
         id: "set-mode",
         group: "Agent",
         title: "Set mode…",
-        shortcut: "Shift-Tab",
+        action: { type: "agent.cycleMode" },
         run: () => ({
           kind: "choice",
           title: "Set mode",
@@ -205,38 +390,29 @@ function agentCommands(context: BuiltinContext): CommandItem[] {
         store,
         models,
         createAgent: context.createAgent,
+        ...(context.goto ? { goto: context.goto } : {}),
+        ...(context.manage
+          ? { forkWorkspace: context.manage.forkWorkspace }
+          : {}),
       }),
     );
-    items.push(
-      {
-        id: "rename",
-        group: "Agent",
-        title: "Rename…",
-        run: () => ({
-          kind: "input",
-          title: "Rename",
-          placeholder: "Agent name",
-          initial: agentName(agent),
-          submit(text): undefined {
-            void store.rename(text);
-          },
-        }),
-      },
-      {
-        id: "archive",
-        group: "Agent",
-        title: "Archive…",
-        run: () => ({
-          kind: "confirm",
-          title: `Archive ${agentName(agent)}?`,
-          confirm() {
-            void store.archive();
-          },
-        }),
-      },
-    );
+    items.push({
+      id: "rename",
+      group: "Agent",
+      title: "Rename…",
+      action: { type: "tab.rename" },
+      run: () => ({
+        kind: "input",
+        title: "Rename",
+        placeholder: "Agent name",
+        initial: agentName(agent),
+        submit(text): undefined {
+          void store.rename(text);
+        },
+      }),
+    });
   }
-  return items;
+  return agent ? viewOnlyCommands(agent, items) : items;
 }
 
 function fileTitle(link: FileLink, cwd: string) {
@@ -256,7 +432,7 @@ function fileCommands(context: BuiltinContext): CommandItem[] {
       group: "Agent",
       title: "Open file from this chat…",
       keywords: ["vim", "edit", "path"],
-      shortcut: "F",
+      action: { type: "hint.start" },
       run: () => ({
         kind: "choice",
         title: "Open file",
