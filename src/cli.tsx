@@ -1,7 +1,6 @@
 #!/usr/bin/env -S NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning
 import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { type CliRendererConfig, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
@@ -9,6 +8,7 @@ import type { ReactNode } from "react";
 import packageJson from "../package.json" with { type: "json" };
 import { connect } from "./connection/connect.js";
 import { resolveTarget } from "./connection/target.js";
+import { isEntryPoint } from "./entry-point.js";
 import {
   type ConnectedHost,
   connectedHost,
@@ -284,8 +284,7 @@ async function main() {
   }
 }
 
-const entry = process.argv[1];
-if (entry && import.meta.url === pathToFileURL(entry).href) {
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   main().then(
     () => process.exit(0),
     (error: unknown) => {
