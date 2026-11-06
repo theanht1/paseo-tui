@@ -4,20 +4,20 @@ A full-screen terminal client for Paseo, built with TypeScript, OpenTUI and Reac
 
 ## Requirements
 
-- Node 26.4 or newer (OpenTUI needs `--experimental-ffi`); `.nvmrc` and `.tool-versions` pin 26.13.0.
-- A running Paseo daemon. The client only reads and steers it.
+- **Node 26.4 or newer.** OpenTUI needs Node's `--experimental-ffi`, which older versions lack; the installed `paseo-tui` command passes the flag for you. Check with `node --version`.
+- macOS, Linux (glibc or musl) or Windows, on x64 or arm64.
+- A running [Paseo](https://github.com/getpaseo/paseo) daemon, version 0.15.x. The client only reads and steers it; it never starts or stops the daemon.
 
-## Getting started
+## Install
 
 ```sh
-asdf install nodejs 26.13.0   # or: nvm use
-npm install
-npm run dev
+npm install -g paseo-tui
+paseo-tui
 ```
 
-### Options
+Or run it once without installing: `npx paseo-tui`. With no options it connects to the local daemon (`~/.paseo`); see `paseo-tui --help`.
 
-Pass options after `--`, for example `npm run dev -- --host <target>`.
+### Options
 
 | Option              | Description                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -76,7 +76,24 @@ The optional `usage` setting picks which provider meters the status bar shows, i
 
 Each workspace remembers its split layout, the agent in each pane, zoom and the selected tab when you leave it, and again after a restart. Layouts are saved to `$XDG_STATE_HOME/paseo-tui/layouts.json` (else `~/.local/state/paseo-tui/layouts.json`); panes whose agents no longer exist are dropped on restore.
 
+## Hosts and projects
+
+One window can show several Paseo daemons. `--host` (or the local daemon) is the first host; every host saved with **Add host…** in the Command Center also connects at startup. Projects from all hosts are merged by repository, as in the desktop app, and each workspace row is tagged with its host. Actions go to the host that owns the agent, workspace or terminal.
+
+- **Add host…** asks for an address (`host:port`, `tcp://host:port` or `ssh://user@host`), a name, and the daemon's `PASEO_PASSWORD` (Enter for none).
+- **Hosts…** lists every host with its status; pick an offline host to reconnect it.
+- Saved hosts live in `$XDG_CONFIG_HOME/paseo-tui/hosts.json` (else `~/.config/paseo-tui/hosts.json`). Passwords are stored there in plain text, in a file readable only by you (mode `0600`). A `?password=` typed into an address is moved out of the address so it is never shown or logged.
+- **Add project…** picks a host and finds a directory on it. **Remove project…** archives the project's workspaces and deletes their worktrees, after you confirm.
+- **New workspace…** picks a project, then a host when the project is on several, then Local or Worktree (a new git worktree from a base branch).
+
 ## Development
+
+```sh
+git clone https://github.com/theanht1/paseo-tui.git && cd paseo-tui
+asdf install nodejs 26.13.0   # or: nvm use (.nvmrc and .tool-versions pin 26.13.0)
+npm install
+npm run dev
+```
 
 | Command                    | Purpose                                         |
 | -------------------------- | ----------------------------------------------- |
@@ -87,7 +104,7 @@ Each workspace remembers its split layout, the agent in each pane, zoom and the 
 | `npm run test:integration` | Tests against an isolated, spawned Paseo daemon |
 | `npm run build`            | Compile to `dist/`                              |
 
-Run the build with `node --experimental-ffi dist/cli.js`. CI runs typecheck, lint, unit tests and build on every push and pull request.
+Pass options to the dev build after `--`, for example `npm run dev -- --host <target>`. Run the compiled build with `npm start` (or `node --experimental-ffi dist/cli.js`). CI runs typecheck, lint, unit tests and build on every push and pull request.
 
 Tests live beside their implementation as `*.test.ts` / `*.test.tsx` and are excluded from the build. Shared test helpers live in `src/test/`.
 
@@ -112,8 +129,8 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Context                    | Key                                        | Action                                          |
 | -------------------------- | ------------------------------------------ | ----------------------------------------------- |
 | Normal                     | `\`                                        | Toggle sidebar                                  |
-| Normal                     | `q`                                        | Quit                                            |
-| Any mode                   | `Ctrl-C`                                   | Quit                                            |
+| Normal                     | `Ctrl-C` twice within 2 s                  | Quit (warns about queued messages)              |
+| Insert, search, palette    | `Ctrl-C`                                   | Leave the input, keeping the draft              |
 | Normal                     | `?`                                        | Help                                            |
 | Normal                     | `Tab`                                      | Switch sidebar/pane                             |
 | Command Center             | `New agent…`                               | Create in an existing workspace                 |
@@ -155,7 +172,7 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Pane                       | `O`                                        | Expand/collapse all                             |
 | Pane                       | `i` / `a`                                  | Edit prompt                                     |
 | Pane                       | `Esc`                                      | Focus sidebar                                   |
-| Insert                     | `Esc`                                      | Leave insert mode and discard prompt            |
+| Insert                     | `Esc`                                      | Leave insert mode, keeping the draft            |
 | Insert                     | `Enter`                                    | Send prompt; queue it while the agent works     |
 | Insert, messages queued    | `Ctrl-S`                                   | Send the queued message now (steer)             |
 | Insert, messages queued    | `Ctrl-R`                                   | Move the queued message into the prompt         |
@@ -217,9 +234,13 @@ Tool details include shell output (last 200 lines), file content (first 400 line
 | Search       | `Enter` / `Esc`               | Commit / cancel query                           |
 | Pane, normal | `n` / `N`                     | Next / previous match, wrapping                 |
 
-Opening an agent assigns it to the focused pane. Click any pane to focus it. Panes showing the same agent share one live timeline subscription, while selection, search and expanded details stay separate. Splits, closing and focus changes clear zoom. Layouts are not persisted.
+Opening an agent assigns it to the focused pane. Click any pane to focus it. Panes showing the same agent share one live timeline subscription, while selection, search and expanded details stay separate. Splits, closing and focus changes clear zoom. Layouts are saved per workspace (see [Configuration](#configuration)).
 
 Search is a case-insensitive substring match over loaded history, including collapsed tool output and reasoning. When the daemon advertises `agentHistorySearch`, committing a query also searches the agent's whole chat on the daemon, so messages older than the loaded window count too; `n` / `N` page older history in to reach them, and a query with no loaded match jumps to the newest daemon match. Matches are ordered oldest first. A jump selects the matching block, expands its detail and scrolls it into view. The status bar shows `match i/n` (`n+` when the daemon capped the results, plus `searching history…` while it runs) or `no match`.
+
+### Copy mode
+
+Prefix `[` enters tmux-style copy mode over the pane's whole history, as in tmux with vi keys: `h` `j` `k` `l`, `w` `b` `e`, `0` `^` `$`, `g g` / `G`, `H` `M` `L`, `f` / `t` jumps, `/` `?` `n` `N` `*` `#` search, `Ctrl-u` / `Ctrl-d` paging, counts, and `v` / `V` / `Space` to start a selection. `y` or `Enter` copies to the system clipboard (and OSC 52, so it also works over SSH); `Esc` clears the selection, then leaves; `q` leaves at once. The mouse wheel scrolls, and selecting with the mouse copies too.
 
 ## Command Center
 
@@ -253,6 +274,10 @@ The focused pane shows `Loading…` for up to ten seconds while it waits for the
 
 When the daemon reports usage (`usageSources` or `providerUsageList` in `server_info.features`), the status bar ends with a compact meter per provider, such as `claude 62% · resets 3h`: the provider's summary window, or else its most-used window. It refreshes every minute, and the daemon caches reports for five minutes. Providers that report no quota are left out. **Provider usage** in the Command Center lists every window, balance and reset time, plus unavailable or failed reports. **Refresh now** bypasses the daemon cache.
 
+### Context window
+
+When the focused agent reports token usage, the status bar shows `ctx 42% 84k/200k`, turning to warning color from 70% and error color above 90%. **Context window** in the Command Center shows the same numbers plus the session cost.
+
 ### Schedules
 
 **Schedules…** lists the daemon's schedules with name, cadence, target, next run and paused state. Pick one to **Inspect** it, view **Recent runs** (selecting a run opens its agent), **Pause…** / **Resume…**, **Run now…** or **Delete…**. Each action that changes a schedule waits for `y` before it runs, and its result appears in the status bar.
@@ -262,3 +287,15 @@ When the daemon reports usage (`usageSources` or `providerUsageList` in `server_
 ### Terminal activity
 
 Terminal tabs show the same dots as agent tabs when the daemon reports terminal activity: a spinner while the terminal's agent works, `!` while it waits for input, and `●` after it finishes, until you open the tab. The daemon reports activity only for terminal agents with Paseo hooks installed ("Enable terminal agent hooks" in the app's host settings); other terminals show no dot. Activity arrives with the terminal list, which refreshes on workspace changes and every three seconds.
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a pull request:
+
+- Read [AGENTS.md](AGENTS.md); it holds the project rules (layering, strict TypeScript, testing style). They apply to human and AI-assisted changes alike.
+- Write a failing behavioral test first, colocated as `*.test.ts` / `*.test.tsx`.
+- Make sure `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` pass; CI runs the same checks. Run `npm run test:integration` when you touch the connection layer.
+
+## License
+
+[Apache License 2.0](LICENSE). `src/connection/local-credential.ts` is copied from [Paseo](https://github.com/getpaseo/paseo) under the same license; see [NOTICE](NOTICE).

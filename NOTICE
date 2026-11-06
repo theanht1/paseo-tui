@@ -1,0 +1,7 @@
+paseo-tui
+Copyright 2026 Anh Mai
+
+This product includes software from Paseo (https://github.com/getpaseo/paseo),
+Copyright (c) 2025-present Mohamed Boudra, licensed under the Apache License,
+Version 2.0: src/connection/local-credential.ts is copied from
+packages/server/src/server/local-credential.ts at version 0.15.0.

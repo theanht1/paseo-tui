@@ -1,11 +1,35 @@
 {
   "name": "paseo-tui",
   "version": "0.1.0",
+  "description": "Full-screen terminal client for Paseo: agents, live timelines, split panes, embedded terminals and a Command Center",
+  "keywords": [
+    "paseo",
+    "tui",
+    "terminal",
+    "ai-agents",
+    "coding-agents",
+    "opentui",
+    "cli"
+  ],
+  "homepage": "https://github.com/theanht1/paseo-tui#readme",
+  "bugs": {
+    "url": "https://github.com/theanht1/paseo-tui/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/theanht1/paseo-tui.git"
+  },
+  "license": "Apache-2.0",
+  "author": "Anh Mai",
   "type": "module",
-  "private": true,
   "bin": {
     "paseo-tui": "dist/cli.js"
   },
+  "files": [
+    "dist",
+    "!dist/test",
+    "NOTICE"
+  ],
   "engines": {
     "node": ">=26.4"
   },
@@ -17,7 +41,8 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "prepack": "rm -rf dist && npm run build"
   },
   "dependencies": {
     "@getpaseo/client": "0.15.0",
