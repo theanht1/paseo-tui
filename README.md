@@ -299,3 +299,7 @@ Issues and pull requests are welcome. Before opening a pull request:
 ## License
 
 [Apache License 2.0](LICENSE). `src/connection/local-credential.ts` is copied from [Paseo](https://github.com/getpaseo/paseo) under the same license; see [NOTICE](NOTICE).
+
+## Disclaimer
+
+paseo-tui is a personal project that I built for my own use. It is not an official Paseo project and is not affiliated with or endorsed by the Paseo authors. Its ideas are borrowed from the [Paseo](https://github.com/getpaseo/paseo) desktop app and from terminal orchestrators for coding agents in general. Most of the code was written by Claude (Anthropic's AI model), with me directing and reviewing it. It works for my workflow, but expect rough edges; issues and pull requests are welcome.
