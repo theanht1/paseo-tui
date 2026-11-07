@@ -14,11 +14,19 @@ import type {
   TerminalStreamPort,
 } from "../connection/ports.js";
 import type { AgentsSnapshot } from "../state/agents-store.js";
+import { type HostHealthEntry, healthNotices } from "../state/host-health.js";
+import type {
+  WorkspaceLabels,
+  WorkspaceLabelsSnapshot,
+} from "../state/label-catalog.js";
 import { createMessageQueues } from "../state/message-queue.js";
 import type { AgentsPort } from "../state/ports.js";
 import type { ProviderSubagentStore } from "../state/provider-subagents.js";
 import type { TimelineRegistry } from "../state/timeline-registry.js";
-import { createTimelineStore } from "../state/timeline-store.js";
+import {
+  createTimelineStore,
+  type TimelineStore,
+} from "../state/timeline-store.js";
 import type { UsageStore } from "../state/usage-store.js";
 import { AgentPane } from "./agent/AgentPane.js";
 import { shortPath } from "./agent/agent-display.js";
@@ -42,16 +50,51 @@ import {
   nextAttention,
   workspaceBucket,
 } from "./agent/attention.js";
+import {
+  advanceHold,
+  type BucketHold,
+  displayedBuckets,
+  releaseHold,
+} from "./agent/bucket-hold.js";
+import {
+  type ClearedUsage,
+  canClear,
+  clearSessionStep,
+  usageSinceClear,
+} from "./agent/clear-session.js";
 import { contextWindow } from "./agent/context-window.js";
+import {
+  filterNote,
+  filterProjects,
+  pruneFilter,
+} from "./agent/label-filter.js";
+import {
+  type ReadAction,
+  readAction,
+  unreadWorkspaceIds,
+  type WorkspaceReadActions,
+} from "./agent/read-state.js";
 import { Sidebar } from "./agent/Sidebar.js";
 import {
+  pinnedMove,
   type SidebarGrouping,
   sidebarSections,
+  unpinnedOrder,
+  unpinnedProjects,
 } from "./agent/sidebar-sections.js";
 import type { ThinkingPreference } from "./agent/thinking-preference.js";
+import { labelChips } from "./agent/workspace-meta.js";
 import { promptJumpStep } from "./command-center/agent-history.js";
 import { CommandCenter } from "./command-center/CommandCenter.js";
 import type { CreateDeps } from "./command-center/create-agent.js";
+import {
+  type LabelCommandContext,
+  workspaceLabelsStep,
+} from "./command-center/label-commands.js";
+import {
+  PINS_UNSUPPORTED,
+  type WorkspacePinActions,
+} from "./command-center/pin-commands.js";
 import {
   type CommandRegistry,
   type CommandStep,
@@ -66,6 +109,7 @@ import {
   builtinSource,
   type ManageCommands,
 } from "./command-center/sources.js";
+import type { Versions } from "./command-center/version.js";
 import type { UsageConfig } from "./config/user-config.js";
 import {
   type ClipboardWriter,
@@ -74,6 +118,7 @@ import {
 } from "./copy/clipboard.js";
 import type { Browser } from "./file-links/browser.js";
 import { type FileLinks, FileLinksContext } from "./file-links/context.js";
+import { DEFAULT_FILE_EDITOR } from "./file-links/editor-terminal.js";
 import {
   type ChatLink,
   type FileLink,
@@ -98,7 +143,12 @@ import {
 } from "./input/keymap.js";
 import { confirmQuit } from "./input/quit-confirmation.js";
 import { useKeymap } from "./input/use-keymap.js";
+import {
+  type LabelFilterMemory,
+  sessionLabelFilterMemory,
+} from "./layout/label-filter-memory.js";
 import type { LayoutMemory } from "./layout/layout-memory.js";
+import { type OrderMemory, sessionOrderMemory } from "./layout/order-memory.js";
 import { PaneFrame } from "./layout/PaneFrame.js";
 import { createPaneTimelines } from "./layout/pane-timelines.js";
 import { createPendingAgents } from "./layout/pending-agents.js";
@@ -128,6 +178,7 @@ import {
 import { ManagementOverlayView } from "./overlays/ManagementOverlayView.js";
 import { ShortcutPopup } from "./overlays/ShortcutPopup.js";
 import type { Focus } from "./permission/permission-focus.js";
+import { cachedCommands } from "./prompt/command-cache.js";
 import {
   backgroundProp,
   foregroundProp,
@@ -169,11 +220,14 @@ import {
 } from "./workspace/workspace-navigation.js";
 import {
   cycleTab,
+  projectMove,
   projectTree,
   type SubagentTab,
   subagentTab,
+  tabMove,
   type WorkspaceRow,
   type WorkspaceTab,
+  workspaceMove,
   workspaceTabs,
 } from "./workspace/workspaces.js";
 export interface AppProps {
@@ -185,12 +239,21 @@ export interface AppProps {
   terminalStream?: TerminalStreamPort;
   management?: WorkspaceActions;
   refresh?(): Promise<void>;
+  /** Asks every host to rediscover its providers (Refresh providers). */
+  refreshProviders?(): Promise<void>;
   thinkingPreference?: ThinkingPreference;
   timelines: TimelineRegistry;
   prefix?: Stroke;
-  catalog?: Pick<AgentsPort, "providers" | "models" | "modes" | "create">;
+  catalog?: Pick<
+    AgentsPort,
+    "providers" | "models" | "modes" | "onProvidersChange" | "create"
+  >;
   commands?: CommandRegistry;
   clearAttention?(agentId: string): Promise<void>;
+  /** Marks workspaces read or unread; absent without a daemon connection. */
+  workspaceRead?: WorkspaceReadActions;
+  /** Pins workspaces to the sidebar top; absent without a daemon connection. */
+  workspacePins?: WorkspacePinActions;
   /** Slash-command and @file suggestions for the prompt. */
   completions?: CompletionPort;
   /** Daemon-side directory listings; enables file links in timelines. */
@@ -219,10 +282,18 @@ export interface AppProps {
   diffTool?: string;
   /** Shell command the editor tab runs on the workspace (`g e`). */
   editor?: string;
+  /** Command that opens a file from the chat in a terminal tab (`F`, clicks). */
+  fileEditor?: string;
   /** The effective key table (defaults plus config `keys`). */
   bindings?: readonly Binding[];
   /** Per-workspace split layouts and tabs, kept across restarts. */
   layouts?: LayoutMemory;
+  /** The user's project, workspace and tab order, kept across restarts. */
+  order?: OrderMemory;
+  /** Every host's workspace labels; absent without a daemon connection. */
+  labels?: WorkspaceLabels;
+  /** The sidebar's label filter, kept across restarts. */
+  labelFilter?: LabelFilterMemory;
   /** Provider usage meters; absent when the daemon reports no usage. */
   usage?: UsageStore;
   usageConfig?: UsageConfig;
@@ -234,6 +305,9 @@ export interface AppProps {
   positionHints?: ExternalStore<boolean>;
   /** Every host; absent with a single daemon connection (tests). */
   hosts?: HostsPort;
+  /** Every host's health; a drop and a recovery each show one notice. */
+  hostHealth?: ExternalStore<readonly HostHealthEntry[]>;
+  versions?: Versions;
   /** The workspace the window shows, so host-less requests go to its host. */
   onActiveWorkspace?(workspaceId: string | null): void;
   onExit(): void;
@@ -248,12 +322,15 @@ export function App({
   management,
   thinkingPreference,
   refresh,
+  refreshProviders,
   timelines,
   prefix = DEFAULT_PREFIX,
   onExit,
   commands,
   catalog,
   clearAttention = async () => {},
+  workspaceRead,
+  workspacePins,
   completions,
   directories,
   editPrompt,
@@ -265,14 +342,20 @@ export function App({
   notify,
   diffTool = DEFAULT_DIFF_TOOL,
   editor = DEFAULT_EDITOR,
+  fileEditor = DEFAULT_FILE_EDITOR,
   bindings = BINDINGS,
   layouts,
+  order,
+  labels = NO_LABELS,
+  labelFilter,
   usage,
   usageConfig,
   schedules,
   history,
   positionHints = NO_HINTS,
   hosts,
+  hostHealth = NO_HOST_HEALTH,
+  versions,
   onActiveWorkspace,
 }: AppProps) {
   const renderer = useRenderer();
@@ -291,6 +374,16 @@ export function App({
       },
     );
   }
+  const health = useStore(hostHealth);
+  const previousHealth = useRef(health);
+  useEffect(() => {
+    const notices = healthNotices(previousHealth.current, health);
+    previousHealth.current = health;
+    if (notices.length) setNotice({ text: notices.join(" · ") });
+  }, [health]);
+  /** Usage and schedules come from the startup host; while it is offline they wait. */
+  const startupUnavailable = () =>
+    connection.getSnapshot().status === "connected" ? null : HOST_UNAVAILABLE;
   const copyRef = useRef(copy);
   copyRef.current = copy;
   useEffect(() => {
@@ -333,6 +426,8 @@ export function App({
   const [archivedWorkspaces, setArchivedWorkspaces] = useState<
     ReadonlySet<string>
   >(new Set());
+  const orderMemory = useMemo(() => order ?? sessionOrderMemory(), [order]);
+  const storedOrder = useStore(orderMemory);
   const projects = useMemo(
     () =>
       projectTree(
@@ -340,16 +435,33 @@ export function App({
         directoryState.workspaces.filter(
           (workspace) => !archivedWorkspaces.has(workspace.id),
         ),
+        storedOrder,
       ),
-    [directoryState, archivedWorkspaces],
+    [directoryState, archivedWorkspaces, storedOrder],
   );
   const workspaces = useMemo(
     () => projects.flatMap((project) => project.workspaces),
     [projects],
   );
+  const labelState = useStore(labels);
+  const filterMemory = useMemo(
+    () => labelFilter ?? sessionLabelFilterMemory(),
+    [labelFilter],
+  );
+  const filterKeys = useStore(filterMemory);
+  const allLabels = labelState.merged(null);
+  useEffect(() => {
+    filterMemory.set(
+      pruneFilter(
+        filterMemory.getSnapshot(),
+        labelState.merged(null),
+        labelState.authoritative,
+      ),
+    );
+  }, [filterMemory, labelState]);
   const navigation = useMemo(
-    () => createWorkspaceNavigation(layouts?.tabs()),
-    [layouts],
+    () => createWorkspaceNavigation(layouts?.tabs(), orderMemory.getSnapshot),
+    [layouts, orderMemory],
   );
   const navigationState = useStore(navigation);
   const cursorWorkspace = navigationState.cursorId;
@@ -485,10 +597,6 @@ export function App({
     const timer = setTimeout(() => setNumbers(false), 1000);
     return () => clearTimeout(timer);
   }, [numbers]);
-  const selectedWorkspace =
-    workspaces.find((workspace) => workspace.id === cursorWorkspace) ??
-    workspaces[0] ??
-    null;
   const activeWorkspaceId =
     workspaces.find((workspace) => workspace.id === activeWorkspace)?.id ??
     workspaces[0]?.id ??
@@ -496,12 +604,30 @@ export function App({
   useEffect(() => {
     onActiveWorkspace?.(activeWorkspaceId);
   }, [onActiveWorkspace, activeWorkspaceId]);
+  const offlineWorkspaces = directoryState.offline;
+  const wasOffline = useRef(offlineWorkspaces);
+  useEffect(() => {
+    const before = wasOffline.current;
+    wasOffline.current = offlineWorkspaces;
+    if (!before) return;
+    for (const agent of groups.flatMap((group) => group.agents))
+      if (
+        agent.workspaceId &&
+        before.has(agent.workspaceId) &&
+        !offlineWorkspaces?.has(agent.workspaceId)
+      )
+        timelines.reopen(agent.id);
+  }, [offlineWorkspaces, groups, timelines]);
+  function hostOffline(workspaceId: string | null | undefined) {
+    return workspaceId ? (offlineWorkspaces?.has(workspaceId) ?? false) : false;
+  }
   const tabs = workspaceTabs(
     activeWorkspaceId,
     flat,
     visibleTerminals,
     subagentTabs,
     archivedList,
+    storedOrder,
   );
   const current = all.find((p) => p.id === layout.focusedId);
   useEffect(() => {
@@ -590,7 +716,7 @@ export function App({
       ? undefined
       : flat.find((agent) => agent.id === current?.agentId);
   useEffect(() => {
-    if (viewedAgent) attention.view(viewedAgent);
+    attention.view(viewedAgent ?? null);
   }, [attention, viewedAgent]);
   const terminalAttention = useMemo(() => createTerminalAttention(), []);
   const viewedTerminals = useStore(terminalAttention);
@@ -635,21 +761,32 @@ export function App({
       notify(notification);
   }, [notify, notifier, liveAgents, acknowledged, viewedAgentId]);
   const [grouping, setGrouping] = useState<SidebarGrouping>("project");
+  const realBuckets = new Map(
+    workspaces.map((workspace) => [
+      workspace.id,
+      workspaceBucket(
+        liveAgents.filter((agent) => agent.workspaceId === workspace.id),
+        acknowledged,
+      ),
+    ]),
+  );
+  const [bucketHold, setBucketHold] = useState<BucketHold | null>(null);
+  const currentHold = advanceHold(bucketHold, activeWorkspaceId, realBuckets);
+  if (currentHold !== bucketHold) setBucketHold(currentHold);
+  const buckets = displayedBuckets(currentHold, realBuckets);
   const sections = sidebarSections(
-    projects,
-    new Map(
-      workspaces.map((workspace) => [
-        workspace.id,
-        workspaceBucket(
-          liveAgents.filter((agent) => agent.workspaceId === workspace.id),
-          acknowledged,
-        ),
-      ]),
-    ),
+    filterProjects(projects, filterKeys),
+    buckets,
     grouping,
+    storedOrder.pinned,
   );
   /** Workspaces in sidebar order: what j/k, [ ] and Cmd/Alt-digits walk. */
   const sidebarOrder = sections.flatMap((section) => section.workspaces);
+  /** The workspace under the sidebar cursor, among the rows the filter shows. */
+  const selectedWorkspace =
+    sidebarOrder.find((workspace) => workspace.id === cursorWorkspace) ??
+    sidebarOrder[0] ??
+    null;
   const hinting = useStore(positionHints);
   const waiting = attentionQueue(liveAgents, acknowledged).map((agent) => ({
     agent,
@@ -887,6 +1024,7 @@ export function App({
           visibleTerminals,
           subagentTabs,
           archivedList,
+          storedOrder,
         )
       : tabs;
   }
@@ -970,7 +1108,7 @@ export function App({
     const workspace =
       workspaces.find((workspace) => workspace.id === owner?.workspaceId) ??
       workspaces.find((workspace) => workspace.id === activeWorkspaceId);
-    if (workspace) manager.openFile(workspace, link);
+    if (workspace) manager.openFile(workspace, link, fileEditor);
   }
   function openLink(agentId: string, link: ChatLink) {
     if (link.kind === "file") {
@@ -1092,6 +1230,63 @@ export function App({
         if (tab) openTab(tab);
         break;
       }
+      case "tab.move": {
+        const change =
+          activeWorkspaceId && tabKey
+            ? tabMove(
+                tabs,
+                storedOrder,
+                activeWorkspaceId,
+                tabKey,
+                action.delta,
+              )
+            : null;
+        if (change) orderMemory.apply(change);
+        break;
+      }
+      case "sidebar.move":
+      case "sidebar.moveProject": {
+        if (selectedWorkspace?.pinnedAt != null) {
+          if (filterKeys.length) {
+            setNotice({ text: "Clear the label filter to reorder" });
+            break;
+          }
+          if (action.type === "sidebar.moveProject") {
+            setNotice({ text: "Reorder pinned workspaces with J / K" });
+            break;
+          }
+          const change = pinnedMove(
+            projects,
+            storedOrder,
+            selectedWorkspace.id,
+            action.delta,
+          );
+          navigation.cursor(selectedWorkspace.id);
+          if (change) orderMemory.apply(change);
+          break;
+        }
+        if (grouping === "status") {
+          setNotice({ text: "Reorder in project grouping (S)" });
+          break;
+        }
+        if (filterKeys.length) {
+          setNotice({ text: "Clear the label filter to reorder" });
+          break;
+        }
+        if (!selectedWorkspace) break;
+        const move =
+          action.type === "sidebar.move" ? workspaceMove : projectMove;
+        const change = move(
+          unpinnedProjects(projects),
+          storedOrder,
+          selectedWorkspace.id,
+          action.delta,
+        );
+        // The cursor stays on the moved row.
+        navigation.cursor(selectedWorkspace.id);
+        if (change) orderMemory.apply(change);
+        break;
+      }
       case "tab.select": {
         const tab = tabs[action.index];
         if (tab) openTab(tab);
@@ -1126,6 +1321,20 @@ export function App({
         if (agent) open(agent);
         break;
       }
+      case "workspace.toggleRead": {
+        const kind = selectedWorkspace
+          ? readActionFor(selectedWorkspace)?.kind
+          : undefined;
+        if (selectedWorkspace && kind) markWorkspace(selectedWorkspace, kind);
+        break;
+      }
+      case "workspace.togglePin":
+        if (selectedWorkspace) togglePin(selectedWorkspace);
+        break;
+      case "workspace.labels":
+        if (mode.kind !== "palette" && selectedWorkspace)
+          openLabels(selectedWorkspace);
+        break;
       case "sidebar.toggleGrouping":
         setGrouping((value) => (value === "project" ? "status" : "project"));
         break;
@@ -1180,6 +1389,39 @@ export function App({
         setMode({ kind: "palette" });
         break;
       }
+      case "agent.clear": {
+        if (mode.kind === "palette" || terminalId || !timeline) break;
+        const focusedPane = all.find((pane) => pane.id === layout.focusedId);
+        if (focusedPane && providerView(focusedPane)) {
+          setNotice({ text: "Open the parent agent to clear its session" });
+          break;
+        }
+        const agentId = focusedId;
+        if (!agentId || !commandPort) {
+          setNotice({ text: "This agent has no /clear command" });
+          break;
+        }
+        const openClear = (step: CommandStep) => {
+          manager.close();
+          setHelp(false);
+          setPaletteStep(step);
+          returnMode.current = paletteReturnMode(mode);
+          setMode({ kind: "palette" });
+        };
+        if (clearStep) openClear(clearStep);
+        else
+          commandPort.commands({ kind: "agent", agentId }).then(
+            (list) => {
+              if (canClear(list)) openClear(clearStepFor(agentId, timeline));
+              else setNotice({ text: "This agent has no /clear command" });
+            },
+            (error: unknown) =>
+              setNotice({
+                text: `Could not list commands: ${error instanceof Error ? error.message : String(error)}`,
+              }),
+          );
+        break;
+      }
       case "queue.edit":
         if (terminalId || !timeline) break;
         // The queued text lands in the prompt, so editing continues there.
@@ -1200,6 +1442,12 @@ export function App({
         if (next) navigation.cursor(next.id);
         break;
       }
+      case "list.half":
+        navigation.moveCursor(
+          sidebarOrder,
+          action.dir * Math.max(1, Math.floor(height / 2)),
+        );
+        break;
       case "list.open":
         if (selectedWorkspace) openWorkspace(selectedWorkspace);
         break;
@@ -1243,6 +1491,7 @@ export function App({
         providers: () => catalog.providers(),
         models: (provider) => catalog.models(provider),
         modes: (provider) => catalog.modes(provider),
+        onProvidersChange: (listener) => catalog.onProvidersChange(listener),
         create: (input) => catalog.create(input),
         workspaces: workspaces.map((workspace) => ({
           key: workspace.id,
@@ -1268,6 +1517,58 @@ export function App({
     : viewable.find((a) => a.id === current?.agentId);
   const focusedArchived =
     focusedAgent?.archivedAt != null ? focusedAgent : undefined;
+  const [clearable, setClearable] = useState<ReadonlySet<string>>(new Set());
+  const [clearedUsage, setClearedUsage] = useState<
+    ReadonlyMap<string, ClearedUsage>
+  >(new Map());
+  const focusedId = focusedAgent?.id;
+  const commandPort = useMemo(
+    () => (completions ? cachedCommands(completions) : undefined),
+    [completions],
+  );
+  const usedTokens = focusedAgent?.lastUsage?.contextWindowUsedTokens;
+  useEffect(() => {
+    if (!commandPort || !focusedId) return;
+    let live = true;
+    const source = { kind: "agent", agentId: focusedId } as const;
+    commandPort.opened?.(source);
+    commandPort.commands(source).then(
+      (list) => {
+        if (live && canClear(list))
+          setClearable((previous) => new Set(previous).add(focusedId));
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [commandPort, focusedId]);
+  const focusedClearedUsage = focusedId
+    ? clearedUsage.get(focusedId)
+    : undefined;
+  useEffect(() => {
+    if (
+      focusedId &&
+      focusedClearedUsage &&
+      focusedClearedUsage.usedTokens !== usedTokens
+    )
+      setClearedUsage((previous) => {
+        const next = new Map(previous);
+        next.delete(focusedId);
+        return next;
+      });
+  }, [focusedId, focusedClearedUsage, usedTokens]);
+  function clearStepFor(agentId: string, store: TimelineStore) {
+    return clearSessionStep(store, () =>
+      setClearedUsage((previous) =>
+        new Map(previous).set(agentId, { usedTokens }),
+      ),
+    );
+  }
+  const clearStep =
+    focusedId && timeline && clearable.has(focusedId)
+      ? clearStepFor(focusedId, timeline)
+      : undefined;
   function viewOnly() {
     returnMode.current = { kind: "normal", pending: "" };
     setMode({ kind: "normal", pending: "" });
@@ -1298,6 +1599,32 @@ export function App({
           open: (link: FileLink) => openFile(focusedAgent.id, link),
         }
       : undefined;
+  function openLabels(workspace: WorkspaceRow) {
+    const step = workspaceLabelsStep({
+      ...labelContext(),
+      workspaceId: workspace.id,
+    });
+    manager.close();
+    if (typeof step === "string") {
+      setNotice({ text: step });
+      return;
+    }
+    setHelp(false);
+    setPaletteStep(step);
+    returnMode.current = paletteReturnMode(mode);
+    setMode({ kind: "palette" });
+  }
+  function labelContext(): LabelCommandContext {
+    return {
+      labels,
+      filter: filterMemory,
+      workspace: selectedWorkspace,
+      row: (id) =>
+        directory.getSnapshot().workspaces.find((row) => row.id === id),
+      subscribeRows: directory.subscribe,
+      report: (text) => setNotice({ text }),
+    };
+  }
   function manageCommands(): ManageCommands {
     return {
       workspace:
@@ -1327,88 +1654,133 @@ export function App({
       copy,
     };
   }
-  const sourceContext = useRef({
-    files: chatFiles,
-    createAgent,
-    groups,
-    waiting,
-    workspaces,
-    focusedAgent,
-    focusedStore: terminalId ? null : timeline,
-    queued:
-      focusedAgent && !terminalId
-        ? queues.forAgent(focusedAgent).getSnapshot().items.length
-        : 0,
-    models: catalog?.models,
-    prefixLabel: prefixLabel(prefix),
-    bindings,
-    schedules:
-      schedules &&
-      scheduleDeps(schedules, {
-        notify: (text) => setNotice({ text }),
-        agents: flat,
-        focusedAgent,
-        open,
-        createAgent,
-      }),
-    usage,
-    usageConfig,
-    paths: workspacePaths(),
-    manage: manageCommands(),
-    history: history && historyContext(history),
-    unarchive() {
-      if (focusedArchived) unarchive(focusedArchived);
-    },
-    goto: gotoPrompt,
-    open,
-    changeLayout: setLayout,
-    workspace(workspace: WorkspaceRow) {
-      setSidebarVisible(true);
-      openWorkspace(workspace);
-    },
-    act,
-  });
-  sourceContext.current = {
-    ...sourceContext.current,
-    files: chatFiles,
-    createAgent,
-    groups,
-    waiting,
-    workspaces,
-    focusedAgent,
-    focusedStore: terminalId ? null : timeline,
-    queued:
-      focusedAgent && !terminalId
-        ? queues.forAgent(focusedAgent).getSnapshot().items.length
-        : 0,
-    models: catalog?.models,
-    prefixLabel: prefixLabel(prefix),
-    bindings,
-    schedules:
-      schedules &&
-      scheduleDeps(schedules, {
-        notify: (text) => setNotice({ text }),
-        agents: flat,
-        focusedAgent,
-        open,
-        createAgent,
-      }),
-    usage,
-    usageConfig,
-    paths: workspacePaths(),
-    manage: manageCommands(),
-    history: history && historyContext(history),
-    unarchive() {
-      if (focusedArchived) unarchive(focusedArchived);
-    },
-    goto: gotoPrompt,
-    open,
-    workspace(workspace: WorkspaceRow) {
-      setSidebarVisible(true);
-      openWorkspace(workspace);
-    },
-    act,
-  };
+  function reportFailure(error: unknown) {
+    setNotice({ text: error instanceof Error ? error.message : String(error) });
+  }
+  function readActionFor(workspace: WorkspaceRow) {
+    return workspaceRead
+      ? readAction(
+          buckets.get(workspace.id) ?? "done",
+          workspaceRead.canMarkUnread(workspace.id),
+        )
+      : null;
+  }
+  function markWorkspace(workspace: WorkspaceRow, kind: ReadAction["kind"]) {
+    if (!workspaceRead) return;
+    if (kind === "read") {
+      setBucketHold(releaseHold(currentHold, [workspace.id]));
+      workspaceRead.markRead([workspace.id]).catch(reportFailure);
+      return;
+    }
+    if (viewedAgent?.workspaceId === workspace.id) attention.hold(viewedAgent);
+    workspaceRead.markUnread(workspace.id).then(
+      () => attention.settle(),
+      (error: unknown) => {
+        attention.release();
+        reportFailure(error);
+      },
+    );
+  }
+  function setPinned(workspace: WorkspaceRow, pinned: boolean) {
+    if (!workspacePins?.canPin(workspace.id)) {
+      setNotice({ text: PINS_UNSUPPORTED });
+      return;
+    }
+    workspacePins.setPinned(workspace.id, pinned).then(() => {
+      const change = pinned
+        ? null
+        : unpinnedOrder(orderMemory.getSnapshot(), workspace.id);
+      if (change) orderMemory.apply(change);
+    }, reportFailure);
+  }
+  function togglePin(workspace: WorkspaceRow) {
+    setPinned(workspace, workspace.pinnedAt == null);
+  }
+  function markAllRead() {
+    const ids = unreadWorkspaceIds(buckets);
+    if (workspaceRead && ids.length) {
+      setBucketHold(releaseHold(currentHold, ids));
+      workspaceRead.markRead(ids).catch(reportFailure);
+    }
+  }
+  const refreshAllProviders = refreshProviders
+    ? () => {
+        setNotice({ text: "Refreshing providers…" });
+        refreshProviders().then(
+          () => setNotice({ text: "Providers refreshed" }),
+          (error: unknown) =>
+            setNotice({
+              text: `Refresh providers failed: ${error instanceof Error ? error.message : String(error)}`,
+            }),
+        );
+      }
+    : undefined;
+  /** The builtin Command Center source's view of this render. */
+  function builtinContext() {
+    return {
+      version: versions ? { versions, hosts: hostHealth } : undefined,
+      files: chatFiles,
+      createAgent,
+      groups,
+      waiting,
+      workspaces,
+      focusedAgent,
+      focusedStore: terminalId ? null : timeline,
+      queued:
+        focusedAgent && !terminalId
+          ? queues.forAgent(focusedAgent).getSnapshot().items.length
+          : 0,
+      models: catalog?.models,
+      prefixLabel: prefixLabel(prefix),
+      bindings,
+      schedules:
+        schedules &&
+        scheduleDeps(schedules, {
+          notify: (text) => setNotice({ text }),
+          agents: flat,
+          focusedAgent,
+          open,
+          createAgent,
+          unavailable: startupUnavailable,
+        }),
+      usage,
+      usageConfig,
+      unavailable: startupUnavailable,
+      paths: workspacePaths(),
+      manage: manageCommands(),
+      labels: labelContext(),
+      read: workspaceRead && {
+        workspace: selectedWorkspace,
+        action: selectedWorkspace ? readActionFor(selectedWorkspace) : null,
+        unread: unreadWorkspaceIds(buckets).length,
+        mark: markWorkspace,
+        markAll: markAllRead,
+      },
+      pins: workspacePins && {
+        workspace: selectedWorkspace,
+        canPin: (id: string) => workspacePins.canPin(id),
+        toggle: togglePin,
+      },
+      history: history && historyContext(history),
+      clear: clearStep,
+      clearedUsage: focusedClearedUsage,
+      unarchive() {
+        if (focusedArchived) unarchive(focusedArchived);
+      },
+      goto: gotoPrompt,
+      refreshProviders: refreshAllProviders,
+      open,
+      changeLayout: setLayout,
+      workspace(workspace: WorkspaceRow) {
+        setSidebarVisible(true);
+        openWorkspace(workspace);
+      },
+      act,
+    };
+  }
+  const builtin = builtinContext();
+  const sourceContext = useRef(builtin);
+  sourceContext.current = builtin;
   useEffect(
     () =>
       registry.register({
@@ -1493,6 +1865,9 @@ export function App({
                 focused={focus.pane === "list" && !overlayOpen}
                 onResize={setRequestedWidth}
                 sections={sections}
+                labels={(workspace) =>
+                  labelChips(workspace, labelState.host(workspace.id))
+                }
                 pending={
                   new Map(
                     workspaces.map((workspace) => [
@@ -1531,6 +1906,9 @@ export function App({
                 {...(directoryState.hosts
                   ? { hosts: directoryState.hosts.labels }
                   : {})}
+                {...(directoryState.offline
+                  ? { offline: directoryState.offline }
+                  : {})}
                 positions={
                   hinting
                     ? new Map(
@@ -1546,6 +1924,7 @@ export function App({
               {terminalId ? (
                 <WorkspaceTabs
                   id="pane-tabs:terminal"
+                  width={area.width}
                   tabs={tabs}
                   indicators={tabIndicators}
                   selected={tabKey}
@@ -1557,7 +1936,11 @@ export function App({
                   }
                 />
               ) : null}
-              {terminalHandle && terminalStream ? (
+              {terminalHandle &&
+              terminalStream &&
+              hostOffline(activeWorkspaceId) ? (
+                <text fg={foregroundProp(theme.muted)}>{HOST_OFFLINE}</text>
+              ) : terminalHandle && terminalStream ? (
                 <TerminalPane
                   key={terminalHandle.id}
                   terminal={terminalHandle}
@@ -1674,6 +2057,10 @@ export function App({
                               />
                             ) : null}
                           </box>
+                        ) : agent && hostOffline(agent.workspaceId) ? (
+                          <text fg={foregroundProp(theme.muted)}>
+                            {HOST_OFFLINE}
+                          </text>
                         ) : agent && store ? (
                           <AgentPane
                             subagents={paneView}
@@ -1704,7 +2091,7 @@ export function App({
                               if (value) controls.current.set(pane.id, value);
                               else controls.current.delete(pane.id);
                             }}
-                            completions={completions}
+                            completions={commandPort}
                             editPrompt={promptEditor}
                             editRequest={
                               pane.id === layout.focusedId ? promptEdit : 0
@@ -1764,13 +2151,19 @@ export function App({
             overlay={managementState.overlay}
             manager={manager}
             registry={registry}
-            completions={completions}
+            completions={commandPort}
+            onLabels={openLabels}
+            canPin={(workspace) => workspacePins?.canPin(workspace.id) ?? false}
+            onPin={(workspace, pinned) => {
+              manager.close();
+              setPinned(workspace, pinned);
+            }}
           />
           {mode.kind === "palette" ? (
             <CommandCenter
               registry={registry}
               initialStep={paletteStep}
-              completions={completions}
+              completions={commandPort}
               shortcut={shortcut}
               onClose={() => setMode(returnMode.current)}
             />
@@ -1795,11 +2188,14 @@ export function App({
                   ? null
                   : managementState.operation.message,
               createError: createError?.message ?? null,
+              filter: filterNote(filterKeys, allLabels),
             })}
             connection={connection}
             usage={usage}
             usageConfig={usageConfig}
-            contextWindow={contextWindow(focusedAgent?.lastUsage)}
+            contextWindow={contextWindow(
+              usageSinceClear(focusedAgent?.lastUsage, focusedClearedUsage),
+            )}
             timeline={terminalId ? null : timeline}
             mode={mode}
             terminalInput={terminalInput}
@@ -1814,11 +2210,38 @@ export function App({
 }
 const DEFAULT_PREFIX = parsePrefix("C-b");
 const LOCALHOST = /^(localhost|127(\.\d+){3}|\[::1\]|0\.0\.0\.0)$/i;
+const NO_LABEL_VIEW: WorkspaceLabelsSnapshot = {
+  host: () => ({ kind: "unsupported" }),
+  merged: () => [],
+  catalogs: [],
+  failed: [],
+  supported: false,
+  authoritative: false,
+};
+const NO_LABELS: WorkspaceLabels = {
+  subscribe: () => () => {},
+  getSnapshot: () => NO_LABEL_VIEW,
+  setAssignment: noHost,
+  update: noHost,
+  inspectDelete: noHost,
+  delete: noHost,
+  reload: noHost,
+};
+async function noHost(): Promise<never> {
+  throw Error("No host is connected");
+}
 const NO_HINTS: ExternalStore<boolean> = {
   subscribe: () => () => {},
   getSnapshot: () => false,
 };
 const NO_PROVIDER_SUBAGENTS: readonly ProviderSubagent[] = [];
+const NO_HEALTH: readonly HostHealthEntry[] = [];
+const NO_HOST_HEALTH: ExternalStore<readonly HostHealthEntry[]> = {
+  subscribe: () => () => {},
+  getSnapshot: () => NO_HEALTH,
+};
+const HOST_UNAVAILABLE = "Unavailable · host offline, reconnecting…";
+const HOST_OFFLINE = "host offline, reconnecting…";
 const NO_SUBAGENTS: ExternalStore<readonly ProviderSubagent[]> = {
   subscribe: () => () => {},
   getSnapshot: () => NO_PROVIDER_SUBAGENTS,

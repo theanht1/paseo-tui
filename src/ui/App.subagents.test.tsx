@@ -1,3 +1,4 @@
+import { RGBA } from "@opentui/core";
 import { describe, expect, it } from "vitest";
 import type { ProviderSubagentUpdate } from "../connection/ports.js";
 import { createProviderSubagentStore } from "../state/provider-subagents.js";
@@ -10,6 +11,7 @@ import {
 } from "../test/app-harness.js";
 import { agent } from "../test/fixtures.js";
 import { BINDINGS } from "./input/bindings.js";
+import { createTheme } from "./render/theme.js";
 
 describe("subagents", () => {
   function providerStore() {
@@ -84,7 +86,11 @@ describe("subagents", () => {
         (candidate) =>
           label.includes(candidate.text.trim()) && candidate.text.trim(),
       );
-    return span?.bg.toInts().slice(0, 3).join(",") === "130,170,255";
+    const active = RGBA.fromHex(createTheme({}).tabActiveBg);
+    return (
+      span?.bg.toInts().slice(0, 3).join(",") ===
+      active.toInts().slice(0, 3).join(",")
+    );
   }
   it("opens subagents in their own tabs, keeps the parent tab, and refocuses an open one", async () => {
     const provider = providerStore();

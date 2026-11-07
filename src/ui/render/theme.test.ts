@@ -1,5 +1,6 @@
+import { WORKSPACE_LABEL_COLORS } from "@getpaseo/protocol/workspace-labels";
 import { expect, test } from "vitest";
-import { createTheme, THEME_COLOR_FIELDS } from "./theme.js";
+import { createTheme, labelColor, THEME_COLOR_FIELDS } from "./theme.js";
 
 test("overrides replace theme colors, status, syntax and headings", () => {
   const theme = createTheme(
@@ -40,4 +41,15 @@ test("the color field list covers every top-level color of the theme", () => {
       .map(([key]) => key)
       .sort(),
   );
+});
+
+test("each label color has its own overridable token", () => {
+  const theme = createTheme({}, { labelViolet: "#123456" });
+  expect(labelColor(theme, "violet")).toBe("#123456");
+  const colors = WORKSPACE_LABEL_COLORS.map((color) =>
+    labelColor(theme, color),
+  );
+  expect(new Set(colors).size).toBe(WORKSPACE_LABEL_COLORS.length);
+  expect(colors.every(Boolean)).toBe(true);
+  expect(labelColor(createTheme({ NO_COLOR: "1" }), "sky")).toBe("");
 });

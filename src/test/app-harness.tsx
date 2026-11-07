@@ -47,7 +47,17 @@ afterEach(async () => {
 export class FakeAgents implements AgentsPort {
   thinking: CatalogModel["thinking"];
   providerAvailable = true;
+  /** While set, providers() waits for it, like a catalog still loading. */
+  providersLoaded: Promise<void> | null = null;
+  providerListeners = new Set<() => void>();
+  onProvidersChange(listener: () => void) {
+    this.providerListeners.add(listener);
+    return () => {
+      this.providerListeners.delete(listener);
+    };
+  }
   async providers() {
+    await this.providersLoaded;
     return [
       {
         id: "codex",
@@ -395,6 +405,9 @@ export async function setup(
       id,
       projectId: "repo",
       projectRootPath: "/repo",
+      activityAt: null,
+      statusEnteredAt: null,
+      pinnedAt: null,
       workspaceDirectory:
         currentAgents.find((agent) => (agent.workspaceId ?? agent.cwd) === id)
           ?.cwd ?? "/repo",

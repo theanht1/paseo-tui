@@ -5,6 +5,8 @@ import { sidebarSections } from "./sidebar-sections.js";
 function row(id: string, projectId: string): WorkspaceRow {
   return {
     id,
+    activityAt: null,
+    statusEnteredAt: null,
     projectId,
     name: id,
     projectRootPath: `/${projectId}`,
@@ -60,5 +62,62 @@ it("groups by status act-first, keeps project order inside a group, and drops em
     ["Needs input", ["a2", "w2"]],
     ["Running", ["a1"]],
     ["Unread", ["w1"]],
+  ]);
+});
+
+it("orders Idle workspaces by latest activity, then name and id", () => {
+  const idle = [
+    { ...row("null-z", "api"), name: "Z", activityAt: null },
+    {
+      ...row("tie-b", "api"),
+      name: "Same",
+      activityAt: "2026-11-02T00:00:00Z",
+      statusEnteredAt: null,
+    },
+    { ...row("old", "api"), name: "Old", activityAt: "2026-11-01T00:00:00Z" },
+    {
+      ...row("tie-a", "api"),
+      name: "Same",
+      activityAt: "2026-11-02T00:00:00Z",
+      statusEnteredAt: null,
+    },
+    { ...row("new", "api"), name: "New", activityAt: "2026-11-03T00:00:00Z" },
+    { ...row("null-a", "api"), name: "A", activityAt: null },
+  ];
+  const sections = sidebarSections([project("api", idle)], new Map(), "status");
+  expect(sections[0]?.workspaces.map((workspace) => workspace.id)).toEqual([
+    "new",
+    "tie-a",
+    "tie-b",
+    "old",
+    "null-a",
+    "null-z",
+  ]);
+});
+
+it("orders Idle by when it went idle when the daemon reports no activity time", () => {
+  const idle = [
+    {
+      ...row("older", "api"),
+      name: "A",
+      statusEnteredAt: "2026-11-01T00:00:00Z",
+    },
+    {
+      ...row("prompted", "api"),
+      name: "B",
+      statusEnteredAt: null,
+      lastUserMessageAt: "2026-11-02T00:00:00Z",
+    },
+    {
+      ...row("newest", "api"),
+      name: "C",
+      statusEnteredAt: "2026-11-03T00:00:00Z",
+    },
+  ];
+  const sections = sidebarSections([project("api", idle)], new Map(), "status");
+  expect(sections[0]?.workspaces.map((workspace) => workspace.id)).toEqual([
+    "newest",
+    "prompted",
+    "older",
   ]);
 });

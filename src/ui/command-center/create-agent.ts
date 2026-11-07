@@ -12,6 +12,8 @@ export interface CreateDeps {
   providers(): Promise<CatalogProvider[]>;
   models(provider: string): Promise<CatalogModel[]>;
   modes(provider: string): Promise<CatalogMode[]>;
+  /** Re-lists the Provider step when the host's provider snapshot changes. */
+  onProvidersChange?(listener: () => void): () => void;
   thinkingPreference?: ThinkingPreference;
   workspaces: readonly { key: string; cwd: string; label: string }[];
   defaultCwd: string | null;
@@ -22,7 +24,7 @@ export interface CreateDeps {
 
 export type ConfigurationDeps = Pick<
   CreateDeps,
-  "providers" | "models" | "modes" | "thinkingPreference"
+  "providers" | "models" | "modes" | "onProvidersChange" | "thinkingPreference"
 >;
 export function agentConfigurationStep(
   deps: ConfigurationDeps,
@@ -59,6 +61,10 @@ export function agentConfigurationFlow(
     const step: CommandStep = {
       kind: "choice",
       title: "Provider",
+      loading: "Loading providers…",
+      ...(deps.onProvidersChange
+        ? { subscribe: deps.onProvidersChange.bind(deps) }
+        : {}),
       items: async () =>
         (await deps.providers()).map((provider) => ({
           id: `provider:${provider.id}`,

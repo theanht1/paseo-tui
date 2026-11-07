@@ -38,6 +38,8 @@ export interface DirectorySnapshot {
   error: string | null;
   /** Present when several hosts are merged into this view. */
   hosts?: DirectoryHosts;
+  /** Workspaces whose host is offline; they stay listed until it reconnects. */
+  offline?: ReadonlySet<string>;
 }
 export interface DirectoryHosts {
   /** Each workspace's host name, for the sidebar tag. */

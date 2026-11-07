@@ -23,6 +23,8 @@ export interface UserConfig {
   notify?: NotifyStyle;
   usage?: UsageConfig;
   editor?: string;
+  /** The command that opens a file from the chat (`F`, clicks); default `vim`. */
+  fileEditor?: string;
 }
 
 /** `default` keeps a provider's headline window; an array lists exact usage ids. */
@@ -38,7 +40,15 @@ export function userConfigPath(env: NodeJS.ProcessEnv, home: string): string {
   );
 }
 
-const SETTINGS = ["keys", "theme", "prefix", "notify", "usage", "editor"];
+const SETTINGS = [
+  "keys",
+  "theme",
+  "prefix",
+  "notify",
+  "usage",
+  "editor",
+  "fileEditor",
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -190,6 +200,11 @@ function parseFlag<T>(
 }
 
 /** Validates config JSON; throws one error listing every problem. */
+function parseCommand(raw: string): string {
+  const command = raw.trim();
+  if (!command) throw new Error("needs a command");
+  return command;
+}
 export function parseUserConfig(text: string, source: string): UserConfig {
   let parsed: unknown;
   try {
@@ -223,14 +238,11 @@ export function parseUserConfig(text: string, source: string): UserConfig {
   );
   const notify = parseFlag("notify", value.notify, parseNotifyStyle, errors);
   const usage = parseUsage(value.usage, errors);
-  const editor = parseFlag(
-    "editor",
-    value.editor,
-    (raw) => {
-      const command = raw.trim();
-      if (!command) throw new Error("needs a command");
-      return command;
-    },
+  const editor = parseFlag("editor", value.editor, parseCommand, errors);
+  const fileEditor = parseFlag(
+    "fileEditor",
+    value.fileEditor,
+    parseCommand,
     errors,
   );
   if (errors.length > 0)
@@ -244,6 +256,7 @@ export function parseUserConfig(text: string, source: string): UserConfig {
     ...(notify === undefined ? {} : { notify }),
     ...(usage === undefined ? {} : { usage }),
     ...(editor === undefined ? {} : { editor }),
+    ...(fileEditor === undefined ? {} : { fileEditor }),
   };
 }
 

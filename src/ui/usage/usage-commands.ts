@@ -21,11 +21,23 @@ export function usageCommands(
   usage: UsageSource,
   now: () => number,
   config?: UsageConfig,
+  /** Why usage can't be read now (its daemon is offline); null when it can. */
+  unavailable: () => string | null = () => null,
 ): CommandItem[] {
   const step: CommandStep = {
     kind: "choice",
     title: "Provider usage",
     async items() {
+      const reason = unavailable();
+      if (reason)
+        return [
+          {
+            id: "usage:unavailable",
+            group: "Usage",
+            title: reason,
+            run: () => step,
+          },
+        ];
       await usage.refresh();
       const snapshot = usage.getSnapshot();
       const reports = snapshot.kind === "loading" ? [] : snapshot.reports;
@@ -63,7 +75,7 @@ export function usageCommands(
       id: "provider-usage",
       group: "Usage",
       title: "Provider usage",
-      subtitle: summary(usage.getSnapshot(), now(), config),
+      subtitle: unavailable() ?? summary(usage.getSnapshot(), now(), config),
       keywords: ["quota", "limits", "usage"],
       run: () => step,
     },

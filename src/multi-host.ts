@@ -1,20 +1,33 @@
-import type { ConnectionState, PaseoAgent, PaseoApi } from "@getpaseo/client";
+import type { PaseoAgent, PaseoApi } from "@getpaseo/client";
 import type {
   CompletionPort,
   DirectoryPort,
   HistoryPage,
   HistoryPort,
+  HostConnectionState,
   SchedulePort,
   TerminalStreamPort,
+  WorkspacePinPort,
+  WorkspaceReadPort,
 } from "./connection/ports.js";
 import type { LiveHost } from "./hosts.js";
 import type { AgentsSnapshot, WorkspaceGroup } from "./state/agents-store.js";
 import { combineStores } from "./state/combine.js";
+import { type HostHealthEntry, hostsSummary } from "./state/host-health.js";
+import {
+  type HostLabelState,
+  type LabelCatalog,
+  type WorkspaceLabels,
+  workspaceLabelsView,
+} from "./state/label-catalog.js";
 import type { AgentsPort } from "./state/ports.js";
 import type { ProviderSubagentStore } from "./state/provider-subagents.js";
-import { createTimelineRegistry } from "./state/timeline-registry.js";
+import {
+  createTimelineRegistry,
+  type TimelineRegistry,
+} from "./state/timeline-registry.js";
 import type { TimelineStore } from "./state/timeline-store.js";
-import type { UsageStore } from "./state/usage-store.js";
+import type { UsageSnapshot, UsageStore } from "./state/usage-store.js";
 import { mergeHosts } from "./ui/hosts/merge.js";
 import type { ExternalStore } from "./ui/use-store.js";
 import type { WorkspaceActions } from "./ui/workspace/workspace-actions.js";
@@ -23,13 +36,17 @@ import type { WorkspaceTab } from "./ui/workspace/workspaces.js";
 
 /** What the merged window needs from one host's session. */
 export interface HostSession {
-  status: ExternalStore<ConnectionState>;
+  status: ExternalStore<HostConnectionState>;
   agents: ExternalStore<AgentsSnapshot>;
   directory: ExternalStore<DirectorySnapshot>;
   terminals: Pick<PaseoApi["terminals"], "ref">;
   terminalStream: TerminalStreamPort;
   management: WorkspaceActions;
-  agentsPort: Pick<AgentsPort, "providers" | "models" | "modes" | "create">;
+  agentsPort: Pick<
+    AgentsPort,
+    "providers" | "models" | "modes" | "onProvidersChange" | "create"
+  >;
+  refreshProviders(): Promise<void>;
   clearAttention(agentId: string): Promise<void>;
   refresh(): Promise<void>;
   openTimeline(agent: PaseoAgent): TimelineStore;
@@ -38,9 +55,41 @@ export interface HostSession {
   subagents?: ProviderSubagentStore | undefined;
   usage?: UsageStore | undefined;
   history?: HistoryPort | undefined;
+  workspaceRead?: WorkspaceReadPort | undefined;
+  /** Null when the daemon lacks `workspacePinning`. */
+  workspacePins?: WorkspacePinPort | null | undefined;
   schedules: SchedulePort;
+  /** Absent when the daemon lacks `workspaceLabels`. */
+  labels?: LabelCatalog | undefined;
 }
 type Host = LiveHost<{ session: HostSession }>;
+const UNSUPPORTED_LABELS: HostLabelState = { kind: "unsupported" };
+/** A host's label state and whether it is connected, as one store. */
+function hostLabelStore(host: Host) {
+  const labels = host.live.session.labels;
+  const status = host.live.session.status;
+  let cached: { online: boolean; state: HostLabelState } | null = null;
+  return {
+    subscribe(listener: () => void) {
+      const stops = [status.subscribe(listener), labels?.subscribe(listener)];
+      return () => {
+        for (const stop of stops) stop?.();
+      };
+    },
+    getSnapshot() {
+      const online = status.getSnapshot().status === "connected";
+      const state = labels?.getSnapshot() ?? UNSUPPORTED_LABELS;
+      if (cached?.online !== online || cached.state !== state)
+        cached = { online, state };
+      return cached;
+    },
+  };
+}
+const NO_USAGE_SNAPSHOT: UsageSnapshot = { kind: "loading" };
+const NO_USAGE: ExternalStore<UsageSnapshot> = {
+  subscribe: () => () => {},
+  getSnapshot: () => NO_USAGE_SNAPSHOT,
+};
 const NO_DESCRIPTORS: ExternalStore<
   ReturnType<ProviderSubagentStore["getSnapshot"]>
 > = { subscribe: () => () => {}, getSnapshot: () => [] };
@@ -51,11 +100,15 @@ function byRecency(left: WorkspaceGroup, right: WorkspaceGroup) {
     left.key.localeCompare(right.key)
   );
 }
+function online(host: Host) {
+  return host.live.session.status.getSnapshot().status === "connected";
+}
+/** Connected hosts' errors; an offline host's failures are its outage, shown once elsewhere. */
 function errors(
   values: readonly { source: Host; value: { error: string | null } }[],
 ) {
   const failed = values.flatMap(({ source, value }) =>
-    value.error ? [`${source.label}: ${value.error}`] : [],
+    value.error && online(source) ? [`${source.label}: ${value.error}`] : [],
   );
   return failed.length ? failed.join("; ") : null;
 }
@@ -63,15 +116,12 @@ function errors(
 /** Host ids (see hosts.ts) of daemons on this machine: a Paseo home, or a loopback address. */
 const LOCAL_HOST =
   /^home(:|$)|^host:(unix:|pipe:|[a-z]+:\/\/(localhost|127\.|\[::1\]))/;
-/** The status bar name: the startup host's, plus how many others are connected. */
+/** The status bar name: the startup host's, then how many others there are and are offline. */
 export function windowLabel(
   hosts: readonly LiveHost<{ connection: { label: string } }>[],
+  health: readonly HostHealthEntry[],
 ) {
-  const [first, ...others] = hosts;
-  const label = first?.live.connection.label ?? "no host";
-  return others.length
-    ? `${label} +${others.length} host${others.length === 1 ? "" : "s"}`
-    : label;
+  return `${hosts[0]?.live.connection.label ?? "no host"}${hostsSummary(health)}`;
 }
 /**
  * Every connected host as one window, the desktop app's way: their agents,
@@ -80,7 +130,12 @@ export function windowLabel(
  * (directory search, slash commands, file links, new agents) go to the host of the
  * focused workspace; usage and schedules come from the first (startup) host.
  */
-export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
+export function createMultiHost(
+  hosts: ExternalStore<readonly Host[]> & {
+    /** Every configured host, connected or not (hosts.ts's health list). */
+    health: ExternalStore<readonly { id: string }[]>;
+  },
+) {
   const list = () => hosts.getSnapshot();
   const first = () => {
     const host = list()[0];
@@ -104,6 +159,8 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       };
     },
   });
+  /** Each merged project's per-host projects, whether or not several hosts are connected. */
+  let placements: ReturnType<typeof mergeHosts>["placements"] = new Map();
   const directory = combineStores({
     sources: hosts,
     store: (host: Host) => host.live.session.directory,
@@ -121,10 +178,15 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
           workspaces: value.workspaces,
         })),
       );
+      placements = merged.placements;
       const labels = new Map(
         values.map(({ source }) => [source.id, source.label]),
       );
+      const offline = values.flatMap(({ source, value }) =>
+        online(source) ? [] : value.workspaces.map((workspace) => workspace.id),
+      );
       return {
+        ...(offline.length ? { offline: new Set(offline) } : {}),
         projects: merged.projects,
         workspaces: merged.workspaces,
         terminals: values.flatMap(({ value }) => value.terminals),
@@ -145,6 +207,80 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       };
     },
   });
+  const labelStores = new WeakMap<Host, ReturnType<typeof hostLabelStore>>();
+  const hostLabels = combineStores({
+    sources: hosts,
+    store(host: Host) {
+      const known = labelStores.get(host);
+      if (known) return known;
+      const store = hostLabelStore(host);
+      labelStores.set(host, store);
+      return store;
+    },
+    merge: (values) =>
+      values.map(({ source, value }) => ({
+        id: source.id,
+        label: source.label,
+        ...value,
+      })),
+  });
+  let labelCache: {
+    hosts: ReturnType<typeof hostLabels.getSnapshot>;
+    expected: string;
+    view: ReturnType<typeof workspaceLabelsView>;
+  } | null = null;
+  const labelView: ExternalStore<ReturnType<typeof workspaceLabelsView>> = {
+    subscribe(listener) {
+      const stops = [
+        hostLabels.subscribe(listener),
+        hosts.health.subscribe(listener),
+      ];
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
+    getSnapshot() {
+      const current = hostLabels.getSnapshot();
+      const ids = hosts.health.getSnapshot().map((host) => host.id);
+      const expected = ids.join("\n");
+      if (labelCache?.hosts !== current || labelCache.expected !== expected)
+        labelCache = {
+          hosts: current,
+          expected,
+          view: workspaceLabelsView({
+            hosts: current,
+            expected: ids,
+            hostOf: (workspaceId) => find(workspaceId)?.id ?? null,
+          }),
+        };
+      return labelCache.view;
+    },
+  };
+  function labelCatalog(host: Host): LabelCatalog {
+    const catalog = host.live.session.labels;
+    if (!catalog)
+      throw Error(
+        `Update the Paseo daemon on ${host.label} to use workspace labels (workspaceLabels)`,
+      );
+    return catalog;
+  }
+  /** The chosen host's catalog; an offline host fails at once. */
+  function hostCatalog(hostId: string): LabelCatalog {
+    const host = list().find((candidate) => candidate.id === hostId);
+    if (!host) throw Error("That host is not connected");
+    return labelCatalog(reachable(host));
+  }
+  const labels: WorkspaceLabels = {
+    subscribe: labelView.subscribe,
+    getSnapshot: labelView.getSnapshot,
+    setAssignment: async (input) =>
+      labelCatalog(owner(input.workspaceId)).setAssignment(input),
+    update: async (hostId, input) => hostCatalog(hostId).update(input),
+    inspectDelete: async (hostId, name) =>
+      hostCatalog(hostId).inspectDelete(name),
+    delete: async (hostId, name) => hostCatalog(hostId).delete(name),
+    reload: async (hostId) => hostCatalog(hostId).load(),
+  };
   const descriptors = combineStores({
     sources: hosts,
     store: (host: Host) => host.live.session.subagents ?? NO_DESCRIPTORS,
@@ -159,10 +295,19 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
     const found = owners.get(id);
     return found && list().includes(found) ? found : null;
   }
-  function owner(id: string): Host {
+  /** The item's host, offline or not: for views that wait for it to come back. */
+  function known(id: string): Host {
     const host = find(id);
     if (!host) throw Error("That item's host is not connected");
     return host;
+  }
+  function reachable(host: Host): Host {
+    if (!online(host)) throw Error(`${host.label} is offline`);
+    return host;
+  }
+  /** The item's host for a request; an offline one fails at once instead of waiting. */
+  function owner(id: string): Host {
+    return reachable(known(id));
   }
   function owned<T extends { id: string }>(host: Host, value: T): T {
     owners.set(value.id, host);
@@ -170,12 +315,13 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
   }
   function historyHosts() {
     return list().flatMap((host) => {
+      if (!online(host)) return [];
       const port = host.live.session.history;
       return port ? [{ host, port }] : [];
     });
   }
   function current(): Host {
-    return (focused ? find(focused) : null) ?? first();
+    return reachable((focused ? find(focused) : null) ?? first());
   }
   function tabOwner(tab: WorkspaceTab): Host {
     if (tab.kind === "agent") return owner(tab.agent.id);
@@ -184,9 +330,10 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
   }
   /** The host and its own project behind a merged (or a host's) project. */
   function projectOwners(projectId: string) {
-    const placements = directory.getSnapshot().hosts?.placements.get(projectId);
-    if (placements)
-      return placements.flatMap((placement) => {
+    directory.getSnapshot();
+    const found = placements.get(projectId);
+    if (found)
+      return found.flatMap((placement) => {
         const host = list().find(
           (candidate) => candidate.id === placement.hostId,
         );
@@ -199,9 +346,12 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       return project ? [{ host, project }] : [];
     });
   }
+  /** An online host of the project; fails fast when every host it is on is offline. */
   function projectOwner(projectId: string) {
-    const found = projectOwners(projectId)[0];
+    const owners = projectOwners(projectId);
+    const found = owners.find(({ host }) => online(host)) ?? owners[0];
     if (!found) throw Error("That project's host is not connected");
+    reachable(found.host);
     return found;
   }
   const history = {
@@ -252,10 +402,89 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       return port.unarchive(agentId);
     },
   };
+  const readPort = (host: Host) => {
+    const port = host.live.session.workspaceRead;
+    if (!port) throw Error(`${host.label} cannot mark workspaces read`);
+    return port;
+  };
+  const workspaceRead = {
+    canMarkUnread(workspaceId: string) {
+      const host = find(workspaceId);
+      return host?.live.session.workspaceRead?.markUnread != null;
+    },
+    /** One request per host; online hosts are marked before an offline one is reported. */
+    async markRead(workspaceIds: readonly string[]) {
+      const grouped = new Map<Host, string[]>();
+      for (const id of workspaceIds) {
+        const host = known(id);
+        grouped.set(host, [...(grouped.get(host) ?? []), id]);
+      }
+      const hostsInOrder = list().filter((host) => grouped.has(host));
+      for (const host of hostsInOrder)
+        if (online(host))
+          await readPort(host).markRead(grouped.get(host) ?? []);
+      const offline = hostsInOrder.filter((host) => !online(host));
+      if (offline.length)
+        throw Error(
+          `${offline.map((host) => host.label).join(", ")} is offline`,
+        );
+    },
+    async markUnread(workspaceId: string) {
+      const host = owner(workspaceId);
+      const markUnread = readPort(host).markUnread;
+      if (!markUnread)
+        throw Error(`${host.label} needs a newer daemon (workspaceMarkUnread)`);
+      return markUnread(workspaceId);
+    },
+  };
+  const workspacePins = {
+    canPin(workspaceId: string) {
+      return find(workspaceId)?.live.session.workspacePins != null;
+    },
+    async setPinned(workspaceId: string, pinned: boolean) {
+      const host = owner(workspaceId);
+      const port = host.live.session.workspacePins;
+      if (!port)
+        throw Error(`${host.label} needs a newer daemon (workspacePinning)`);
+      await port.setPinned(workspaceId, pinned);
+    },
+  };
   const actions = (host: Host) => host.live.session.management;
+  const startupSchedules = () => first().live.session.schedules;
+  const startup = {
+    status: combineStores({
+      sources: hosts,
+      store: (host: Host) => host.live.session.status,
+      merge: (values): HostConnectionState =>
+        values[0]?.value ?? { status: "idle" },
+    }),
+    usage: list()[0]?.live.session.usage
+      ? {
+          ...combineStores({
+            sources: hosts,
+            store: (host: Host) => host.live.session.usage ?? NO_USAGE,
+            merge: (values): UsageSnapshot =>
+              values[0]?.value ?? NO_USAGE_SNAPSHOT,
+          }),
+          refresh: (options?: { force?: boolean }) =>
+            first().live.session.usage?.refresh(options) ?? Promise.resolve(),
+          close() {},
+        }
+      : undefined,
+    schedules: {
+      list: () => startupSchedules().list(),
+      inspect: (id) => startupSchedules().inspect(id),
+      logs: (id) => startupSchedules().logs(id),
+      pause: (id) => startupSchedules().pause(id),
+      resume: (id) => startupSchedules().resume(id),
+      runOnce: (id) => startupSchedules().runOnce(id),
+      remove: (id) => startupSchedules().remove(id),
+      create: (input) => startupSchedules().create(input),
+    } satisfies SchedulePort,
+  };
 
   const management: WorkspaceActions = {
-    baseBranches(project) {
+    async baseBranches(project) {
       const { host, project: own } = projectOwner(project.projectId);
       return actions(host).baseBranches(own);
     },
@@ -278,35 +507,49 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       const host = owner(workspace.id);
       return owned(host, await actions(host).openFile(workspace, editor));
     },
-    renameWorkspace: (workspace, title) =>
+    renameWorkspace: async (workspace, title) =>
       actions(owner(workspace.id)).renameWorkspace(workspace, title),
-    renameTab: (tab, title) => actions(tabOwner(tab)).renameTab(tab, title),
-    closeTab: (tab) => actions(tabOwner(tab)).closeTab(tab),
-    directories: (query) => actions(current()).directories(query),
-    addProject: (cwd) => actions(current()).addProject(cwd),
+    renameTab: async (tab, title) =>
+      actions(tabOwner(tab)).renameTab(tab, title),
+    closeTab: async (tab) => actions(tabOwner(tab)).closeTab(tab),
+    directories: async (query) => actions(current()).directories(query),
+    addProject: async (cwd) => actions(current()).addProject(cwd),
     async removeProject(project, workspaces) {
-      for (const { host, project: own } of projectOwners(project.projectId))
-        await actions(host).removeProject(
-          own,
-          workspaces.filter((workspace) => find(workspace.id) === host),
+      const owners = projectOwners(project.projectId);
+      const offline = owners.filter(({ host }) => !online(host));
+      if (offline.length === owners.length && offline[0])
+        reachable(offline[0].host);
+      for (const { host, project: own } of owners)
+        if (online(host))
+          await actions(host).removeProject(
+            own,
+            workspaces.filter((workspace) => find(workspace.id) === host),
+          );
+      if (offline.length)
+        throw Error(
+          `${offline.map(({ host }) => host.label).join(", ")} is offline`,
         );
     },
-    archiveWorkspace: (workspace) =>
+    archiveWorkspace: async (workspace) =>
       actions(owner(workspace.id)).archiveWorkspace(workspace),
   };
 
   const catalog = {
-    providers: () => current().live.session.agentsPort.providers(),
-    models: (provider: string) =>
+    providers: async () => current().live.session.agentsPort.providers(),
+    models: async (provider: string) =>
       current().live.session.agentsPort.models(provider),
-    modes: (provider: string) =>
+    modes: async (provider: string) =>
       current().live.session.agentsPort.modes(provider),
+    onProvidersChange: (listener: () => void) =>
+      (
+        (focused ? find(focused) : null) ?? first()
+      ).live.session.agentsPort.onProvidersChange(listener),
     async create(input: Parameters<AgentsPort["create"]>[0]) {
       const host = current();
       return owned(host, await host.live.session.agentsPort.create(input));
     },
   };
-  const stream = (id: string) => owner(id).live.session.terminalStream;
+  const stream = (id: string) => known(id).live.session.terminalStream;
   const terminalStream: TerminalStreamPort = {
     observe: (id, receive, onError, onExit) =>
       stream(id).observe(id, receive, onError, onExit),
@@ -314,7 +557,7 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
     resize: (id, cols, rows) => stream(id).resize(id, cols, rows),
   };
   function subagentsOf(parentAgentId: string) {
-    const store = owner(parentAgentId).live.session.subagents;
+    const store = known(parentAgentId).live.session.subagents;
     if (!store) throw Error("This agent's host has no provider subagents");
     return store;
   }
@@ -329,31 +572,62 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       subagentsOf(parentAgentId).timelinePort(parentAgentId, subagentId),
   };
 
+  /** The session each timeline store was opened on. */
+  const servedBy = new WeakMap<TimelineStore, HostSession>();
+  const registry = createTimelineRegistry((agent) => {
+    const session = known(agent.id).live.session;
+    const store = session.openTimeline(agent);
+    servedBy.set(store, session);
+    return store;
+  });
+  /** A host whose connection was replaced lists its agents again: their stores move to it. */
+  function rebind() {
+    registry.rebind((agent, store) => {
+      const host = find(agent.id);
+      return host !== null && servedBy.get(store) !== host.live.session;
+    });
+  }
+  let stopRebind: (() => void) | null = null;
+  const timelines: TimelineRegistry = {
+    ...registry,
+    acquire(agent) {
+      stopRebind ??= agents.subscribe(rebind);
+      return registry.acquire(agent);
+    },
+    close() {
+      stopRebind?.();
+      stopRebind = null;
+      registry.close();
+    },
+  };
+
   return {
     agents,
     directory,
+    labels,
     management,
     catalog,
     terminalStream,
     subagents,
     terminals: {
-      ref: (id: string) => owner(id).live.session.terminals.ref(id),
+      ref: (id: string) => known(id).live.session.terminals.ref(id),
     } satisfies HostSession["terminals"],
-    timelines: createTimelineRegistry((agent) =>
-      owner(agent.id).live.session.openTimeline(agent),
-    ),
+    timelines,
     completions: {
-      commands: (source) => current().live.session.completions.commands(source),
-      files: (cwd, query) =>
+      commands: async (source) =>
+        current().live.session.completions.commands(source),
+      files: async (cwd, query) =>
         current().live.session.completions.files(cwd, query),
     } satisfies CompletionPort,
     directories: {
-      list: (path) => current().live.session.directories.list(path),
+      list: async (path) => current().live.session.directories.list(path),
     } satisfies DirectoryPort,
     get history() {
       return historyHosts().length ? history : null;
     },
-    clearAttention: (agentId: string) =>
+    workspaceRead,
+    workspacePins,
+    clearAttention: async (agentId: string) =>
       owner(agentId).live.session.clearAttention(agentId),
     /** The agent's host is reached over the network rather than this machine's Paseo home. */
     isRemoteAgent(agentId: string) {
@@ -361,15 +635,25 @@ export function createMultiHost(hosts: ExternalStore<readonly Host[]>) {
       return host !== null && !LOCAL_HOST.test(host.id);
     },
     async refresh() {
-      await Promise.all(list().map((host) => host.live.session.refresh()));
+      await Promise.all(
+        list()
+          .filter(online)
+          .map((host) => host.live.session.refresh()),
+      );
+    },
+    /** Every connected host rediscovers its providers. */
+    async refreshProviders() {
+      await Promise.all(
+        list()
+          .filter(online)
+          .map((host) => host.live.session.refreshProviders()),
+      );
     },
     /** The workspace the window shows; host-less requests go to its host. */
     focus(workspaceId: string | null) {
       focused = workspaceId;
     },
-    /** The startup host's: the connection status, usage and schedules. */
-    get local() {
-      return first().live.session;
-    },
+    /** The startup host's status, usage and schedules, following it across reconnects. */
+    startup,
   };
 }

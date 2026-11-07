@@ -77,6 +77,3 @@ export function popupRows(view: PaneSubagents | null): SubagentPopupRow[] {
     }),
   ];
 }
-export function moveCursor(cursor: number, delta: number, length: number) {
-  return Math.max(0, Math.min(length - 1, cursor + delta));
-}

@@ -227,6 +227,20 @@ describe("questionForm", () => {
   });
 });
 
+describe("question option navigation", () => {
+  it("jumps with G, gg, Ctrl-d/u and Home/End, and a stray key cancels a pending g", () => {
+    const features = formAfter(form(), "tab");
+    expect(formAfter(features, key("G", { shift: true })).cursor).toBe(2);
+    expect(formAfter(features, "g", "g").cursor).toBe(0);
+    expect(formAfter(features, "end").cursor).toBe(2);
+    expect(formAfter(features, "end", "home").cursor).toBe(0);
+    expect(formAfter(features, key("d", { ctrl: true })).cursor).toBe(2);
+    expect(formAfter(features, "end", key("u", { ctrl: true })).cursor).toBe(0);
+    expect(formAfter(features, "j", "g", "x", "g").cursor).toBe(1);
+    expect(formAfter(features, "j", "g", "j", "g").cursor).toBe(2);
+  });
+});
+
 describe("createQuestionStore", () => {
   it("responds once while a reply is pending and pastes into Other", async () => {
     const responses: unknown[] = [];

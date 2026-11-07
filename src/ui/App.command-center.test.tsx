@@ -244,6 +244,26 @@ it("moves the Command Center selection with Ctrl-N and Ctrl-P instead of opening
     expect(ports.has("alpha")).toBe(false);
   }
 });
+it("jumps the Command Center selection with PgDn and PgUp and leaves Home/End to the query", async () => {
+  async function opened(keys: string[]) {
+    const { app, ports } = await setup(agents, 24, false, {}, "agents");
+    app.stdin.write("\u000b");
+    await settle();
+    for (const key of keys) {
+      app.stdin.write(key);
+      await settle();
+    }
+    app.stdin.write("\r");
+    await settle();
+    return ports;
+  }
+  expect((await opened([])).has("alpha")).toBe(true);
+  expect((await opened(["\u001b[F", "\u001b[H"])).has("alpha")).toBe(true);
+  expect((await opened(["\u001b[F"])).has("alpha")).toBe(true);
+  expect((await opened(["\u001b[6~"])).has("alpha")).toBe(false);
+  expect((await opened(["\u001b[6~", "\u001b[5~"])).has("alpha")).toBe(true);
+});
+
 it("moves wizard step selections with Ctrl-N instead of reopening New tab", async () => {
   const { app } = await setup(agents, 24, false, {}, "agents");
   app.stdin.write("\r");
@@ -422,6 +442,7 @@ it("loads models asynchronously, marks current/default, and applies a clicked ch
     {
       providers: async () => [],
       modes: async () => [],
+      onProvidersChange: () => () => {},
       create: async () => {
         throw Error("Unexpected create");
       },
@@ -458,6 +479,7 @@ it("shows catalog failures and returns to the preserved root query", async () =>
     {
       providers: async () => [],
       modes: async () => [],
+      onProvidersChange: () => () => {},
       create: async () => {
         throw Error("Unexpected create");
       },
@@ -603,6 +625,53 @@ it("keeps one Provider breadcrumb and the overlay open when an unavailable provi
     expect(app.lastFrame()).not.toContain("Loading…");
   }
   expect(agentsPort.createdInputs).toEqual([]);
+});
+it("shows Loading providers… until the catalog loads and re-lists providers when it changes", async () => {
+  const { app, agentsPort } = await setup(agents, 24, false, {}, "agents");
+  let loaded = () => {};
+  agentsPort.providersLoaded = new Promise((resolve) => {
+    loaded = resolve;
+  });
+  agentsPort.providerAvailable = false;
+  for (const key of ["\r", "\u000b", "new agent", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("Loading providers…");
+  expect(app.lastFrame()).not.toContain("Codex");
+  loaded();
+  await settle();
+  expect(app.lastFrame()).not.toContain("Loading providers…");
+  expect(app.lastFrame()).toContain("Sign in required");
+  agentsPort.providerAvailable = true;
+  for (const listener of agentsPort.providerListeners) listener();
+  await settle();
+  expect(app.lastFrame()).toContain("Codex");
+  expect(app.lastFrame()).not.toContain("Sign in required");
+});
+it("refreshes providers from the Command Center and says when it is done", async () => {
+  let refreshes = 0;
+  const { app } = await setup(
+    agents,
+    24,
+    false,
+    {},
+    "agents",
+    undefined,
+    undefined,
+    undefined,
+    {
+      refreshProviders: async () => {
+        refreshes++;
+      },
+    },
+  );
+  for (const key of ["\r", "\u000b", "refresh providers", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(refreshes).toBe(1);
+  expect(app.lastFrame()).toContain("Providers refreshed");
 });
 describe("Command Center shortcut actions", () => {
   async function palette(

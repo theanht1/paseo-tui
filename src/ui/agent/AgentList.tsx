@@ -1,9 +1,11 @@
 import type { PaseoProject } from "@getpaseo/client";
+import type { WorkspaceLabelDefinition } from "@getpaseo/protocol/workspace-labels";
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useContext, useEffect, useRef } from "react";
 import {
   backgroundProp,
   foregroundProp,
+  labelColor,
   scrollbarOptions,
   ThemeContext,
 } from "../render/theme.js";
@@ -26,6 +28,10 @@ export interface AgentListProps {
   positions?: ReadonlyMap<string, number>;
   /** Each workspace's host name, shown when several hosts are merged. */
   hosts?: ReadonlyMap<string, string>;
+  /** Workspaces whose host is offline: dimmed and tagged until it reconnects. */
+  offline?: ReadonlySet<string>;
+  /** A workspace's label chips, shown at the end of its row. */
+  labels?(workspace: WorkspaceRow): readonly WorkspaceLabelDefinition[];
 }
 export function AgentList({
   sections,
@@ -38,6 +44,8 @@ export function AgentList({
   onContext,
   positions,
   hosts,
+  offline,
+  labels,
 }: AgentListProps) {
   const scroll = useRef<ScrollBoxRenderable>(null);
   useEffect(() => {
@@ -128,7 +136,11 @@ export function AgentList({
                       wrapMode="none"
                       attributes={workspace.id === selectedId ? 1 : 0}
                       fg={foregroundProp(
-                        workspace.id === selectedId ? theme.cursorFg : theme.fg,
+                        workspace.id === selectedId
+                          ? theme.cursorFg
+                          : offline?.has(workspace.id)
+                            ? theme.muted
+                            : theme.fg,
                       )}
                     >
                       {" "}
@@ -140,6 +152,18 @@ export function AgentList({
                       />
                       {count > 1 ? count : ""}{" "}
                       {workspace.title || workspace.name}
+                      {labels?.(workspace).map((label) => (
+                        <span
+                          key={label.name}
+                          fg={foregroundProp(
+                            workspace.id === selectedId
+                              ? theme.cursorFg
+                              : labelColor(theme, label.color),
+                          )}
+                        >
+                          {` ●${label.name}`}
+                        </span>
+                      ))}
                     </text>
                     {positions?.has(workspace.id) ? (
                       <text
@@ -149,7 +173,8 @@ export function AgentList({
                       >
                         {` ${positions.get(workspace.id)} `}
                       </text>
-                    ) : hosts?.has(workspace.id) ? (
+                    ) : hosts?.has(workspace.id) ||
+                      offline?.has(workspace.id) ? (
                       <text
                         id={`workspace-host:${workspace.id}`}
                         flexShrink={0}
@@ -160,7 +185,12 @@ export function AgentList({
                             : theme.muted,
                         )}
                       >
-                        {` ${hostTag(hosts.get(workspace.id) ?? "")} `}
+                        {` ${[
+                          hostTag(hosts?.get(workspace.id) ?? ""),
+                          offline?.has(workspace.id) ? "offline" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")} `}
                       </text>
                     ) : null}
                   </box>

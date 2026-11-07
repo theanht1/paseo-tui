@@ -1,6 +1,8 @@
 #!/usr/bin/env -S NODE_ENV=production node --experimental-ffi --no-warnings=ExperimentalWarning
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { type CliRendererConfig, createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
@@ -16,6 +18,8 @@ import {
   type LiveHost,
 } from "./hosts.js";
 import { createMultiHost, windowLabel } from "./multi-host.js";
+import { shutdown } from "./shutdown.js";
+import type { HostHealthEntry } from "./state/host-health.js";
 import { hostsPath, loadHostRegistry } from "./state/host-registry.js";
 import { App } from "./ui/App.js";
 import {
@@ -27,14 +31,20 @@ import { createCommandRegistry } from "./ui/command-center/registry.js";
 import { loadUserConfig, userConfigPath } from "./ui/config/user-config.js";
 import { nodeClipboardRunner, systemClipboard } from "./ui/copy/clipboard.js";
 import { nodeBrowserRunner, systemBrowser } from "./ui/file-links/browser.js";
+import { DEFAULT_FILE_EDITOR } from "./ui/file-links/editor-terminal.js";
 import { positionModifiers } from "./ui/input/bindings.js";
 import { parsePrefix } from "./ui/input/keymap.js";
 import { createModifierHold } from "./ui/input/modifier-hold.js";
+import {
+  labelFilterPath,
+  loadLabelFilterMemory,
+} from "./ui/layout/label-filter-memory.js";
 import {
   layoutsPath,
   loadLayoutMemory,
   timerSchedule,
 } from "./ui/layout/layout-memory.js";
+import { loadOrderMemory, orderPath } from "./ui/layout/order-memory.js";
 import {
   notificationSequence,
   parseNotifyStyle,
@@ -53,6 +63,23 @@ import { useStore } from "./ui/use-store.js";
 import { resolveDiffTool } from "./ui/workspace/diff-tool.js";
 import { DEFAULT_EDITOR } from "./ui/workspace/workspace-editor.js";
 
+const clientPackagePath = join(
+  dirname(createRequire(import.meta.url).resolve("@getpaseo/client")),
+  "..",
+  "package.json",
+);
+const clientPackage: unknown = JSON.parse(
+  readFileSync(clientPackagePath, "utf8"),
+);
+const clientVersion =
+  typeof clientPackage === "object" &&
+  clientPackage !== null &&
+  "version" in clientPackage &&
+  typeof clientPackage.version === "string"
+    ? clientPackage.version
+    : null;
+const versions = { tui: packageJson.version, client: clientVersion };
+
 const HELP = `Usage: paseo-tui [options]
 
 Terminal client for a Paseo daemon.
@@ -69,13 +96,14 @@ Options:
   --diff-tool <cmd> Command g d runs in a workspace tab
                    (default: PASEO_TUI_DIFF_TOOL or lazygit)
   -h, --help       Show help
-  -v, --version    Show version
+  -v, --version    Show paseo-tui and @getpaseo/client versions
 
 Environment: PASEO_TUI_KEY_LOG=<file> logs every key the terminal sends
 (raw bytes and how it parsed), to debug shortcuts that don't fire.
 
 Config keys: "keys" (rebind actions), "theme" (hex color overrides), "prefix",
-"notify". Layouts are saved in $XDG_STATE_HOME/paseo-tui/layouts.json.
+"notify". Layouts and your project, workspace and tab order are saved in
+$XDG_STATE_HOME/paseo-tui/ (layouts.json, order.json, label-filter.json).
 `;
 
 /**
@@ -103,9 +131,12 @@ function HostWindow({
   children,
 }: {
   hosts: Hosts;
-  children(live: readonly LiveHost<ConnectedHost>[]): ReactNode;
+  children(
+    live: readonly LiveHost<ConnectedHost>[],
+    health: readonly HostHealthEntry[],
+  ): ReactNode;
 }) {
-  return children(useStore(hosts));
+  return children(useStore(hosts), useStore(hosts.health));
 }
 
 /** `PASEO_TUI_KEY_LOG=<file>`: what the terminal sends and how it parses, to debug shortcuts. */
@@ -129,7 +160,9 @@ async function main() {
     },
   });
   if (values.version) {
-    process.stdout.write(`${packageJson.version}\n`);
+    process.stdout.write(
+      `paseo-tui        ${versions.tui}\n@getpaseo/client ${versions.client ?? "unknown"}\n`,
+    );
     return;
   }
   if (values.help) {
@@ -149,6 +182,13 @@ async function main() {
     filePreferenceStorage(layoutsPath(process.env, homedir())),
     { schedule: timerSchedule },
   );
+  const order = await loadOrderMemory(
+    filePreferenceStorage(orderPath(process.env, homedir())),
+    { schedule: timerSchedule },
+  );
+  const labelFilter = await loadLabelFilterMemory(
+    filePreferenceStorage(labelFilterPath(process.env, homedir())),
+  );
   const diffTool = resolveDiffTool(values["diff-tool"], process.env);
   const target = resolveTarget(
     { host: values.host, home: values.home },
@@ -159,6 +199,7 @@ async function main() {
   );
   const hostsFile = hostsPath(process.env, homedir());
   const hosts = createHosts({
+    schedule: timerSchedule,
     initial: { target, live: connectedHost(await connect(target)) },
     registry: await loadHostRegistry(
       filePreferenceStorage(hostsFile),
@@ -168,7 +209,6 @@ async function main() {
       connectedHost(await connect(saved, label, password)),
   });
   const merged = createMultiHost(hosts);
-  const local = merged.local;
   const commands = createCommandRegistry();
   const positionHints = createModifierHold(
     positionModifiers(process.platform).map((modifier) =>
@@ -207,10 +247,12 @@ async function main() {
     createRoot(renderer).render(
       <ThemeContext value={{ theme, syntaxStyle }}>
         <HostWindow hosts={hosts}>
-          {(live) => (
+          {(live, health) => (
             <App
-              label={windowLabel(live)}
-              connection={local.status}
+              label={windowLabel(live, health)}
+              hostHealth={hosts.health}
+              versions={versions}
+              connection={merged.startup.status}
               agents={merged.agents}
               directory={merged.directory}
               terminals={merged.terminals}
@@ -218,7 +260,10 @@ async function main() {
               thinkingPreference={thinkingPreference}
               management={merged.management}
               clearAttention={merged.clearAttention}
+              workspaceRead={merged.workspaceRead}
+              workspacePins={merged.workspacePins}
               refresh={merged.refresh}
+              refreshProviders={merged.refreshProviders}
               catalog={merged.catalog}
               timelines={merged.timelines}
               commands={commands}
@@ -227,6 +272,9 @@ async function main() {
               prefix={prefix}
               bindings={config.bindings}
               layouts={layouts}
+              order={order}
+              labels={merged.labels}
+              labelFilter={labelFilter}
               completions={merged.completions}
               directories={merged.directories}
               systemClipboard={systemClipboard(
@@ -239,9 +287,10 @@ async function main() {
               subagents={merged.subagents}
               diffTool={diffTool}
               editor={config.editor ?? DEFAULT_EDITOR}
-              usage={local.usage}
+              fileEditor={config.fileEditor ?? DEFAULT_FILE_EDITOR}
+              usage={merged.startup.usage}
               usageConfig={config.usage}
-              schedules={local.schedules}
+              schedules={merged.startup.schedules}
               history={merged.history ?? undefined}
               positionHints={positionHints}
               notify={
@@ -278,9 +327,9 @@ async function main() {
     syntaxStyle.destroy();
     process.off("uncaughtException", uncaught);
     merged.timelines.close();
-    await hosts.close();
-    await thinkingPreference.flush();
-    await layouts.flush();
+    await shutdown([thinkingPreference, layouts, order, labelFilter], () =>
+      hosts.close(),
+    );
   }
 }
 

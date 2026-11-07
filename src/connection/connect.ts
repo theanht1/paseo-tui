@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  type ConnectionState,
-  createPaseoApi,
-  type PaseoApi,
-} from "@getpaseo/client";
+import { createPaseoApi, type PaseoApi } from "@getpaseo/client";
 import { createHostClient, parseHostTarget } from "@getpaseo/client/node";
 import packageJson from "../../package.json" with { type: "json" };
 import {
@@ -13,18 +9,33 @@ import {
   createDirectoryAdapter,
   createGitAdapter,
   createHistoryAdapter,
+  createHostInfoAdapter,
   createManagementAdapter,
   createProjectAdapter,
+  createProviderCatalogAdapter,
   createScheduleAdapter,
   createSubagentAdapter,
   createTerminalListAdapter,
   createTerminalStreamAdapter,
   createUsageAdapter,
+  createWorkspaceLabelAdapter,
+  createWorkspacePinAdapter,
+  createWorkspaceReadAdapter,
   type DaemonAdapter,
   requireWorkspaceCapabilities,
 } from "./daemon-adapter.js";
 import { readLocalCredentialForTarget } from "./local-credential.js";
-import type { AgentFeaturesPort, HistoryPort, ProjectPort } from "./ports.js";
+import type {
+  AgentFeaturesPort,
+  HistoryPort,
+  HostConnectionState,
+  HostInfoPort,
+  ProjectPort,
+  ProviderCatalogPort,
+  WorkspaceLabelPort,
+  WorkspacePinPort,
+  WorkspaceReadPort,
+} from "./ports.js";
 import { type HostTarget, resolveListen } from "./target.js";
 
 export interface Connection {
@@ -39,11 +50,18 @@ export interface Connection {
   subagents: ReturnType<typeof createSubagentAdapter>;
   usage: ReturnType<typeof createUsageAdapter>;
   history: HistoryPort;
+  workspaceRead: WorkspaceReadPort;
+  /** Null when the daemon lacks `workspacePinning`. */
+  workspacePins: WorkspacePinPort | null;
   schedules: ReturnType<typeof createScheduleAdapter>;
   terminalList: ReturnType<typeof createTerminalListAdapter>;
   projects: ProjectPort;
+  providers: ProviderCatalogPort;
+  /** Null when the daemon lacks `workspaceLabels`. */
+  labels: WorkspaceLabelPort | null;
+  host: HostInfoPort;
   label: string;
-  onConnectionState(cb: (state: ConnectionState) => void): () => void;
+  onConnectionState(cb: (state: HostConnectionState) => void): () => void;
   close(): Promise<void>;
 }
 
@@ -123,9 +141,14 @@ export async function connect(
     subagents: createSubagentAdapter(daemon),
     usage: createUsageAdapter(daemon),
     history: createHistoryAdapter(daemon),
+    workspaceRead: createWorkspaceReadAdapter(daemon),
+    workspacePins: createWorkspacePinAdapter(daemon),
     schedules: createScheduleAdapter(daemon),
     terminalList: createTerminalListAdapter(daemon),
     projects: createProjectAdapter(daemon),
+    providers: createProviderCatalogAdapter(daemon),
+    labels: createWorkspaceLabelAdapter(daemon),
+    host: createHostInfoAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
     close: () => daemon.close(),
   };

@@ -8,12 +8,16 @@ const main = {
   projectId: "repo",
   projectRootPath: "/repo",
   name: "Main",
+  activityAt: null,
+  statusEnteredAt: null,
   workspaceDirectory: "/repo",
 };
 const branch = {
   ...main,
   id: "branch",
   name: "Branch",
+  activityAt: null,
+  statusEnteredAt: null,
   workspaceDirectory: "/trees/branch",
 };
 it("remembers each workspace tab, selects empty workspaces, and moves the cursor independently", async () => {

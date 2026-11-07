@@ -50,3 +50,31 @@ test("reopen replaces failed or closed store and notifies holders", () => {
   holder.release();
   registry.close();
 });
+test("rebind replaces the stores it picks even while they are ready", () => {
+  const ready = timelineStore({
+    getSnapshot: () => ({
+      ...timelineStore().getSnapshot(),
+      status: "ready",
+      epoch: "e",
+      error: null,
+    }),
+  });
+  let opened = 0;
+  const registry = createTimelineRegistry(() =>
+    opened++ ? timelineStore() : ready,
+  );
+  let notified = 0;
+  registry.subscribe(() => notified++);
+  const a = registry.acquire(agent("a"));
+  const b = registry.acquire(agent("b"));
+  const before = b.store;
+  registry.reopen("a");
+  expect(a.store).toBe(ready);
+  registry.rebind((target) => target.id === "a");
+  expect(a.store).not.toBe(ready);
+  expect(b.store).toBe(before);
+  expect(notified).toBe(1);
+  registry.rebind(() => false);
+  expect(notified).toBe(1);
+  registry.close();
+});

@@ -23,6 +23,8 @@ function workspace(id: string, projectId: string): WorkspaceRow {
     id,
     projectId,
     projectRootPath: "/src",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/src",
     name: id,
   };

@@ -75,7 +75,7 @@ test("forwards ids, trims names and rejects empty names before RPC", async () =>
     ["attention", "e"],
   ]);
 });
-test("requires explicit project and workspace capabilities before any directory RPC", async () => {
+test("requires explicit project, workspace and provider snapshot capabilities before any RPC", async () => {
   const { requireWorkspaceCapabilities } = await import("./daemon-adapter.js");
   const info = {
     status: "server_info" as const,
@@ -86,6 +86,7 @@ test("requires explicit project and workspace capabilities before any directory 
       workspaceMultiplicity: true,
       workspaceTerminals: true,
       projectList: true,
+      providersSnapshot: true,
     },
   };
   expect(() =>
@@ -95,6 +96,7 @@ test("requires explicit project and workspace capabilities before any directory 
     "workspaceMultiplicity",
     "workspaceTerminals",
     "projectList",
+    "providersSnapshot",
   ]) {
     expect(() =>
       requireWorkspaceCapabilities({

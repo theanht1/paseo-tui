@@ -94,3 +94,12 @@ it("skips the agent you are looking at but announces new agents that start out w
     ),
   ).toEqual([{ agentId: "new", title: "new", body: "Needs permission: Bash" }]);
 });
+
+it("stays quiet when a host's agents vanish during an outage and come back still waiting", () => {
+  const notifier = createAttentionNotifier();
+  const waiting = agent("a", { pendingPermissions: [tool] });
+  notifier.update([agent("a", { status: "running" })], none, shown);
+  expect(notifier.update([waiting], none, shown)).toHaveLength(1);
+  expect(notifier.update([], none, shown)).toEqual([]);
+  expect(notifier.update([waiting], none, shown)).toEqual([]);
+});

@@ -115,10 +115,13 @@ export function StatusBar({
     )
     .map((b) => `${b.keys} ${b.description}`);
   const usageSnapshot = useStore(usage);
+  const connectionState = useStore(connection);
   const meters =
     usageSnapshot.kind === "loading"
       ? ""
-      : usageMeters(usageSnapshot.reports, Date.now(), usageConfig);
+      : connectionState.status !== "connected" && usage !== NO_USAGE
+        ? "usage unavailable"
+        : usageMeters(usageSnapshot.reports, Date.now(), usageConfig);
   const prefix = `${terminalInput ? "Terminal input · Ctrl-] TUI shortcuts · " : ""}${label} ${state.text} ${mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}`;
   const contextText = contextWindow ? contextMeterText(contextWindow) : "";
   const meter: Meter | null =

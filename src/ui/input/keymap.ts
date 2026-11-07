@@ -52,10 +52,15 @@ export type Action =
         | "tab.close"
         | "attention.next"
         | "sidebar.toggleGrouping"
+        | "workspace.toggleRead"
+        | "workspace.togglePin"
+        /** Opens the Labels toggle list for the workspace under the sidebar cursor. */
+        | "workspace.labels"
         | "diff.open"
         | "workspace.editor"
         | "history.open"
         | "agent.unarchive"
+        | "agent.clear"
         /** Opens the Jump to prompt list for the focused agent. */
         | "prompts.open"
         | "queue.send"
@@ -69,7 +74,7 @@ export type Action =
   | { type: "timeline.goto"; seq: number; epoch: string }
   | { type: "list.move" | "scroll.lines" | "block.move"; delta: number }
   | { type: "list.edge" | "scroll.edge"; edge: "top" | "bottom" }
-  | { type: "scroll.half" | "scroll.page"; dir: 1 | -1 }
+  | { type: "scroll.half" | "scroll.page" | "list.half"; dir: 1 | -1 }
   | { type: "pane.split"; direction: "right" | "down" }
   | { type: "pane.focus"; direction: "left" | "right" | "up" | "down" }
   | {
@@ -84,6 +89,8 @@ export type Action =
         | "prefix.literal";
     }
   | { type: "tab.cycle" | "workspace.cycle"; delta: number }
+  /** Reorders the sidebar workspace or its project, or the current tab, by `delta`. */
+  | { type: "sidebar.move" | "sidebar.moveProject" | "tab.move"; delta: number }
   | { type: "pane.select" | "tab.select" | "workspace.select"; index: number }
   | { type: "search.update"; query: string }
   | { type: "search.next"; dir: 1 | -1 }
@@ -305,7 +312,7 @@ export function interrupt(mode: Mode): { mode: Mode; action: Action | null } {
 /**
  * Actions that are keystrokes within another surface (the palette itself, copy and hint
  * keys, search typing), single-step moves the Command Center's own list replaces, or
- * ones it already lists as its own items (History…, Unarchive, Jump to prompt…, the
+ * ones it already lists as its own items (History…, Unarchive, Clear session, Jump to prompt…, the
  * message queue's items).
  */
 const KEYSTROKE_ONLY: ReadonlySet<Action["type"]> = new Set([
@@ -324,6 +331,10 @@ const KEYSTROKE_ONLY: ReadonlySet<Action["type"]> = new Set([
   "prefix.literal",
   "history.open",
   "agent.unarchive",
+  "agent.clear",
+  "workspace.toggleRead",
+  "workspace.togglePin",
+  "workspace.labels",
   "prompts.open",
   "timeline.goto",
   "queue.select",

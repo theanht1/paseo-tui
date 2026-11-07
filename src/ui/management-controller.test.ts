@@ -17,6 +17,8 @@ it("prefills rename, runs the operation, refreshes data and exposes failures", a
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo",
     name: "Old",
   };
@@ -79,6 +81,8 @@ it("offers project selection, preselected project configuration, and workspace t
       id: "w",
       projectId: "p",
       projectRootPath: "/repo",
+      activityAt: null,
+      statusEnteredAt: null,
       workspaceDirectory: "/repo",
       name: "Main",
     },
@@ -111,6 +115,8 @@ it("reports capability errors after a mutation and does not refresh or fabricate
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo",
     name: "Main",
   };
@@ -262,6 +268,8 @@ it("confirms workspace archive before mutation and refreshes after success", asy
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo",
     name: "Main",
   };
@@ -321,6 +329,8 @@ it("creates a new agent tab immediately from the current tab's config and keeps 
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/trees/w",
     name: "W",
   };
@@ -417,6 +427,8 @@ function placementSetup(real?: WorkspaceActions) {
     id: "main",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo",
     name: "main",
   };
@@ -430,6 +442,8 @@ function placementSetup(real?: WorkspaceActions) {
         id: "tree",
         projectId: "p",
         projectRootPath: "/repo",
+        activityAt: null,
+        statusEnteredAt: null,
         workspaceDirectory: "/trees/x",
         name: "x",
       },
@@ -451,6 +465,7 @@ function placementSetup(real?: WorkspaceActions) {
         { id: "best", label: "Best", description: null, isDefault: true },
       ],
       modes: async () => [],
+      onProvidersChange: () => () => {},
     },
     actions: real ?? {
       ...NO_PROJECT_ACTIONS,
@@ -589,6 +604,8 @@ it("opens a file in an editor terminal of the given workspace and asks for termi
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/trees/w",
     name: "W",
   };
@@ -650,6 +667,8 @@ it("opens the diff tool in the workspace once and refocuses its open tab", async
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/trees/w",
     name: "W",
   };
@@ -712,6 +731,8 @@ it("openEditor creates a terminal running the configured editor and opens it wit
     id: "w",
     projectId: "p",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/trees/w",
     name: "W",
   };
@@ -786,6 +807,8 @@ it("fork into a new workspace names the workspace after the fork", async () => {
           id: "new",
           projectId: "p",
           projectRootPath: "/repo",
+          activityAt: null,
+          statusEnteredAt: null,
           workspaceDirectory: "/repo",
           name: "new",
         },

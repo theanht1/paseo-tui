@@ -539,3 +539,23 @@ test("queue keys work while typing and are not typed into the prompt", () => {
   for (const name of ["e", "d", "a", "w", "u"])
     expect(dispatch(insert, "pane", ctrl(name)).action).toBeNull();
 });
+test("C clears the session from a focused pane only", () => {
+  expect(dispatch(normal, "pane", key("C")).action).toEqual({
+    type: "agent.clear",
+  });
+  expect(dispatch(normal, "sidebar", key("C")).action).toBeNull();
+});
+test("Ctrl-d/Ctrl-u move the sidebar cursor half a page and still scroll panes", () => {
+  expect(dispatch(normal, "sidebar", key("d", true)).action).toEqual({
+    type: "list.half",
+    dir: 1,
+  });
+  expect(dispatch(normal, "sidebar", key("u", true)).action).toEqual({
+    type: "list.half",
+    dir: -1,
+  });
+  expect(dispatch(normal, "pane", key("d", true)).action).toEqual({
+    type: "scroll.half",
+    dir: 1,
+  });
+});

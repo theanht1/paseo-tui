@@ -371,6 +371,8 @@ it("creates a workspace through project and model configuration, then creates an
           id: "new-workspace",
           projectId: project.projectId,
           projectRootPath: "/repo",
+          activityAt: null,
+          statusEnteredAt: null,
           workspaceDirectory: "/trees/new",
           name: "New",
         },
@@ -825,6 +827,8 @@ it("shares the persisted thinking selection across new-workspace and new-agent-t
     id: "one",
     projectId: "repo",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo/one",
     name: "Main",
   };
@@ -1193,4 +1197,42 @@ it("scrolls the shortcut list with j/k and G/gg in normal mode instead of typing
   app.stdin.write("g");
   await settle();
   expect(app.lastFrame()).toEqual(first);
+});
+
+it("moves the sidebar cursor half a page with Ctrl-d / Ctrl-u and to the ends with G / gg", async () => {
+  const many = Array.from({ length: 40 }, (_, index) => {
+    const id = String(index).padStart(2, "0");
+    return agent(`a${id}`, {
+      title: `agent ${id}`,
+      cwd: `/repo/w${id}`,
+      workspaceId: `w${id}`,
+      createdAt: `2026-11-03T00:${id}:00Z`,
+    });
+  });
+  const { app, test } = await setup(many, 20);
+  async function cursorRow() {
+    app.stdin.write("l");
+    await settle();
+    const opened = /❯ (agent \d+)/.exec(app.lastFrame())?.[1];
+    app.stdin.write("\t");
+    await settle();
+    return opened;
+  }
+  async function press(...keys: (string | { ctrl: string })[]) {
+    for (const key of keys) {
+      if (typeof key === "string") app.stdin.write(key);
+      else test.mockInput.pressKey(key.ctrl, { ctrl: true });
+      await settle();
+    }
+  }
+  await press("G");
+  expect(await cursorRow()).toBe("agent 39");
+  await press({ ctrl: "u" });
+  expect(await cursorRow()).toBe("agent 29");
+  await press({ ctrl: "d" });
+  expect(await cursorRow()).toBe("agent 39");
+  await press("g", "g");
+  expect(await cursorRow()).toBe("agent 00");
+  await press({ ctrl: "d" }, { ctrl: "d" });
+  expect(await cursorRow()).toBe("agent 20");
 });

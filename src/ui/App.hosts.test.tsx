@@ -135,6 +135,8 @@ it("tags each workspace in the sidebar with its host on the same row", async () 
     id,
     projectId: "repo",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: `/repo/${id}`,
     name: `/repo/${id}`,
   });

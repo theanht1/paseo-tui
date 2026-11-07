@@ -73,7 +73,7 @@ test("lists every problem in one startup error", () => {
     new RegExp(
       [
         "^Invalid config /home/me/\\.config/paseo-tui/config\\.json:",
-        '  - unknown setting "colour" \\(expected keys, theme, prefix, notify, usage, editor\\)',
+        '  - unknown setting "colour" \\(expected keys, theme, prefix, notify, usage, editor, fileEditor\\)',
         '  - keys\\."pane\\.zoom": expected a key string or an array of key strings',
         '  - keys\\."tab\\.explode": unknown action; valid: .*',
         '  - theme\\.accent: "orange" is not a hex color \\(#rgb, #rrggbb or #rrggbbaa\\)',
@@ -153,5 +153,15 @@ test("parses and validates the editor command", () => {
   );
   expect(() => parseUserConfig('{"editor": 3}', "c.json")).toThrow(
     "  - editor: expected a string",
+  );
+});
+
+test("parses and validates the file editor command", () => {
+  expect(parseUserConfig('{"fileEditor": "nvim"}', "c.json").fileEditor).toBe(
+    "nvim",
+  );
+  expect(parseUserConfig("{}", "c.json").fileEditor).toBeUndefined();
+  expect(() => parseUserConfig('{"fileEditor": " "}', "c.json")).toThrow(
+    "  - fileEditor: needs a command",
   );
 });

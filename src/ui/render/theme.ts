@@ -1,4 +1,5 @@
 import { darkHighlightColors, type HighlightStyle } from "@getpaseo/highlight";
+import type { WorkspaceLabelColor } from "@getpaseo/protocol/workspace-labels";
 import {
   type CliRenderer,
   type ColorInput,
@@ -28,11 +29,26 @@ export interface Theme {
   cursorBg: string;
   cursorFg: string;
   codeBg: string;
+  tabStripBg: string;
+  tabBg: string;
+  tabActiveBg: string;
+  tabActiveFg: string;
   /** tmux `mode-style`: copy-mode selection and the copy cursor on top of it. */
   copySelectionBg: string;
   copySelectionFg: string;
   copyCursorBg: string;
   copyCursorFg: string;
+  /** Workspace label chips, one per daemon label color. */
+  labelViolet: string;
+  labelSky: string;
+  labelEmerald: string;
+  labelOrange: string;
+  labelPink: string;
+  labelIndigo: string;
+  labelTeal: string;
+  labelRed: string;
+  labelAmber: string;
+  labelBlue: string;
   status: Record<
     "running" | "idle" | "error" | "attention" | "question",
     string
@@ -88,11 +104,40 @@ export const THEME_COLOR_FIELDS: readonly ColorField[] = [
   "cursorBg",
   "cursorFg",
   "codeBg",
+  "tabStripBg",
+  "tabBg",
+  "tabActiveBg",
+  "tabActiveFg",
   "copySelectionBg",
   "copySelectionFg",
   "copyCursorBg",
   "copyCursorFg",
+  "labelViolet",
+  "labelSky",
+  "labelEmerald",
+  "labelOrange",
+  "labelPink",
+  "labelIndigo",
+  "labelTeal",
+  "labelRed",
+  "labelAmber",
+  "labelBlue",
 ];
+const LABEL_FIELDS: Record<WorkspaceLabelColor, ColorField> = {
+  violet: "labelViolet",
+  sky: "labelSky",
+  emerald: "labelEmerald",
+  orange: "labelOrange",
+  pink: "labelPink",
+  indigo: "labelIndigo",
+  teal: "labelTeal",
+  red: "labelRed",
+  amber: "labelAmber",
+  blue: "labelBlue",
+};
+export function labelColor(theme: Theme, color: WorkspaceLabelColor): string {
+  return theme[LABEL_FIELDS[color]];
+}
 export const THEME_STATUS_FIELDS: readonly (keyof Theme["status"])[] = [
   "running",
   "idle",
@@ -136,10 +181,24 @@ export function createTheme(
     cursorBg: color(overrides.cursorBg ?? "#82aaff"),
     cursorFg: color(overrides.cursorFg ?? "#101820"),
     codeBg: color(overrides.codeBg ?? "#20242c"),
+    tabStripBg: color(overrides.tabStripBg ?? "#16191e"),
+    tabBg: color(overrides.tabBg ?? "#252a33"),
+    tabActiveBg: color(overrides.tabActiveBg ?? "#34486e"),
+    tabActiveFg: color(overrides.tabActiveFg ?? "#eef3ff"),
     copySelectionBg: color(overrides.copySelectionBg ?? "#ffd700"),
     copySelectionFg: color(overrides.copySelectionFg ?? "#000000"),
     copyCursorBg: color(overrides.copyCursorBg ?? "#ffffff"),
     copyCursorFg: color(overrides.copyCursorFg ?? "#000000"),
+    labelViolet: color(overrides.labelViolet ?? "#a392d5"),
+    labelSky: color(overrides.labelSky ?? "#6aa6ce"),
+    labelEmerald: color(overrides.labelEmerald ?? "#6cae96"),
+    labelOrange: color(overrides.labelOrange ?? "#cc8f64"),
+    labelPink: color(overrides.labelPink ?? "#d87da3"),
+    labelIndigo: color(overrides.labelIndigo ?? "#9299d5"),
+    labelTeal: color(overrides.labelTeal ?? "#6cacab"),
+    labelRed: color(overrides.labelRed ?? "#d88381"),
+    labelAmber: color(overrides.labelAmber ?? "#b29d64"),
+    labelBlue: color(overrides.labelBlue ?? "#7ba1d5"),
     status: {
       running: color(overrides.status?.running ?? "#82aaff"),
       idle: color(overrides.status?.idle ?? "#c3e88d"),

@@ -22,6 +22,7 @@ import type {
   TimelinePromptIndex,
   TimelineSearchResult,
 } from "../connection/ports.js";
+import type { ProviderCatalog, ProviderEntry } from "./provider-catalog.js";
 
 /** The timeline fields the store reads; agent and provider-subagent pages both provide them. */
 export type TimelinePage = Pick<
@@ -85,15 +86,14 @@ interface AgentsApi {
       options: PaseoAgentCreateOptions,
     ): Promise<Pick<PaseoAgentHandle, "current">>;
   };
-  providers: Pick<
-    PaseoApi["providers"],
-    "listAvailable" | "snapshot" | "listModels" | "listModes"
-  >;
+  providers: Pick<PaseoApi["providers"], "listModels" | "listModes">;
 }
 export interface AgentsPort {
   providers(): Promise<CatalogProvider[]>;
   models(provider: string): Promise<CatalogModel[]>;
   modes(provider: string): Promise<CatalogMode[]>;
+  /** Called when the provider list may have changed (a snapshot update). */
+  onProvidersChange(listener: () => void): () => void;
   create(input: CreateAgentInput): Promise<PaseoAgent>;
   list(): Promise<AgentsList>;
   onUpdate(handler: (update: PaseoAgentUpdate) => void): () => void;
@@ -143,66 +143,107 @@ export interface AgentHistoryPort {
   setThinking: ((optionId: string) => Promise<string | null>) | null;
 }
 
+type ModelDefinition = NonNullable<ProviderEntry["models"]>[number];
+type ModeDefinition = NonNullable<ProviderEntry["modes"]>[number];
+function cached<T>(
+  cache: WeakMap<ProviderEntry, Promise<T>>,
+  entry: ProviderEntry,
+  load: () => Promise<T>,
+): Promise<T> {
+  const hit = cache.get(entry);
+  if (hit) return hit;
+  const result = load();
+  cache.set(entry, result);
+  result.catch(() => {
+    if (cache.get(entry) === result) cache.delete(entry);
+  });
+  return result;
+}
+function catalogMode(mode: ModeDefinition): CatalogMode {
+  return {
+    id: mode.id,
+    label: mode.label,
+    description: typeof mode.description === "string" ? mode.description : null,
+  };
+}
+
+/**
+ * Providers come from the host's live snapshot; models and modes from its entries,
+ * asking the daemon (once per entry) only for what an entry lacks.
+ */
 export function createAgentsPort(
   api: AgentsApi,
+  catalog: ProviderCatalog,
   thinkingSupported = false,
 ): AgentsPort {
+  const models = new WeakMap<ProviderEntry, Promise<CatalogModel[]>>();
+  const modes = new WeakMap<ProviderEntry, Promise<CatalogMode[]>>();
+  async function entryOf(provider: string) {
+    const entry = (await catalog.entries()).find(
+      (candidate) => candidate.provider === provider,
+    );
+    if (!entry) throw new Error(`Unknown provider: ${provider}`);
+    return entry;
+  }
+  function selectable(list: readonly ModelDefinition[]) {
+    return list
+      .filter((model) => model.isSelectable !== false)
+      .map(catalogModel);
+  }
+  function catalogModel(model: ModelDefinition): CatalogModel {
+    return {
+      id: model.id,
+      label: model.label,
+      description:
+        typeof model.description === "string" ? model.description : null,
+      isDefault: model.isDefault === true,
+      ...(model.thinkingOptions?.length
+        ? {
+            thinking: thinkingSupported
+              ? { kind: "options" as const, options: model.thinkingOptions }
+              : {
+                  kind: "unsupported" as const,
+                  message:
+                    "Update the Paseo daemon to configure thinking (agentThinkingUpdate required).",
+                },
+          }
+        : {}),
+    };
+  }
   return {
     async providers() {
-      const [available, snapshot] = await Promise.all([
-        api.providers.listAvailable(),
-        api.providers.snapshot(),
-      ]);
-      const entries = new Map(
-        snapshot.entries.map((entry) => [entry.provider, entry]),
-      );
-      return available.providers.map((provider) => {
-        const entry = entries.get(provider.provider);
-        return {
-          id: provider.provider,
-          label:
-            typeof entry?.label === "string" ? entry.label : provider.provider,
-          available: provider.available,
-          error: typeof provider.error === "string" ? provider.error : null,
-          defaultModeId:
-            typeof entry?.defaultModeId === "string"
-              ? entry.defaultModeId
-              : null,
-        };
-      });
+      return (await catalog.entries())
+        .filter((entry) => entry.enabled)
+        .map((entry) => {
+          const available = entry.status === "ready";
+          return {
+            id: entry.provider,
+            label: entry.label ?? entry.provider,
+            available,
+            error: available ? null : (entry.error ?? entry.status),
+            defaultModeId: entry.defaultModeId ?? null,
+          };
+        });
     },
     async models(provider) {
-      const result = await api.providers.listModels(provider);
-      if (result.error) throw new Error(result.error);
-      return (result.models ?? []).map((model) => ({
-        id: model.id,
-        label: model.label,
-        description:
-          typeof model.description === "string" ? model.description : null,
-        isDefault: model.isDefault === true,
-        ...(model.thinkingOptions?.length
-          ? {
-              thinking: thinkingSupported
-                ? { kind: "options" as const, options: model.thinkingOptions }
-                : {
-                    kind: "unsupported" as const,
-                    message:
-                      "Update the Paseo daemon to configure thinking (agentThinkingUpdate required).",
-                  },
-            }
-          : {}),
-      }));
+      const entry = await entryOf(provider);
+      if (entry.models) return selectable(entry.models);
+      return cached(models, entry, async () => {
+        const result = await api.providers.listModels(provider);
+        if (result.error) throw new Error(result.error);
+        return selectable(result.models ?? []);
+      });
     },
     async modes(provider) {
-      const result = await api.providers.listModes(provider);
-      if (result.error) throw new Error(result.error);
-      return (result.modes ?? []).map((mode) => ({
-        id: mode.id,
-        label: mode.label,
-        description:
-          typeof mode.description === "string" ? mode.description : null,
-      }));
+      const entry = await entryOf(provider);
+      if (entry.modes) return entry.modes.map(catalogMode);
+      return cached(modes, entry, async () => {
+        const result = await api.providers.listModes(provider);
+        if (result.error) throw new Error(result.error);
+        return (result.modes ?? []).map(catalogMode);
+      });
     },
+    onProvidersChange: (listener) => catalog.subscribe(listener),
     async create(input) {
       const options: PaseoAgentCreateOptions = {
         config: {

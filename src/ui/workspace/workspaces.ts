@@ -6,9 +6,19 @@ import type {
 } from "@getpaseo/client";
 import type { ProviderSubagent } from "../../connection/ports.js";
 import { agentName } from "../agent/agent-display.js";
+import {
+  arrange,
+  moveKey,
+  NO_ORDER,
+  type OrderChange,
+  type StoredOrder,
+} from "./ordering.js";
 export type WorkspaceRow = Pick<
   PaseoWorkspace,
   | "id"
+  | "activityAt"
+  | "statusEnteredAt"
+  | "lastUserMessageAt"
   | "projectId"
   | "name"
   | "title"
@@ -18,6 +28,8 @@ export type WorkspaceRow = Pick<
   | "gitRuntime"
   | "githubRuntime"
   | "setupStatus"
+  | "labels"
+  | "pinnedAt"
 >;
 export interface ProjectNode {
   project: PaseoProject;
@@ -64,14 +76,26 @@ export function tabWorkspaceId(tab: WorkspaceTab): string | null {
       ? tab.terminal.workspaceId
       : tab.workspaceId;
 }
+/** Projects (new ones last) and their workspaces (new ones first) in the stored order. */
 export function projectTree(
   projects: readonly PaseoProject[],
   workspaces: readonly WorkspaceRow[],
+  order: StoredOrder = NO_ORDER,
 ): ProjectNode[] {
-  return projects.map((project) => ({
+  return arrange(
+    projects,
+    order.projects,
+    (project) => project.projectId,
+    "append",
+  ).map((project) => ({
     project,
-    workspaces: workspaces.filter(
-      (workspace) => workspace.projectId === project.projectId,
+    workspaces: arrange(
+      workspaces.filter(
+        (workspace) => workspace.projectId === project.projectId,
+      ),
+      order.workspaces.get(project.projectId) ?? [],
+      (workspace) => workspace.id,
+      "prepend",
     ),
   }));
 }
@@ -81,6 +105,7 @@ export function workspaceTabs(
   terminals: readonly PaseoTerminal[],
   subagents: readonly SubagentTab[] = [],
   archived: readonly PaseoAgent[] = [],
+  order: StoredOrder = NO_ORDER,
 ): WorkspaceTab[] {
   const live = agents.filter(
     (agent) => agent.workspaceId === workspaceId && agent.archivedAt == null,
@@ -89,7 +114,7 @@ export function workspaceTabs(
   const extra = archived.filter(
     (agent) => agent.workspaceId === workspaceId && !liveIds.has(agent.id),
   );
-  return [
+  const natural = [
     ...[...live, ...extra]
       .toSorted(
         (x, y) =>
@@ -114,6 +139,68 @@ export function workspaceTabs(
       ),
     ...subagents.filter((tab) => tab.workspaceId === workspaceId),
   ];
+  return arrange(
+    natural,
+    workspaceId === null ? [] : (order.tabs.get(workspaceId) ?? []),
+    (tab) => tab.key,
+    "append",
+  );
+}
+function projectOf(projects: readonly ProjectNode[], workspaceId: string) {
+  return projects.find((node) =>
+    node.workspaces.some((workspace) => workspace.id === workspaceId),
+  );
+}
+/** Moves a workspace by `delta` within its project. */
+export function workspaceMove(
+  projects: readonly ProjectNode[],
+  order: StoredOrder,
+  workspaceId: string,
+  delta: number,
+): OrderChange | null {
+  const node = projectOf(projects, workspaceId);
+  if (!node) return null;
+  const projectKey = node.project.projectId;
+  const keys = moveKey(
+    node.workspaces.map((workspace) => workspace.id),
+    workspaceId,
+    delta,
+    order.workspaces.get(projectKey) ?? [],
+  );
+  return keys && { kind: "workspaces", projectKey, keys };
+}
+/** Moves the project holding `workspaceId` by `delta`. */
+export function projectMove(
+  projects: readonly ProjectNode[],
+  order: StoredOrder,
+  workspaceId: string,
+  delta: number,
+): OrderChange | null {
+  const node = projectOf(projects, workspaceId);
+  if (!node) return null;
+  const keys = moveKey(
+    projects.map(({ project }) => project.projectId),
+    node.project.projectId,
+    delta,
+    order.projects,
+  );
+  return keys && { kind: "projects", keys };
+}
+/** Moves a workspace's tab by `delta` among its tabs. */
+export function tabMove(
+  tabs: readonly WorkspaceTab[],
+  order: StoredOrder,
+  workspaceId: string,
+  tabKey: string,
+  delta: number,
+): OrderChange | null {
+  const keys = moveKey(
+    tabs.map((tab) => tab.key),
+    tabKey,
+    delta,
+    order.tabs.get(workspaceId) ?? [],
+  );
+  return keys && { kind: "tabs", workspaceKey: workspaceId, keys };
 }
 export function cycleTab(
   tabs: readonly WorkspaceTab[],

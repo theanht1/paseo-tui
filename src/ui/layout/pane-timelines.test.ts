@@ -35,6 +35,7 @@ function fakeRegistry() {
       storeFor(id);
       emitter.notify();
     },
+    rebind() {},
     subscribe: emitter.subscribe,
     close() {},
   };

@@ -15,6 +15,7 @@ import {
 import type { CompletionPort } from "../../connection/ports.js";
 import { useKeyOwner } from "../input/key-router.js";
 import type { Action } from "../input/keymap.js";
+import { listKey } from "../input/list-keys.js";
 import {
   CLOSED_COMPLETIONS,
   createCompletionStore,
@@ -90,24 +91,33 @@ export function CommandCenter({
   >({ kind: "ready", items: [] });
   useEffect(() => {
     if (step?.kind !== "choice") return;
+    const choice = step;
     let active = true;
+    let latest = 0;
+    function list() {
+      const request = ++latest;
+      const current = () => active && request === latest;
+      Promise.resolve()
+        .then(() => choice.items())
+        .then(
+          (items) => {
+            if (current()) setChoices({ kind: "ready", items });
+          },
+          (error: unknown) => {
+            if (current())
+              setChoices({
+                kind: "error",
+                message: error instanceof Error ? error.message : String(error),
+              });
+          },
+        );
+    }
     setChoices({ kind: "loading" });
-    Promise.resolve()
-      .then(() => step.items())
-      .then(
-        (items) => {
-          if (active) setChoices({ kind: "ready", items });
-        },
-        (error: unknown) => {
-          if (active)
-            setChoices({
-              kind: "error",
-              message: error instanceof Error ? error.message : String(error),
-            });
-        },
-      );
+    list();
+    const stop = choice.subscribe?.(list);
     return () => {
       active = false;
+      stop?.();
     };
   }, [step]);
   useEffect(() => {
@@ -132,6 +142,41 @@ export function CommandCenter({
       clearTimeout(timer);
     };
   }, [step, query]);
+  const [readOnlyLines, setReadOnlyLines] = useState<readonly string[]>([]);
+  useEffect(() => {
+    if (step?.kind !== "readOnly") return;
+    const update = () => setReadOnlyLines(step.lines());
+    update();
+    return step.subscribe?.(update);
+  }, [step]);
+  const [question, setQuestion] = useState<
+    | { kind: "loading" }
+    | { kind: "ready"; text: string | null }
+    | { kind: "error"; message: string }
+  >({ kind: "ready", text: null });
+  useEffect(() => {
+    if (step?.kind !== "confirm" || !step.prepare) {
+      setQuestion({ kind: "ready", text: null });
+      return;
+    }
+    let active = true;
+    setQuestion({ kind: "loading" });
+    step.prepare().then(
+      (text) => {
+        if (active) setQuestion({ kind: "ready", text });
+      },
+      (error: unknown) => {
+        if (active)
+          setQuestion({
+            kind: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [step]);
   const listed = step?.kind === "choice" || step?.kind === "search";
   const candidates = step
     ? listed && choices.kind === "ready"
@@ -221,7 +266,9 @@ export function CommandCenter({
       setMissing(`${step.required} is required`);
       return;
     }
-    setMissing(null);
+    const problem = step.validate?.(value) ?? null;
+    setMissing(problem);
+    if (problem) return;
     proceed(step.submit(value));
   }
   const secret = step?.kind === "input" && step.secret === true;
@@ -269,15 +316,34 @@ export function CommandCenter({
         return true;
       }
     }
-    const movement =
-      stroke.name === "down" || (stroke.ctrl && stroke.name === "n")
-        ? 1
-        : stroke.name === "up" || (stroke.ctrl && stroke.name === "p")
-          ? -1
-          : 0;
+    const jump =
+      !stroke.ctrl && JUMP_KEYS.has(stroke.name)
+        ? listKey(
+            stroke,
+            { cursor: selection.current, pendingG: false },
+            step?.kind === "readOnly" ? readOnlyLines.length : results.length,
+            capacity,
+          )
+        : "pass";
+    const target =
+      jump === "pass"
+        ? stroke.name === "down" || (stroke.ctrl && stroke.name === "n")
+          ? selection.current + 1
+          : stroke.name === "up" || (stroke.ctrl && stroke.name === "p")
+            ? selection.current - 1
+            : null
+        : jump.cursor;
+    if (step?.kind === "readOnly") {
+      if (stroke.name === "escape") goBack();
+      else if (target !== null)
+        change("", Math.max(0, Math.min(readOnlyLines.length - 1, target)));
+      else return false;
+      return true;
+    }
     if (step?.kind === "confirm") {
       if (!["y", "n", "escape"].includes(stroke.name)) return false;
       if (stroke.name === "y") {
+        if (question.kind !== "ready") return true;
         step.confirm();
         onClose();
       } else goBack();
@@ -287,11 +353,8 @@ export function CommandCenter({
     else if (stroke.name === "return") {
       if (step?.kind === "input") submitInput();
       else run(selection.current);
-    } else if (movement) {
-      selection.current = Math.max(
-        0,
-        Math.min(results.length - 1, selection.current + movement),
-      );
+    } else if (target !== null) {
+      selection.current = Math.max(0, Math.min(results.length - 1, target));
       change(
         stackRef.current.at(-1)?.query ?? rootRef.current.query,
         selection.current,
@@ -333,15 +396,24 @@ export function CommandCenter({
             id="command:confirm"
             onMouseDown={(event) => {
               event.stopPropagation();
+              if (question.kind !== "ready") return;
               step.confirm();
               onClose();
             }}
           >
-            <text fg={foregroundProp(theme.fg)}>
-              Confirm · y confirm · n/Esc back
+            <text
+              fg={foregroundProp(
+                question.kind === "error" ? theme.error : theme.fg,
+              )}
+            >
+              {question.kind === "loading"
+                ? "Loading…"
+                : question.kind === "error"
+                  ? `! ${question.message} · n/Esc back`
+                  : `${question.text ?? "Confirm"} · y confirm · n/Esc back`}
             </text>
           </box>
-        ) : secret ? (
+        ) : step?.kind === "readOnly" ? null : secret ? (
           <text
             id="command:secret"
             height={1}
@@ -375,6 +447,23 @@ export function CommandCenter({
             onInput={setInput}
           />
         )}
+        {step?.kind === "readOnly"
+          ? readOnlyLines
+              .slice(
+                Math.max(0, selected - capacity + 1),
+                Math.max(0, selected - capacity + 1) + capacity,
+              )
+              .map((line) => (
+                <text
+                  key={line}
+                  height={1}
+                  wrapMode="none"
+                  fg={foregroundProp(theme.fg)}
+                >
+                  {line}
+                </text>
+              ))
+          : null}
         {popup.kind === "open" ? (
           <box
             id="command:completions"
@@ -444,7 +533,9 @@ export function CommandCenter({
           </text>
         ) : null}
         {listed && choices.kind === "loading" ? (
-          <text fg={foregroundProp(theme.muted)}>Loading…</text>
+          <text fg={foregroundProp(theme.muted)}>
+            {(step.kind === "choice" && step.loading) || "Loading…"}
+          </text>
         ) : null}
         {listed && choices.kind === "error" ? (
           <text fg={foregroundProp(theme.error)}>! {choices.message}</text>
@@ -548,6 +639,7 @@ function NO_SHORTCUT() {
   return null;
 }
 /** Pause after typing before asking the host, so each keystroke doesn't search. */
+const JUMP_KEYS: ReadonlySet<string> = new Set(["pageup", "pagedown"]);
 const SEARCH_DELAY_MS = 150;
 function rangeEnd(range: { start: number; length: number } | undefined) {
   return range ? range.start + range.length : 0;

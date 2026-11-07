@@ -289,3 +289,16 @@ test("a new schedule can start a configured agent in a workspace", async () => {
   ]);
   expect(notices).toEqual(["Created schedule Nightly tests"]);
 });
+
+test("shows schedules as unavailable without asking an offline daemon", async () => {
+  const { value, port } = deps({
+    unavailable: () => "Unavailable · local is offline, reconnecting…",
+  });
+  port.list = async () => {
+    throw Error("Transport not connected");
+  };
+  const step = item(scheduleCommands(value), "Schedules…").run();
+  expect((await choices(step)).map((entry) => entry.title)).toEqual([
+    "Unavailable · local is offline, reconnecting…",
+  ]);
+});

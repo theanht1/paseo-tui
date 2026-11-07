@@ -169,6 +169,7 @@ export function createCompletionStore(
   port: CompletionPort,
   target: { source: CommandListSource; cwd: string; debounce?: Debounce },
 ) {
+  port.opened?.(target.source);
   const emitter = createEmitter();
   const debounce = target.debounce ?? defaultDebounce;
   let snapshot: CompletionSnapshot = { kind: "closed" };

@@ -25,7 +25,8 @@ export function createAttentionNotifier() {
       acknowledged: ReadonlySet<string>,
       isShown: (agentId: string) => boolean,
     ): AttentionNotification[] {
-      const next = new Map<string, string | null>();
+      // Agents missing from this snapshot (an offline host's) keep their last wait.
+      const next = new Map<string, string | null>(previous ?? []);
       const notifications: AttentionNotification[] = [];
       for (const agent of agents) {
         const current = attentionWait(agent, acknowledged);

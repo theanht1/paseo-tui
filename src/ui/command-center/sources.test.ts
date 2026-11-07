@@ -11,6 +11,7 @@ import {
   type Layout,
   panes,
 } from "../layout/split-tree.js";
+import type { CommandStep } from "./registry.js";
 import { builtinSource } from "./sources.js";
 
 function setup(status: "running" | "idle" = "idle") {
@@ -70,7 +71,7 @@ describe("built-in commands", () => {
       "New tab",
       "Rename workspace",
       "Rename tab",
-      "Close tab (confirm)",
+      "Close tab",
       "Copy mode",
       "Edit prompt in $VISUAL/$EDITOR",
       "Keyboard shortcuts",
@@ -230,6 +231,8 @@ it("leaves archiving an agent to Close tab, and archives the open workspace inst
     id: "w",
     projectId: "repo",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo",
     name: "main",
   };
@@ -304,6 +307,8 @@ it("offers daemon workspaces with no agents in Command Center", () => {
     id: "empty",
     projectId: "repo",
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/trees/empty",
     name: "Empty worktree",
   };
@@ -326,6 +331,38 @@ it("offers daemon workspaces with no agents in Command Center", () => {
   expect(row?.title).toBe("Empty worktree");
   row?.run();
   expect(opened).toEqual(["empty"]);
+});
+
+it("offers Refresh providers under Actions only when the hosts can refresh them", () => {
+  let refreshes = 0;
+  const context = {
+    groups: [],
+    waiting: [],
+    workspaces: [],
+    focusedAgent: undefined,
+    focusedStore: null,
+    prefixLabel: "Ctrl-B",
+    open() {},
+    changeLayout() {},
+    workspace() {},
+    act() {},
+  };
+  const row = builtinSource({
+    ...context,
+    refreshProviders() {
+      refreshes++;
+    },
+  })
+    .items()
+    .find((item) => item.title === "Refresh providers");
+  expect(row?.group).toBe("Actions");
+  expect(row?.run()).toBeUndefined();
+  expect(refreshes).toBe(1);
+  expect(
+    builtinSource(context)
+      .items()
+      .some((item) => item.title === "Refresh providers"),
+  ).toBe(false);
 });
 
 describe("open file from this chat", () => {
@@ -415,6 +452,48 @@ describe("session history commands", () => {
     expect(unarchive).toMatchObject({ group: "Agent", title: "Unarchive" });
     unarchive?.run();
     expect(archived.unarchived).toEqual(["old"]);
+  });
+});
+
+describe("clear session command", () => {
+  function items(focusedAgent: PaseoAgent, withClear: boolean) {
+    const step: CommandStep = {
+      kind: "confirm",
+      title: "Clear this session? The conversation is reset.",
+      confirm() {},
+    };
+    return builtinSource({
+      workspaces: [],
+      groups: [],
+      waiting: [],
+      focusedAgent,
+      focusedStore: timelineStore(),
+      prefixLabel: "Ctrl-A",
+      open() {},
+      changeLayout() {},
+      workspace() {},
+      act() {},
+      ...(withClear ? { clear: step } : {}),
+    }).items();
+  }
+  it("lists Clear session in Agent with its key, running the confirm step", () => {
+    const item = items(agent("a"), true).find((i) => i.id === "clear-session");
+    expect(item).toMatchObject({
+      group: "Agent",
+      title: "Clear session",
+      action: { type: "agent.clear" },
+    });
+    expect(item?.run()).toMatchObject({ kind: "confirm" });
+  });
+  it("is absent without a /clear command and for an archived agent", () => {
+    expect(items(agent("a"), false).some((i) => i.id === "clear-session")).toBe(
+      false,
+    );
+    expect(
+      items(agent("a", { archivedAt: "2026-11-04" }), true).some(
+        (i) => i.id === "clear-session",
+      ),
+    ).toBe(false);
   });
 });
 

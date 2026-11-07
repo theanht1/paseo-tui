@@ -5,6 +5,7 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import { createEmitter } from "../../state/emitter.js";
 import type { Stroke } from "../input/keymap.js";
+import { listKey } from "../input/list-keys.js";
 import { STEER_HINT } from "../permission/steer.js";
 
 export interface QuestionOption {
@@ -26,6 +27,8 @@ export interface QuestionForm {
   selections: readonly (readonly number[])[];
   other: readonly string[];
   editing: boolean;
+  /** A `g` was pressed and `gg` would jump to the first option. */
+  pendingG: boolean;
 }
 export type QuestionStep =
   | { kind: "form"; form: QuestionForm }
@@ -127,6 +130,7 @@ export function questionForm(
     selections: questions.map(() => []),
     other: questions.map(() => ""),
     editing: false,
+    pendingG: false,
   };
 }
 
@@ -259,10 +263,19 @@ function editingKey(form: QuestionForm, key: Stroke): QuestionStep {
   return stay(typeText(form, key.sequence));
 }
 
+const OPTION_PAGE = 8;
 export function questionKey(form: QuestionForm, key: Stroke): QuestionStep {
   if (form.editing) return editingKey(form, key);
-  const question = current(form);
   const rows = rowCount(form);
+  const moved = listKey(
+    key,
+    { cursor: form.cursor, pendingG: form.pendingG },
+    rows,
+    OPTION_PAGE,
+  );
+  if (moved !== "pass") return stay({ ...form, ...moved });
+  if (form.pendingG) return questionKey({ ...form, pendingG: false }, key);
+  const question = current(form);
   if (key.name === "escape") return { kind: "respond", response: DISMISSED };
   if (key.name === "tab")
     return stay(goTo(form, form.index + (key.shift ? -1 : 1)));
@@ -270,10 +283,6 @@ export function questionKey(form: QuestionForm, key: Stroke): QuestionStep {
     return stay(goTo(form, form.index + 1));
   if (key.name === "left" || key.name === "h")
     return stay(goTo(form, form.index - 1));
-  if (key.name === "down" || key.name === "j")
-    return stay({ ...form, cursor: Math.min(rows - 1, form.cursor + 1) });
-  if (key.name === "up" || key.name === "k")
-    return stay({ ...form, cursor: Math.max(0, form.cursor - 1) });
   const onOther = form.cursor >= question.options.length;
   if (/^[1-9]$/.test(key.sequence) && !key.ctrl && !key.meta) {
     const option = Number(key.sequence) - 1;
@@ -358,7 +367,7 @@ export function questionRows(
       kind: "hint",
       text: form.editing
         ? "Type your answer · Enter confirm · Esc back to options"
-        : `↑↓/jk move · 1-9 pick${question.multiSelect ? " · Space toggle" : ""} · Tab/←→ question · Enter ${form.index === form.questions.length - 1 ? "submit" : "next"} · ${STEER_HINT} · Esc cancel`,
+        : `↑↓/jk gg/G move · 1-9 pick${question.multiSelect ? " · Space toggle" : ""} · Tab/←→ question · Enter ${form.index === form.questions.length - 1 ? "submit" : "next"} · ${STEER_HINT} · Esc cancel`,
     },
     { kind: "buttons", canSubmit: canSubmitQuestions(form) },
   ];

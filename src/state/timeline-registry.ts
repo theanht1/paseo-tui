@@ -8,6 +8,8 @@ export interface TimelineRegistry {
     release(): void;
   };
   reopen(agentId: string): void;
+  /** Reopens every held store `stale` picks, whatever its status (e.g. its connection was replaced). */
+  rebind(stale: (agent: PaseoAgent, store: TimelineStore) => boolean): void;
   subscribe(listener: () => void): () => void;
   close(): void;
 }
@@ -19,6 +21,11 @@ export function createTimelineRegistry(
     { agent: PaseoAgent; store: TimelineStore; refs: number }
   >();
   const emitter = createEmitter();
+  function replace(entry: { agent: PaseoAgent; store: TimelineStore }) {
+    entry.store.close();
+    entry.store = open(entry.agent);
+    void entry.store.open();
+  }
   return {
     acquire(agent) {
       let entry = entries.get(agent.id);
@@ -51,10 +58,15 @@ export function createTimelineRegistry(
       if (!entry) return;
       const status = entry.store.getSnapshot().status;
       if (status !== "error" && status !== "closed") return;
-      entry.store.close();
-      entry.store = open(entry.agent);
-      void entry.store.open();
+      replace(entry);
       emitter.notify();
+    },
+    rebind(stale) {
+      const replaced = [...entries.values()].filter((entry) =>
+        stale(entry.agent, entry.store),
+      );
+      for (const entry of replaced) replace(entry);
+      if (replaced.length) emitter.notify();
     },
     subscribe: emitter.subscribe,
     close() {

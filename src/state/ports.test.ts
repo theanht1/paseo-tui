@@ -1,47 +1,81 @@
-import type {
-  PaseoAgent,
-  PaseoAgentCreateOptions,
-  PaseoProviderAvailabilityResult,
-  PaseoProviderSnapshotResult,
-} from "@getpaseo/client";
+import type { PaseoAgent, PaseoAgentCreateOptions } from "@getpaseo/client";
 import { expect, expectTypeOf, test } from "vitest";
 import { at } from "../test/at.js";
 import { agent } from "../test/fixtures.js";
 import { type CreateAgentInput, createAgentsPort } from "./ports.js";
+import {
+  createProviderCatalog,
+  type ProviderEntry,
+} from "./provider-catalog.js";
 
+const CODEX: ProviderEntry = {
+  provider: "codex",
+  status: "ready",
+  enabled: true,
+  label: "Codex",
+  defaultModeId: "ask",
+};
 function setup(
   thinkingSupported = false,
   thinkingOptions?: { id: string; label: string }[],
+  entries: ProviderEntry[] = [
+    {
+      provider: "custom",
+      status: "error",
+      enabled: true,
+      label: "Custom",
+      error: "Missing key",
+    },
+    CODEX,
+    { provider: "other", status: "ready", enabled: true },
+    { provider: "warming", status: "loading", enabled: true },
+    { provider: "off", status: "unavailable", enabled: false, label: "Off" },
+  ],
 ) {
   const created: PaseoAgentCreateOptions[] = [];
+  const listed: string[] = [];
   let current: PaseoAgent | null = agent("created");
-  const available: PaseoProviderAvailabilityResult = {
-    providers: [
-      { provider: "custom", available: false, error: "Missing key" },
-      { provider: "codex", available: true },
-      { provider: "other", available: true },
-    ],
-    fetchedAt: "now",
-    requestId: "available",
-  };
-  const snapshot: PaseoProviderSnapshotResult = {
-    entries: [
-      {
-        provider: "codex",
-        status: "ready",
-        enabled: true,
-        label: "Codex",
-        defaultModeId: "ask",
-      },
-      {
-        provider: "custom",
-        status: "unavailable",
-        enabled: true,
-        label: "Custom",
-      },
-    ],
-    generatedAt: "now",
-    requestId: "snapshot",
+  let push: (entries: readonly ProviderEntry[]) => void = () => {};
+  const catalog = createProviderCatalog({
+    async snapshot() {
+      return entries;
+    },
+    observe(handler) {
+      push = handler;
+      return async () => {};
+    },
+    async refresh() {},
+  });
+  const providers = {
+    async listModels(provider: string) {
+      listed.push(`models:${provider}`);
+      return {
+        provider,
+        models: [
+          {
+            provider,
+            id: "m",
+            label: "Model",
+            isDefault: true,
+            ...(thinkingOptions ? { thinkingOptions } : {}),
+            metadata: { ignored: true },
+          },
+          { provider, id: "n", label: "Next", description: "Details" },
+          { provider, id: "x", label: "Hidden", isSelectable: false },
+        ],
+        fetchedAt: "now",
+        requestId: "models",
+      };
+    },
+    async listModes(provider: string) {
+      listed.push(`modes:${provider}`);
+      return {
+        provider,
+        modes: [{ id: "ask", label: "Ask" }],
+        fetchedAt: "now",
+        requestId: "modes",
+      };
+    },
   };
   const api = {
     agents: {
@@ -56,44 +90,15 @@ function setup(
         return { current: () => current };
       },
     },
-    providers: {
-      async listAvailable() {
-        return available;
-      },
-      async snapshot() {
-        return snapshot;
-      },
-      async listModels(provider: string) {
-        return {
-          provider,
-          models: [
-            {
-              provider,
-              id: "m",
-              label: "Model",
-              isDefault: true,
-              ...(thinkingOptions ? { thinkingOptions } : {}),
-              metadata: { ignored: true },
-            },
-            { provider, id: "n", label: "Next", description: "Details" },
-          ],
-          fetchedAt: "now",
-          requestId: "models",
-        };
-      },
-      async listModes(provider: string) {
-        return {
-          provider,
-          modes: [{ id: "ask", label: "Ask" }],
-          fetchedAt: "now",
-          requestId: "modes",
-        };
-      },
-    },
+    providers,
   };
   return {
-    port: createAgentsPort(api, thinkingSupported),
+    port: createAgentsPort(api, catalog, thinkingSupported),
     created,
+    listed,
+    push(next: ProviderEntry[]) {
+      push(next);
+    },
     clear: () => {
       current = null;
     },
@@ -107,7 +112,7 @@ const input: CreateAgentInput = {
   title: "Title",
   prompt: "Hi",
 };
-test("joins providers by id, preserving order and unavailable entries", async () => {
+test("lists enabled snapshot entries, hiding disabled ones; only ready ones are available", async () => {
   expect(await setup().port.providers()).toEqual([
     {
       id: "custom",
@@ -130,9 +135,16 @@ test("joins providers by id, preserving order and unavailable entries", async ()
       error: null,
       defaultModeId: null,
     },
+    {
+      id: "warming",
+      label: "warming",
+      available: false,
+      error: "loading",
+      defaultModeId: null,
+    },
   ]);
 });
-test("maps model and mode catalogs to port fields", async () => {
+test("maps model and mode catalogs to port fields, hiding unselectable models", async () => {
   const { port } = setup();
   expect(await port.models("codex")).toEqual([
     { id: "m", label: "Model", description: null, isDefault: true },
@@ -141,6 +153,71 @@ test("maps model and mode catalogs to port fields", async () => {
   expect(await port.modes("codex")).toEqual([
     { id: "ask", label: "Ask", description: null },
   ]);
+});
+test("reads models and modes from the snapshot entry without asking the daemon", async () => {
+  const { port, listed } = setup(false, undefined, [
+    {
+      ...CODEX,
+      models: [
+        { provider: "codex", id: "gpt", label: "GPT", isDefault: true },
+        {
+          provider: "codex",
+          id: "hidden",
+          label: "Hidden",
+          isSelectable: false,
+        },
+      ],
+      modes: [{ id: "auto", label: "Auto", description: "Hands off" }],
+    },
+  ]);
+  expect(await port.models("codex")).toEqual([
+    { id: "gpt", label: "GPT", description: null, isDefault: true },
+  ]);
+  expect(await port.modes("codex")).toEqual([
+    { id: "auto", label: "Auto", description: "Hands off" },
+  ]);
+  expect(listed).toEqual([]);
+});
+test("asks the daemon for missing models and modes once until that provider's entry changes", async () => {
+  const { port, listed, push } = setup(false, undefined, [
+    CODEX,
+    { provider: "other", status: "ready", enabled: true },
+  ]);
+  await port.models("codex");
+  await port.models("codex");
+  await port.modes("codex");
+  await port.modes("codex");
+  expect(listed).toEqual(["models:codex", "modes:codex"]);
+  push([
+    CODEX,
+    { provider: "other", status: "ready", enabled: true, label: "Other" },
+  ]);
+  await port.models("codex");
+  expect(listed).toEqual(["models:codex", "modes:codex"]);
+  push([{ ...CODEX, label: "Codex 2" }]);
+  await port.models("codex");
+  await port.modes("codex");
+  expect(listed).toEqual([
+    "models:codex",
+    "modes:codex",
+    "models:codex",
+    "modes:codex",
+  ]);
+});
+test("rejects models for a provider the snapshot does not list", async () => {
+  await expect(setup().port.models("missing")).rejects.toThrow(
+    "Unknown provider: missing",
+  );
+});
+test("tells listeners when the provider snapshot changes", async () => {
+  const { port, push } = setup();
+  await port.providers();
+  let changes = 0;
+  const stop = port.onProvidersChange(() => changes++);
+  push([CODEX]);
+  stop();
+  push([CODEX, { provider: "other", status: "ready", enabled: true }]);
+  expect(changes).toBe(1);
 });
 test("creates with provider/model and optional fields and returns the snapshot", async () => {
   const { port, created } = setup();

@@ -202,3 +202,21 @@ describe("title step placeholder", () => {
     expect(await titlePlaceholder()).toBe("Agent title (optional)");
   });
 });
+
+it("says providers are loading and re-lists them when the catalog changes", () => {
+  const { deps } = fixture();
+  const listeners: (() => void)[] = [];
+  const step = createAgentStep({
+    ...deps,
+    onProvidersChange(listener) {
+      listeners.push(listener);
+      return () => {};
+    },
+  });
+  if (step.kind !== "choice") throw Error("Expected choice");
+  expect(step.loading).toBe("Loading providers…");
+  let relisted = 0;
+  step.subscribe?.(() => relisted++);
+  at(listeners, 0)();
+  expect(relisted).toBe(1);
+});

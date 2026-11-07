@@ -76,6 +76,61 @@ it("clears a viewed finished turn once and shows the next finished turn again", 
   expect(cleared).toEqual(["done", "done"]);
 });
 
+const idle = {
+  ...finished,
+  requiresAttention: false,
+  attentionTimestamp: "2026-11-03T00:00:00Z",
+};
+it("keeps the marked turn unread while viewed, but acknowledges a later turn", () => {
+  const cleared: string[] = [];
+  const tracker = createAttentionTracker(async (id) => {
+    cleared.push(id);
+  });
+  tracker.hold(idle);
+  tracker.view(finished);
+  expect(agentIndicator(finished, tracker.getSnapshot()).kind).toBe("unread");
+  tracker.view(finished);
+  expect(cleared).toEqual([]);
+  const later = { ...finished, attentionTimestamp: "2026-11-04T00:00:09Z" };
+  tracker.view(later);
+  expect(agentIndicator(later, tracker.getSnapshot()).kind).toBe("none");
+  expect(cleared).toEqual(["done"]);
+});
+
+it("acknowledges the marked turn once the agent is viewed again", () => {
+  const tracker = createAttentionTracker(async () => {});
+  tracker.hold(idle);
+  tracker.view(finished);
+  tracker.view(null);
+  tracker.view(finished);
+  expect(agentIndicator(finished, tracker.getSnapshot()).kind).toBe("none");
+});
+
+it("stops holding once the mark settles if no new turn reached the viewed agent", () => {
+  const tracker = createAttentionTracker(async () => {});
+  tracker.hold(idle);
+  tracker.settle();
+  tracker.view(finished);
+  expect(agentIndicator(finished, tracker.getSnapshot()).kind).toBe("none");
+});
+
+it("keeps a pinned mark through settle", () => {
+  const tracker = createAttentionTracker(async () => {});
+  tracker.hold(idle);
+  tracker.view(finished);
+  tracker.settle();
+  tracker.view(finished);
+  expect(agentIndicator(finished, tracker.getSnapshot()).kind).toBe("unread");
+});
+
+it("stops holding when the mark settles without the viewed agent changing", () => {
+  const tracker = createAttentionTracker(async () => {});
+  tracker.hold(idle);
+  tracker.release();
+  tracker.view(finished);
+  expect(agentIndicator(finished, tracker.getSnapshot()).kind).toBe("none");
+});
+
 it("keeps a viewed turn read locally when the daemon rejects the clear", async () => {
   const tracker = createAttentionTracker(async () => {
     throw Error("offline");

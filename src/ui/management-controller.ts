@@ -50,7 +50,10 @@ export interface ManagementContext {
   workspaces: readonly WorkspaceRow[];
   workspace: WorkspaceRow | null;
   tab: WorkspaceTab | null;
-  catalog: Pick<AgentsPort, "providers" | "models" | "modes"> | null;
+  catalog: Pick<
+    AgentsPort,
+    "providers" | "models" | "modes" | "onProvidersChange"
+  > | null;
   actions: WorkspaceActions | undefined;
   thinkingPreference?: ThinkingPreference;
   refresh(): Promise<void>;
@@ -158,6 +161,8 @@ export function createManagementController(context: () => ManagementContext) {
       if (!port) throw Error("Provider catalog is unavailable");
       return port.modes(provider);
     },
+    onProvidersChange: (listener: () => void) =>
+      context().catalog?.onProvidersChange(listener) ?? (() => {}),
   };
   function opened(workspace: WorkspaceRow, agent: PaseoAgent | null) {
     context().opened({
@@ -195,6 +200,8 @@ export function createManagementController(context: () => ManagementContext) {
         providers: () => scope.catalog.providers(),
         models: (provider: string) => scope.catalog.models(provider),
         modes: (provider: string) => scope.catalog.modes(provider),
+        onProvidersChange: (listener: () => void) =>
+          scope.catalog.onProvidersChange(listener),
       },
     };
   }
@@ -634,15 +641,16 @@ export function createManagementController(context: () => ManagementContext) {
       });
     });
   }
-  /** Runs vim on the file in a new terminal tab named after it. */
+  /** Runs the file editor (default vim) on the file in a new terminal tab named after it. */
   function openFile(
     workspace: WorkspaceRow,
     link: Pick<FileLink, "path" | "line" | "col">,
+    command?: string,
   ) {
     run("Opening file…", async () => {
       const terminal = await actions().openFile(
         workspace,
-        editorTerminal(link),
+        editorTerminal(link, command),
       );
       await context().refresh();
       context().opened({

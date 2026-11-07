@@ -1,15 +1,18 @@
 import { posix } from "node:path";
 import type { PaseoAgent } from "@getpaseo/client";
 import type { WorkspaceGroup } from "../../state/agents-store.js";
+import type { HostHealthEntry } from "../../state/host-health.js";
 import type { CatalogModel } from "../../state/ports.js";
 import type { TimelineStore } from "../../state/timeline-store.js";
 import { agentName, shortPath } from "../agent/agent-display.js";
 import { viewOnlyCommands } from "../agent/archived-views.js";
+import { type ClearedUsage, usageSinceClear } from "../agent/clear-session.js";
 import {
   contextDetailRows,
   contextMeterText,
   contextWindow,
 } from "../agent/context-window.js";
+import type { ReadAction } from "../agent/read-state.js";
 import type { UsageConfig } from "../config/user-config.js";
 import type { FileLink } from "../file-links/links.js";
 import { type Action, type Binding, paletteActions } from "../input/keymap.js";
@@ -20,16 +23,24 @@ import {
   scheduleCommands,
 } from "../schedules/schedule-commands.js";
 import { type UsageSource, usageCommands } from "../usage/usage-commands.js";
+import type { ExternalStore } from "../use-store.js";
 import type { WorkspaceRow } from "../workspace/workspaces.js";
 import { historyCommands } from "./agent-history.js";
 import { type CreateDeps, createAgentStep } from "./create-agent.js";
+import { type LabelCommandContext, labelCommands } from "./label-commands.js";
 import { type PathContext, pathCommands } from "./path-commands.js";
+import { type PinContext, pinCommands } from "./pin-commands.js";
 import type { CommandItem, CommandSource, CommandStep } from "./registry.js";
 import {
   type SessionHistoryContext,
   sessionHistoryCommand,
 } from "./session-history.js";
+import { type Versions, versionRows } from "./version.js";
 export interface BuiltinContext {
+  version?: {
+    versions: Versions;
+    hosts: ExternalStore<readonly HostHealthEntry[]>;
+  };
   groups: readonly WorkspaceGroup[];
   /** Agents waiting on you, most urgent first, with what each waits on. */
   waiting: readonly { agent: PaseoAgent; reason: string }[];
@@ -54,16 +65,69 @@ export interface BuiltinContext {
   /** Provider usage reports; absent when the daemon reports no usage. */
   usage?: UsageSource;
   usageConfig?: UsageConfig;
+  /** Why usage and schedules can't be read now (the startup host is offline). */
+  unavailable?: () => string | null;
   /** The open workspace's directory and editor tab's file, to copy. */
   paths?: PathContext;
+  /** Mark as read / unread for the selected workspace, and Mark all as read. */
+  read?: ReadContext;
+  /** Pin workspace / Unpin workspace for the selected workspace. */
+  pins?: PinContext;
+  /** Labels… for the selected workspace and Filter by label…. */
+  labels?: LabelCommandContext;
   /** Workspace, project and host management (each opens its own dialog). */
   manage?: ManageCommands;
   /** Past sessions (History…); absent when no host serves history. */
   history?: SessionHistoryContext;
   /** Unarchives the focused agent; offered while it is archived. */
   unarchive?(): void;
+  /** Confirms and clears the focused agent's session; absent when it has no /clear command. */
+  clear?: CommandStep;
+  /** The focused agent's usage at its last clear; the context window row ignores older usage. */
+  clearedUsage?: ClearedUsage;
   /** Scrolls the focused pane to a prompt (Jump to prompt…). */
   goto?(epoch: string, seq: number): void;
+  /** Asks the hosts to rediscover their providers (Refresh providers). */
+  refreshProviders?(): void;
+}
+export interface ReadContext {
+  workspace: WorkspaceRow | null;
+  action: ReadAction | null;
+  unread: number;
+  mark(workspace: WorkspaceRow, kind: ReadAction["kind"]): void;
+  markAll(): void;
+}
+function readCommands({
+  workspace,
+  action,
+  unread,
+  mark,
+  markAll,
+}: ReadContext): CommandItem[] {
+  const items: CommandItem[] = [];
+  if (workspace && action)
+    items.push({
+      id: `mark-${action.kind}`,
+      group: "Workspaces",
+      title: action.title,
+      subtitle: workspace.title || workspace.name,
+      keywords: ["read", "unread", "seen", "acknowledge"],
+      run(): undefined {
+        mark(workspace, action.kind);
+      },
+    });
+  if (unread > 0)
+    items.push({
+      id: "mark-all-read",
+      group: "Workspaces",
+      title: "Mark all as read",
+      subtitle: `${unread} unread`,
+      keywords: ["read", "seen", "acknowledge", "clear"],
+      run(): undefined {
+        markAll();
+      },
+    });
+  return items;
 }
 export interface ManageCommands {
   /** The open workspace, which Archive workspace… archives. */
@@ -218,10 +282,18 @@ export function builtinSource(context: BuiltinContext): CommandSource {
       items.push(...agentCommands(context), ...fileCommands(context));
       if (context.paths) items.push(...pathCommands(context.paths));
       if (context.manage) items.push(...manageCommands(context.manage));
+      if (context.read) items.push(...readCommands(context.read));
+      if (context.pins) items.push(...pinCommands(context.pins));
+      if (context.labels) items.push(...labelCommands(context.labels));
       if (context.schedules) items.push(...scheduleCommands(context.schedules));
       if (context.usage)
         items.push(
-          ...usageCommands(context.usage, Date.now, context.usageConfig),
+          ...usageCommands(
+            context.usage,
+            Date.now,
+            context.usageConfig,
+            context.unavailable,
+          ),
         );
       for (const entry of paletteActions(context.prefixLabel, context.bindings))
         items.push({
@@ -232,6 +304,33 @@ export function builtinSource(context: BuiltinContext): CommandSource {
           keywords: entry.keywords,
           run(): undefined {
             context.act(entry.action);
+          },
+        });
+      const version = context.version;
+      if (version) {
+        const step: CommandStep = {
+          kind: "readOnly",
+          title: "Version",
+          subscribe: version.hosts.subscribe,
+          lines: () =>
+            versionRows(version.versions, version.hosts.getSnapshot()),
+        };
+        items.push({
+          id: "version",
+          group: "View",
+          title: "Version",
+          run: () => step,
+        });
+      }
+      const refreshProviders = context.refreshProviders;
+      if (refreshProviders)
+        items.push({
+          id: "refresh-providers",
+          group: "Actions",
+          title: "Refresh providers",
+          keywords: ["providers", "models", "reload", "rediscover"],
+          run(): undefined {
+            refreshProviders();
           },
         });
       if (context.focusedAgent && context.queued)
@@ -309,7 +408,9 @@ function agentCommands(context: BuiltinContext): CommandItem[] {
       },
     });
   if (agent) {
-    const window = contextWindow(agent.lastUsage);
+    const window = contextWindow(
+      usageSinceClear(agent.lastUsage, context.clearedUsage),
+    );
     const step: CommandStep = {
       kind: "choice",
       title: "Context window",
@@ -396,6 +497,16 @@ function agentCommands(context: BuiltinContext): CommandItem[] {
           : {}),
       }),
     );
+    const clear = context.clear;
+    if (clear)
+      items.push({
+        id: "clear-session",
+        group: "Agent",
+        title: "Clear session",
+        keywords: ["reset", "new", "conversation", "context"],
+        action: { type: "agent.clear" },
+        run: () => clear,
+      });
     items.push({
       id: "rename",
       group: "Agent",

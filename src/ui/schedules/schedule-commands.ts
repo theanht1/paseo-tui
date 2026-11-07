@@ -31,6 +31,8 @@ export interface ScheduleDeps {
   /** Provider/model/mode catalog; without it only existing agents can be targeted. */
   configure?: ConfigurationDeps;
   now(): number;
+  /** Why schedules can't be read now (their daemon is offline); null when they can. */
+  unavailable?: () => string | null;
 }
 
 const GROUP: CommandGroup = "Schedules";
@@ -100,19 +102,34 @@ function schedulesStep(deps: ScheduleDeps): CommandStep {
   return {
     kind: "choice",
     title: "Schedules",
-    items: async () => [
-      newScheduleItem(deps, "schedules:new"),
-      ...(await deps.port.list()).map(
-        (schedule): CommandItem => ({
-          id: `schedule:${schedule.id}`,
-          group: GROUP,
-          title: scheduleTitle(schedule),
-          subtitle: summaryLine(schedule, deps),
-          run: () => actionsStep(schedule, deps),
-        }),
-      ),
-    ],
+    items: async () => {
+      const reason = deps.unavailable?.();
+      return reason
+        ? [
+            {
+              id: "schedules:unavailable",
+              group: GROUP,
+              title: reason,
+              run: () => schedulesStep(deps),
+            },
+          ]
+        : listed(deps);
+    },
   };
+}
+async function listed(deps: ScheduleDeps): Promise<CommandItem[]> {
+  return [
+    newScheduleItem(deps, "schedules:new"),
+    ...(await deps.port.list()).map(
+      (schedule): CommandItem => ({
+        id: `schedule:${schedule.id}`,
+        group: GROUP,
+        title: scheduleTitle(schedule),
+        subtitle: summaryLine(schedule, deps),
+        run: () => actionsStep(schedule, deps),
+      }),
+    ),
+  ];
 }
 
 function mutation(

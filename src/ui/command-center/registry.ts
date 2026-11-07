@@ -144,9 +144,19 @@ export function rankCommands(
 
 export type CommandStep =
   | {
+      kind: "readOnly";
+      title: string;
+      lines(): readonly string[];
+      subscribe?(listener: () => void): () => void;
+    }
+  | {
       kind: "choice";
       title: string;
       items(): readonly CommandItem[] | Promise<readonly CommandItem[]>;
+      /** Shown while `items` is pending; "Loading…" by default. */
+      loading?: string;
+      /** Lists `items` again whenever the listener is called. */
+      subscribe?(listener: () => void): () => void;
     }
   | {
       kind: "input";
@@ -159,6 +169,8 @@ export type CommandStep =
       secret?: true;
       /** Enter on a blank value stays and says "<required> is required". */
       required?: string;
+      /** Why Enter would do nothing for this value; shown instead of submitting. */
+      validate?(text: string): string | null;
       submit(text: string): undefined | CommandStep;
     }
   | {
@@ -170,4 +182,10 @@ export type CommandStep =
       tall?: true;
       search(query: string): Promise<readonly CommandItem[]>;
     }
-  | { kind: "confirm"; title: string; confirm(): void };
+  | {
+      kind: "confirm";
+      title: string;
+      /** The question, loaded first (e.g. a count); `y` waits for it. */
+      prepare?(): Promise<string>;
+      confirm(): void;
+    };

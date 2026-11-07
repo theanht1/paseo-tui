@@ -1,13 +1,19 @@
 import type { PaseoAgent, PaseoProject } from "@getpaseo/client";
 import type { createHostClient } from "@getpaseo/client/node";
-import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
+import type {
+  ProviderSubagentDescriptorPayload,
+  SessionOutboundMessage,
+} from "@getpaseo/protocol/messages";
 import type {
   AgentFeaturesPort,
   CompletionPort,
   DirectoryPort,
   DraftCommandConfig,
   HistoryPort,
+  HostInfoPort,
   ProjectPort,
+  ProviderCatalogPort,
+  ProviderSnapshotEntry,
   ProviderSubagentPort,
   ProviderSubagentTimelinePage,
   ProviderSubagentUpdate,
@@ -17,6 +23,13 @@ import type {
   TerminalStreamPort,
   TimelineCursor,
   UsagePort,
+  WorkspaceLabelCursor,
+  WorkspaceLabelDefinition,
+  WorkspaceLabelEdit,
+  WorkspaceLabelList,
+  WorkspaceLabelPort,
+  WorkspacePinPort,
+  WorkspaceReadPort,
 } from "./ports.js";
 
 type Daemon = Pick<
@@ -151,10 +164,11 @@ export function requireWorkspaceCapabilities(
   if (
     features?.workspaceMultiplicity !== true ||
     features.workspaceTerminals !== true ||
-    features.projectList !== true
+    features.projectList !== true ||
+    features.providersSnapshot !== true
   )
     throw new Error(
-      "Update the Paseo daemon to use projects, workspaces and terminal tabs (projectList, workspaceMultiplicity and workspaceTerminals required).",
+      "Update the Paseo daemon to use projects, workspaces, terminal tabs and the provider catalog (projectList, workspaceMultiplicity, workspaceTerminals and providersSnapshot required).",
     );
 }
 
@@ -365,6 +379,120 @@ export function createGitAdapter(daemon: GitDaemon) {
   };
 }
 
+export interface ProviderCatalogDaemon {
+  getProvidersSnapshot(): Promise<{ entries: ProviderSnapshotEntry[] }>;
+  refreshProvidersSnapshot(): Promise<unknown>;
+  observeEvents(events: ["providers_snapshot_update"]): {
+    subscribe(observer: {
+      snapshot(): void;
+      update(message: SessionOutboundMessage): void;
+    }): () => void;
+    release(): Promise<void>;
+  };
+}
+/** The global (no `cwd`) provider snapshot; the client expands compact payloads. */
+export function createProviderCatalogAdapter(
+  daemon: ProviderCatalogDaemon,
+): ProviderCatalogPort {
+  return {
+    async snapshot() {
+      return (await daemon.getProvidersSnapshot()).entries;
+    },
+    async refresh() {
+      await daemon.refreshProvidersSnapshot();
+    },
+    observe(handler) {
+      const subscription = daemon.observeEvents(["providers_snapshot_update"]);
+      const unsubscribe = subscription.subscribe({
+        snapshot() {},
+        update(message) {
+          if (
+            message.type === "providers_snapshot_update" &&
+            message.payload.cwd === undefined
+          )
+            handler(message.payload.entries);
+        },
+      });
+      return async () => {
+        unsubscribe();
+        // A failed release (dropped transport) must not fail closing the session.
+        await subscription.release().catch(() => {});
+      };
+    },
+  };
+}
+
+export interface WorkspaceLabelDaemon {
+  getLastServerInfoMessage(): {
+    features?: { workspaceLabels?: boolean };
+  } | null;
+  listWorkspaceLabels(options?: {
+    sync?: WorkspaceLabelCursor;
+  }): Promise<WorkspaceLabelList>;
+  observeWorkspaceLabels(): {
+    subscribe(observer: {
+      snapshot(payload: WorkspaceLabelList): void;
+      update(message: SessionOutboundMessage): void;
+      error?(error: unknown): void;
+    }): () => void;
+    release(): Promise<void>;
+  };
+  setWorkspaceLabel(options: {
+    workspaceId: string;
+    label: WorkspaceLabelDefinition;
+    assigned: boolean;
+  }): Promise<{ workspaceLabels: string[] }>;
+  updateWorkspaceLabel(
+    options: WorkspaceLabelEdit,
+  ): Promise<{ label: WorkspaceLabelDefinition }>;
+  inspectWorkspaceLabelDelete(options: {
+    name: string;
+  }): Promise<{ affectedWorkspaceCount: number }>;
+  deleteWorkspaceLabel(options: {
+    name: string;
+  }): Promise<{ affectedWorkspaceCount: number }>;
+}
+/** The workspace label catalog and assignments; null without `workspaceLabels`. */
+export function createWorkspaceLabelAdapter(
+  daemon: WorkspaceLabelDaemon,
+): WorkspaceLabelPort | null {
+  if (daemon.getLastServerInfoMessage()?.features?.workspaceLabels !== true)
+    return null;
+  return {
+    list: (sync) => daemon.listWorkspaceLabels(sync ? { sync } : {}),
+    observe(observer) {
+      const subscription = daemon.observeWorkspaceLabels();
+      const unsubscribe = subscription.subscribe({
+        snapshot: observer.list,
+        update(message) {
+          if (message.type === "workspace.label.update")
+            observer.change(message.payload);
+        },
+        error: observer.error,
+      });
+      return async () => {
+        unsubscribe();
+        // A failed release (dropped transport) must not fail closing the session.
+        await subscription.release().catch(() => {});
+      };
+    },
+    async setAssignment(input) {
+      return (await daemon.setWorkspaceLabel(input)).workspaceLabels;
+    },
+    async update(input) {
+      return (await daemon.updateWorkspaceLabel(input)).label;
+    },
+    async inspectDelete(name) {
+      return (await daemon.inspectWorkspaceLabelDelete({ name }))
+        .affectedWorkspaceCount;
+    },
+    async delete(name) {
+      return (await daemon.deleteWorkspaceLabel({ name }))
+        .affectedWorkspaceCount;
+    },
+  };
+}
+
 interface SubagentDaemon {
   getLastServerInfoMessage(): {
     features?: {
@@ -483,6 +611,43 @@ export function createUsageAdapter(daemon: UsageDaemon): UsagePort | null {
   return {
     async list(options = {}) {
       return (await daemon.listUsageReports(options)).reports;
+    },
+  };
+}
+
+export interface WorkspaceReadDaemon
+  extends Pick<HostClient, "clearWorkspaceAttention" | "markWorkspaceUnread"> {
+  getLastServerInfoMessage(): {
+    features?: { workspaceMarkUnread?: boolean };
+  } | null;
+}
+export function createWorkspaceReadAdapter(
+  daemon: WorkspaceReadDaemon,
+): WorkspaceReadPort {
+  const features = daemon.getLastServerInfoMessage()?.features;
+  return {
+    markRead: (ids) => daemon.clearWorkspaceAttention([...ids]),
+    markUnread:
+      features?.workspaceMarkUnread === true
+        ? (id) => daemon.markWorkspaceUnread(id)
+        : null,
+  };
+}
+
+export interface WorkspacePinDaemon
+  extends Pick<HostClient, "setWorkspacePinned"> {
+  getLastServerInfoMessage(): {
+    features?: { workspacePinning?: boolean };
+  } | null;
+}
+export function createWorkspacePinAdapter(
+  daemon: WorkspacePinDaemon,
+): WorkspacePinPort | null {
+  if (daemon.getLastServerInfoMessage()?.features?.workspacePinning !== true)
+    return null;
+  return {
+    async setPinned(id, pinned) {
+      await daemon.setWorkspacePinned(id, pinned);
     },
   };
 }
@@ -610,5 +775,16 @@ export function createTerminalListAdapter(
         ),
       };
     },
+  };
+}
+
+export interface HostInfoDaemon {
+  getLastServerInfoMessage(): { version: string | null } | null;
+  ensureConnected(options?: { verify?: boolean }): void;
+}
+export function createHostInfoAdapter(daemon: HostInfoDaemon): HostInfoPort {
+  return {
+    version: () => daemon.getLastServerInfoMessage()?.version ?? null,
+    reconnect: () => daemon.ensureConnected(),
   };
 }

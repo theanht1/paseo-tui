@@ -144,3 +144,22 @@ test("plans keep their proposal position and show the daemon's outcome", () => {
     ).map((b) => (b.kind === "plan" ? b.outcome : b.kind)),
   ).toEqual(["approved", "canceled", "proposed"]);
 });
+test("a session switch notice becomes a divider that old history stays above", () => {
+  const blocks = toBlocks(
+    rows(
+      { type: "user_message", text: "before" },
+      { type: "assistant_message", text: "answer" },
+      {
+        type: "assistant_message",
+        text: "Claude switched to a new session: old -> new",
+      },
+      { type: "assistant_message", text: "after" },
+    ),
+  );
+  expect(blocks.map((block) => [block.kind, blockText(block)])).toEqual([
+    ["user", "before"],
+    ["assistant", "answer"],
+    ["notice", "── session cleared ──"],
+    ["assistant", "after"],
+  ]);
+});

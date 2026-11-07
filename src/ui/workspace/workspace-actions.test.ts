@@ -16,6 +16,8 @@ const workspace = {
   id: "w",
   projectId: "p",
   projectRootPath: "/repo",
+  activityAt: null,
+  statusEnteredAt: null,
   workspaceDirectory: "/tree",
   name: "Worktree",
 };

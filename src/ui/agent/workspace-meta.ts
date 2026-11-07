@@ -1,3 +1,8 @@
+import type { WorkspaceLabelDefinition } from "@getpaseo/protocol/workspace-labels";
+import {
+  type HostLabelState,
+  labelDefinitions,
+} from "../../state/label-catalog.js";
 import type { WorkspaceRow } from "../workspace/workspaces.js";
 
 const CHECKS = { success: "✓", failure: "✗", pending: "…", none: "" } as const;
@@ -54,4 +59,11 @@ export function hostTag(label: string): string {
   return name.length > HOST_TAG_WIDTH
     ? `${name.slice(0, HOST_TAG_WIDTH - 1)}…`
     : name;
+}
+/** The row's label chips, colored by its own host's catalog (which outlives a disconnect). */
+export function labelChips(
+  row: WorkspaceRow,
+  host: HostLabelState,
+): WorkspaceLabelDefinition[] {
+  return host.kind === "ready" ? labelDefinitions(host.labels, row.labels) : [];
 }

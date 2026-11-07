@@ -19,6 +19,9 @@ class FakeAgents implements AgentsPort {
   async modes() {
     return [];
   }
+  onProvidersChange() {
+    return () => {};
+  }
   async create(): Promise<never> {
     throw new Error("Unexpected create");
   }

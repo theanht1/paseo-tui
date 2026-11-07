@@ -1,9 +1,18 @@
-import type { ConnectionState } from "@getpaseo/client";
 import { parseHostTarget } from "@getpaseo/client/node";
 import type { Connection } from "./connection/connect.js";
+import type { HostConnectionState } from "./connection/ports.js";
 import type { HostTarget } from "./connection/target.js";
 import { createSession } from "./session.js";
 import { createEmitter } from "./state/emitter.js";
+import {
+  createReconnectSupervisor,
+  type HostHealth,
+  type HostHealthEntry,
+  libraryRetrying,
+  nextHealth,
+  offlineHealth,
+  type Schedule,
+} from "./state/host-health.js";
 import { type HostRegistry, splitPassword } from "./state/host-registry.js";
 import type {
   HostOption,
@@ -17,7 +26,11 @@ import type { ExternalStore } from "./ui/use-store.js";
 export interface HostLive extends Omit<HostScope, "id" | "label"> {
   /** The status bar label, e.g. `local (127.0.0.1:6767)` or `build (tcp://…)`. */
   label: string;
-  status: ExternalStore<ConnectionState>;
+  status: ExternalStore<HostConnectionState>;
+  /** The connected daemon's `server_info.version`; null while it is not connected. */
+  version(): string | null;
+  /** Asks the client library to retry now instead of waiting for its backoff. */
+  reconnect(): void;
   close(): Promise<void>;
 }
 interface HostEntry {
@@ -32,6 +45,9 @@ type Attempt<L> =
   | { kind: "connecting"; live: Promise<L> }
   | { kind: "live"; live: L }
   | { kind: "failed" };
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 /** A connected host, as the merged window sees it. */
 export interface LiveHost<L> {
   id: string;
@@ -52,13 +68,8 @@ function targetId(target: HostTarget) {
     ? `home:${target.home}`
     : `host:${describe(target.connection)}`;
 }
-function status(attempt: Attempt<HostLive> | undefined): HostStatus {
-  if (!attempt) return "idle";
-  if (attempt.kind === "connecting") return "connecting";
-  if (attempt.kind === "failed") return "offline";
-  return attempt.live.status.getSnapshot().status === "connected"
-    ? "connected"
-    : "offline";
+function status(health: HostHealth): HostStatus {
+  return health.kind;
 }
 /**
  * The startup host plus the saved ones, all connected at once (like the desktop app)
@@ -66,6 +77,9 @@ function status(attempt: Attempt<HostLive> | undefined): HostStatus {
  */
 export function createHosts<L extends HostLive>(options: {
   initial: { target: HostTarget; live: L };
+  /** Timers for retrying hosts the client library does not retry. */
+  schedule: Schedule;
+  now?: () => number;
   registry: HostRegistry;
   open(
     target: HostTarget,
@@ -75,15 +89,14 @@ export function createHosts<L extends HostLive>(options: {
 }) {
   const emitter = createEmitter();
   const initialId = targetId(options.initial.target);
-  const entries: HostEntry[] = [
-    {
-      id: initialId,
-      target: options.initial.target,
-      label: options.initial.target.kind === "home" ? "local" : "",
-      saved: null,
-      password: null,
-    },
-  ];
+  const initialEntry: HostEntry = {
+    id: initialId,
+    target: options.initial.target,
+    label: options.initial.target.kind === "home" ? "local" : "",
+    saved: null,
+    password: null,
+  };
+  const entries: HostEntry[] = [initialEntry];
   function saved(
     connection: string,
     label: string | null,
@@ -101,18 +114,136 @@ export function createHosts<L extends HostLive>(options: {
     const entry = saved(host.connection, host.label, host.password);
     if (entry.id !== initialId) entries.push(entry);
   }
-  const attempts = new Map<string, Attempt<L>>([
-    [initialId, { kind: "live", live: options.initial.live }],
-  ]);
+  const now = options.now ?? Date.now;
+  const supervisor = createReconnectSupervisor({
+    schedule: options.schedule,
+    now,
+  });
+  const attempts = new Map<string, Attempt<L>>();
+  const health = new Map<string, HostHealth>();
+  const watching = new Map<L, () => void>();
+  /** A dead connection kept on screen while its replacement connects. */
+  const replacing = new Map<string, L>();
+  /** One object per connection, so owners keep matching across health changes. */
+  const shown = new WeakMap<L, LiveHost<L>>();
+  let closing = false;
   let snapshot: readonly LiveHost<L>[] = [];
+  let healthSnapshot: readonly HostHealthEntry[] = [];
+  function healthOf(id: string): HostHealth {
+    return health.get(id) ?? { kind: "idle" };
+  }
   function publish() {
     snapshot = entries.flatMap((host) => {
       const attempt = attempts.get(host.id);
-      return attempt?.kind === "live"
-        ? [{ id: host.id, label: name(host, attempt.live), live: attempt.live }]
-        : [];
+      const live =
+        attempt?.kind === "live" ? attempt.live : replacing.get(host.id);
+      if (!live) return [];
+      const known = shown.get(live);
+      if (known) return [known];
+      const value = { id: host.id, label: name(host, live), live };
+      shown.set(live, value);
+      return [value];
+    });
+    healthSnapshot = entries.map((host) => {
+      const attempt = attempts.get(host.id);
+      const live = attempt?.kind === "live" ? attempt.live : null;
+      const current = healthOf(host.id);
+      return {
+        id: host.id,
+        label: name(host, live),
+        health: current,
+        version:
+          current.kind === "connected" ? (live?.version() ?? null) : null,
+      };
     });
     emitter.notify();
+  }
+  /** Follows a live connection's state; a client that stopped retrying is replaced. */
+  function watch(host: HostEntry, live: L) {
+    /** The client stopped retrying and a replacement is planned. */
+    let gaveUp = false;
+    function observe() {
+      if (closing) return;
+      const attempt = attempts.get(host.id);
+      if (attempt?.kind !== "live" || attempt.live !== live) return;
+      const state = live.status.getSnapshot();
+      const previous = healthOf(host.id);
+      const next = nextHealth(previous, state, now());
+      if (state.status === "connected") supervisor.reset(host.id);
+      if (next.kind !== "offline" || libraryRetrying(state)) {
+        // The library retries again: drop the replacement planned when it stopped.
+        if (gaveUp) supervisor.reset(host.id);
+        gaveUp = false;
+        health.set(host.id, next);
+      } else if (!gaveUp) {
+        gaveUp = true;
+        health.set(host.id, {
+          ...next,
+          nextRetryAt: supervisor.failed(host.id, () => reopen(host)),
+        });
+      }
+      publish();
+    }
+    watching.set(live, live.status.subscribe(observe));
+    observe();
+  }
+  function unwatch(live: L) {
+    watching.get(live)?.();
+    watching.delete(live);
+  }
+  function failed(host: HostEntry, error: unknown) {
+    if (closing) return;
+    health.set(
+      host.id,
+      offlineHealth(
+        healthOf(host.id),
+        now(),
+        message(error),
+        supervisor.failed(host.id, () => reopen(host)),
+      ),
+    );
+    publish();
+  }
+  /** Opens a new connection for a host whose old one is gone or never came up. */
+  function reopen(host: HostEntry) {
+    if (closing) return;
+    const current = attempts.get(host.id);
+    if (current?.kind === "connecting") return;
+    const previous = current?.kind === "live" ? current.live : null;
+    if (previous) replacing.set(host.id, previous);
+    const live = options.open(host.target, host.saved, host.password).then(
+      (value) => {
+        replacing.delete(host.id);
+        if (closing) {
+          void value.close();
+          return value;
+        }
+        attempts.set(host.id, { kind: "live", live: value });
+        if (previous) {
+          unwatch(previous);
+          void previous.close();
+        }
+        watch(host, value);
+        return value;
+      },
+      (error: unknown) => {
+        replacing.delete(host.id);
+        attempts.set(
+          host.id,
+          previous ? { kind: "live", live: previous } : { kind: "failed" },
+        );
+        failed(host, error);
+        throw error;
+      },
+    );
+    attempts.set(host.id, { kind: "connecting", live });
+    const before = healthOf(host.id);
+    if (before.kind === "offline")
+      health.set(host.id, { ...before, nextRetryAt: null });
+    else if (!previous) health.set(host.id, { kind: "connecting", attempt: 0 });
+    publish();
+    live.catch(() => {});
+    return live;
   }
   function name(host: HostEntry, live: L | null) {
     if (host.label) return host.label;
@@ -136,30 +267,30 @@ export function createHosts<L extends HostLive>(options: {
       id: host.id,
       label: name(host, live),
       detail,
-      status: status(attempt),
+      status: status(healthOf(host.id)),
     };
   }
+  /** Connects now: a live host's client retries at once, others reopen with a fresh backoff. */
   function connect(host: HostEntry): Promise<L> {
     const attempt = attempts.get(host.id);
-    if (attempt?.kind === "live") return Promise.resolve(attempt.live);
     if (attempt?.kind === "connecting") return attempt.live;
-    const live = options.open(host.target, host.saved, host.password).then(
-      (value) => {
-        attempts.set(host.id, { kind: "live", live: value });
-        publish();
-        return value;
-      },
-      (error: unknown) => {
-        attempts.set(host.id, { kind: "failed" });
-        emitter.notify();
-        throw error;
-      },
-    );
-    attempts.set(host.id, { kind: "connecting", live });
+    if (attempt?.kind === "live") {
+      const state = attempt.live.status.getSnapshot();
+      if (state.status === "connected" || libraryRetrying(state)) {
+        if (state.status !== "connected") attempt.live.reconnect();
+        return Promise.resolve(attempt.live);
+      }
+    }
+    supervisor.reset(host.id);
+    const live = reopen(host);
+    if (!live) throw Error("Hosts are closed");
     return live;
   }
-  publish();
-  const startup = Promise.allSettled(entries.map(connect));
+  attempts.set(initialId, { kind: "live", live: options.initial.live });
+  watch(initialEntry, options.initial.live);
+  const startup = Promise.allSettled(
+    entries.filter((host) => host.id !== initialId).map(connect),
+  );
   const port: HostsPort = {
     list: () => entries.map(option),
     scope(id) {
@@ -201,7 +332,7 @@ export function createHosts<L extends HostLive>(options: {
       }
       entries.push(host);
       attempts.set(host.id, { kind: "live", live });
-      publish();
+      watch(host, live);
       return option(host);
     },
     async connect(id) {
@@ -212,14 +343,26 @@ export function createHosts<L extends HostLive>(options: {
     port,
     subscribe: emitter.subscribe,
     getSnapshot: () => snapshot,
+    /** Every host with its health and daemon version, in list order. */
+    health: {
+      subscribe: emitter.subscribe,
+      getSnapshot: () => healthSnapshot,
+    } satisfies ExternalStore<readonly HostHealthEntry[]>,
     /** Settles once every startup connection succeeded or failed. */
     async ready() {
       await startup;
     },
     async close() {
-      const live = [...attempts.values()].flatMap((attempt) =>
-        attempt.kind === "live" ? [attempt.live] : [],
-      );
+      closing = true;
+      supervisor.close();
+      for (const stop of watching.values()) stop();
+      watching.clear();
+      const live = [
+        ...replacing.values(),
+        ...[...attempts.values()].flatMap((attempt) =>
+          attempt.kind === "live" ? [attempt.live] : [],
+        ),
+      ];
       await Promise.all(live.map((value) => value.close()));
       emitter.clear();
     },
@@ -234,6 +377,8 @@ export function connectedHost(connection: Connection) {
     session,
     label: connection.label,
     status: session.status,
+    version: connection.host.version,
+    reconnect: connection.host.reconnect,
     async projects() {
       await session.directory.load();
       return session.directory.getSnapshot().projects;

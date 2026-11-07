@@ -27,6 +27,8 @@ function row(id: string, projectId: string): WorkspaceRow {
     id,
     projectId,
     projectRootPath: "/repo",
+    activityAt: null,
+    statusEnteredAt: null,
     workspaceDirectory: "/repo",
     name: id,
   };
@@ -103,9 +105,11 @@ const catalog = {
     { id: "best", label: "Best", description: null, isDefault: true },
   ],
   modes: async () => [],
+  onProvidersChange: () => () => {},
 };
 class FakeHosts implements HostsPort {
   connects: string[] = [];
+  watched: string[] = [];
   added: unknown[] = [];
   scopes: string[] = [];
   hosts: HostOption[] = [
@@ -139,7 +143,13 @@ class FakeHosts implements HostsPort {
       label: id === "home" ? "local" : "Build",
       projects: async () => [project("remote", "/srv/remote", "git")],
       actions: actions(id, this.calls),
-      catalog,
+      catalog: {
+        ...catalog,
+        onProvidersChange: () => {
+          this.watched.push(id);
+          return () => {};
+        },
+      },
     };
   }
   async add(input: {
@@ -230,11 +240,11 @@ async function walk(step: CommandStep | undefined, picks: readonly string[]) {
         );
       current = item.run();
     } else if (current.kind === "input") current = current.submit(pick);
-    else {
+    else if (current.kind === "confirm") {
       if (pick !== "y") throw Error(`Confirm ${current.title} with y`);
       current.confirm();
       current = undefined;
-    }
+    } else throw Error(`Cannot select from ${current.title}`);
   }
   return current;
 }
@@ -279,6 +289,39 @@ it("asks for the project first, then its host when the project is on several", a
   expect(refreshes()).toBe(1);
   expect(opened).toEqual([["build-ws", "agent:build-agent"]]);
   expect(controller.getSnapshot().operation).toEqual({ kind: "idle" });
+});
+
+it("re-lists the Provider step from the catalog of the host it creates on", async () => {
+  const { controller, wizard, hosts } = setup();
+  controller.createWorkspace();
+  const remote = await walk(wizard().step, [
+    "app",
+    "Build",
+    "Worktree",
+    "main",
+    "feature/x",
+  ]);
+  if (remote?.kind !== "choice") throw Error("Expected providers");
+  expect(remote.title).toBe("Provider");
+  remote.subscribe?.(() => {});
+  expect(hosts.watched).toEqual(["build"]);
+  const watched: string[] = [];
+  const single = setup({
+    hosts: undefined,
+    placements: undefined,
+    catalog: {
+      ...catalog,
+      onProvidersChange: () => {
+        watched.push("here");
+        return () => {};
+      },
+    },
+  });
+  single.controller.createWorkspace();
+  const here = await walk(single.wizard().step, ["app", "Local"]);
+  if (here?.kind !== "choice") throw Error("Expected providers");
+  here.subscribe?.(() => {});
+  expect(watched).toEqual(["here"]);
 });
 
 it("skips the host step for a project on one host, and with a single host", async () => {

@@ -80,6 +80,7 @@ const MUTATING_ACTIONS: ReadonlySet<Action["type"]> = new Set([
   "insert",
   "prompt.edit",
   "agent.cycleMode",
+  "agent.clear",
   "stop",
   "prefix.literal",
 ]);
@@ -92,6 +93,7 @@ const MUTATING_COMMANDS: ReadonlySet<string> = new Set([
   "set-model",
   "set-thinking",
   "rewind",
+  "clear-session",
   "rename",
 ]);
 /** An archived agent's commands without the ones that would change it; the same list when live. */

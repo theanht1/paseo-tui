@@ -1,7 +1,7 @@
 import type { ProviderSubagentDescriptorPayload } from "@getpaseo/protocol/messages";
 import { expect, it } from "vitest";
 import { agent } from "../../test/fixtures.js";
-import { moveCursor, paneSubagents, popupRows } from "./subagent-popup.js";
+import { paneSubagents, popupRows } from "./subagent-popup.js";
 
 const parent = agent("parent", { title: "Lead" });
 const child = agent("child", {
@@ -54,7 +54,4 @@ it("lists the parent first, then subagents, and clamps the cursor", () => {
   expect(popupRows(view).map((row) => [row.kind, row.label])).toEqual([
     ["parent", "Go to parent tab (Lead)"],
   ]);
-  expect(moveCursor(0, -1, 3)).toBe(0);
-  expect(moveCursor(1, 1, 3)).toBe(2);
-  expect(moveCursor(2, 1, 3)).toBe(2);
 });

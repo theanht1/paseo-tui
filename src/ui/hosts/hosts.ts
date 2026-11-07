@@ -17,7 +17,10 @@ export interface HostScope {
   label: string;
   projects(): Promise<readonly PaseoProject[]>;
   actions: WorkspaceActions;
-  catalog: Pick<AgentsPort, "providers" | "models" | "modes">;
+  catalog: Pick<
+    AgentsPort,
+    "providers" | "models" | "modes" | "onProvidersChange"
+  >;
 }
 export interface HostsPort {
   /** The startup host (localhost by default) first, then the others in the order they were added. */

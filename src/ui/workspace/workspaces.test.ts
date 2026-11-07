@@ -1,6 +1,14 @@
 import { expect, it } from "vitest";
 import { agent } from "../../test/fixtures.js";
-import { cycleTab, projectTree, workspaceTabs } from "./workspaces.js";
+import { NO_ORDER, type StoredOrder } from "./ordering.js";
+import {
+  cycleTab,
+  projectMove,
+  projectTree,
+  tabMove,
+  workspaceMove,
+  workspaceTabs,
+} from "./workspaces.js";
 
 const project = {
   projectId: "repo",
@@ -12,12 +20,16 @@ const main = {
   ...project,
   id: "main",
   name: "Main",
+  activityAt: null,
+  statusEnteredAt: null,
   workspaceDirectory: "/repo",
 };
 const branch = {
   ...main,
   id: "branch",
   name: "Branch",
+  activityAt: null,
+  statusEnteredAt: null,
   workspaceDirectory: "/trees/branch",
 };
 it("groups real workspace IDs under their project, including empty worktrees", () => {
@@ -72,4 +84,87 @@ it("archived agents get one slot in creation order", () => {
   });
   const tabs = workspaceTabs("main", [live, old], [], [], [old, other, live]);
   expect(tabs.map((t) => t.key)).toEqual(["agent:old", "agent:live"]);
+});
+const other = {
+  projectId: "other",
+  projectDisplayName: "Other",
+  projectRootPath: "/other",
+  projectKind: "git" as const,
+};
+const fresh = { ...main, id: "fresh", name: "Fresh" };
+function order(patch: Partial<StoredOrder>): StoredOrder {
+  return { ...NO_ORDER, ...patch };
+}
+it("orders projects by the stored order, appending new projects", () => {
+  const third = { ...other, projectId: "third", projectDisplayName: "Third" };
+  const tree = projectTree(
+    [project, other, third],
+    [],
+    order({ projects: ["third", "repo"] }),
+  );
+  expect(tree.map((node) => node.project.projectId)).toEqual([
+    "third",
+    "repo",
+    "other",
+  ]);
+});
+it("orders workspaces within their project, prepending new workspaces", () => {
+  const tree = projectTree(
+    [project],
+    [main, branch, fresh],
+    order({ workspaces: new Map([["repo", ["branch", "main"]]]) }),
+  );
+  expect(tree[0]?.workspaces.map((workspace) => workspace.id)).toEqual([
+    "fresh",
+    "branch",
+    "main",
+  ]);
+});
+it("orders tabs by the stored order, appending new tabs", () => {
+  const tabs = workspaceTabs(
+    "main",
+    [
+      agent("a", { workspaceId: "main", createdAt: "2026-11-01T00:00:01Z" }),
+      agent("b", { workspaceId: "main", createdAt: "2026-11-01T00:00:02Z" }),
+    ],
+    [{ id: "shell", workspaceId: "main", cwd: "/repo", name: "Shell" }],
+    [],
+    [],
+    order({ tabs: new Map([["main", ["terminal:shell", "agent:a"]]]) }),
+  );
+  expect(tabs.map((tab) => tab.key)).toEqual([
+    "terminal:shell",
+    "agent:a",
+    "agent:b",
+  ]);
+});
+it("moving a workspace stores its project's visible order", () => {
+  const tree = projectTree([project, other], [main, branch]);
+  expect(workspaceMove(tree, NO_ORDER, "main", 1)).toEqual({
+    kind: "workspaces",
+    projectKey: "repo",
+    keys: ["branch", "main"],
+  });
+  expect(workspaceMove(tree, NO_ORDER, "main", -1)).toBeNull();
+});
+it("moving a project stores the visible project order plus hidden stored ones", () => {
+  const tree = projectTree([project, other], [main]);
+  expect(projectMove(tree, order({ projects: ["gone"] }), "main", 1)).toEqual({
+    kind: "projects",
+    keys: ["other", "repo", "gone"],
+  });
+  expect(projectMove(tree, NO_ORDER, "main", -1)).toBeNull();
+});
+it("moving a tab stores the workspace's tab order", () => {
+  const tabs = workspaceTabs(
+    "main",
+    [agent("a", { workspaceId: "main" })],
+    [{ id: "shell", workspaceId: "main", cwd: "/repo", name: "Shell" }],
+  );
+  expect(tabMove(tabs, NO_ORDER, "main", "terminal:shell", -1)).toEqual({
+    kind: "tabs",
+    workspaceKey: "main",
+    keys: ["terminal:shell", "agent:a"],
+  });
+  expect(tabMove(tabs, NO_ORDER, "main", "terminal:shell", 1)).toBeNull();
 });

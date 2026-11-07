@@ -12,6 +12,7 @@ export function scheduleDeps(
     focusedAgent: PaseoAgent | undefined;
     open(agent: PaseoAgent): void;
     createAgent: CreateDeps | undefined;
+    unavailable?: () => string | null;
   },
 ): ScheduleDeps {
   const { createAgent } = context;
@@ -24,5 +25,6 @@ export function scheduleDeps(
     workspaces: createAgent?.workspaces ?? [],
     ...(createAgent ? { configure: createAgent } : {}),
     now: Date.now,
+    ...(context.unavailable ? { unavailable: context.unavailable } : {}),
   };
 }

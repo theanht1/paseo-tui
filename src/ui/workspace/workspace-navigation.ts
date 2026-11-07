@@ -6,6 +6,7 @@ import {
   type Layout,
   panes,
 } from "../layout/split-tree.js";
+import { NO_ORDER, type StoredOrder } from "./ordering.js";
 import {
   type SubagentTab,
   tabWorkspaceId,
@@ -19,9 +20,13 @@ interface NavigationSnapshot {
   workspaceId: string | null;
   tab: WorkspaceTab | null;
 }
-/** `tabs`: the tab key to reopen per workspace, e.g. remembered from the last run. */
+/**
+ * `tabs`: the tab key to reopen per workspace, e.g. remembered from the last run;
+ * `order`: the user's tab order.
+ */
 export function createWorkspaceNavigation(
   tabs: ReadonlyMap<string, string> = new Map(),
+  order: () => StoredOrder = () => NO_ORDER,
 ) {
   const emitter = createEmitter();
   const remembered = new Map(tabs);
@@ -56,6 +61,7 @@ export function createWorkspaceNavigation(
       terminals,
       subagents,
       archived,
+      order(),
     );
     const tab =
       tabs.find((tab) => tab.key === remembered.get(workspace.id)) ??
@@ -117,6 +123,7 @@ export function createWorkspaceNavigation(
       terminals,
       subagents,
       archived,
+      order(),
     );
     const currentKey = snapshot.tab?.key;
     const returnKey =

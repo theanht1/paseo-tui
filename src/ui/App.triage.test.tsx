@@ -219,3 +219,41 @@ it("shows each workspace's jump number while the jump modifier is held", async (
   await settle();
   expect(rowText(test, "workspace:two")).not.toMatch(/2\s*$/);
 });
+
+it("keeps an opened Unread workspace under Unread until you move to another", async () => {
+  const { app, test } = await setup([
+    inWorkspace("alpha", "one"),
+    inWorkspace("beta", "two", unread("finished", "2026-11-04T00:00:09Z")),
+  ]);
+  app.stdin.write("S");
+  await settle();
+  const y = (id: string) =>
+    test.renderer.root.findDescendantById(`workspace:${id}`)?.y ?? -1;
+  const unreadY = () =>
+    app
+      .lastFrame()
+      ?.split("\n")
+      .findIndex((line) => line.includes("Unread")) ?? -1;
+  const idleY = () =>
+    app
+      .lastFrame()
+      ?.split("\n")
+      .findIndex((line) => line.includes("Idle")) ?? -1;
+  expect(y("two")).toBeGreaterThan(unreadY());
+  expect(y("two")).toBeLessThan(idleY());
+  for (const key of ["g", "g"]) app.stdin.write(key);
+  await settle();
+  app.stdin.write("\r");
+  await settle();
+  expect(app.lastFrame()).toContain("hello beta");
+  expect(unreadY()).toBeGreaterThanOrEqual(0);
+  expect(y("two")).toBeGreaterThan(unreadY());
+  expect(y("two")).toBeLessThan(idleY());
+  for (const key of ["\t", "j", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("hello alpha");
+  expect(app.lastFrame()).not.toContain("Unread");
+  expect(y("two")).toBeGreaterThan(idleY());
+});

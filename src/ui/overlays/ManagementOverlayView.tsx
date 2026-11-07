@@ -6,8 +6,10 @@ import type {
   ManagementOverlay,
 } from "../management-controller.js";
 import { CloseTabConfirm } from "../workspace/CloseTabConfirm.js";
+import type { WorkspaceRow } from "../workspace/workspaces.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { ContextMenu } from "./ContextMenu.js";
+import { menuItems } from "./context-menu-items.js";
 
 type ManagementController = ReturnType<typeof createManagementController>;
 /** The dialog, menu, or wizard the management controller has open. */
@@ -16,11 +18,17 @@ export function ManagementOverlayView({
   manager,
   registry,
   completions,
+  onLabels,
+  canPin,
+  onPin,
 }: {
   overlay: ManagementOverlay;
   manager: ManagementController;
   registry: CommandRegistry;
   completions?: CompletionPort;
+  onLabels(workspace: WorkspaceRow): void;
+  canPin(workspace: WorkspaceRow): boolean;
+  onPin(workspace: WorkspaceRow, pinned: boolean): void;
 }) {
   switch (overlay.kind) {
     case "closed":
@@ -44,17 +52,17 @@ export function ManagementOverlayView({
         />
       );
     case "menu": {
-      const { target } = overlay;
       return (
         <ContextMenu
           x={overlay.x}
           y={overlay.y}
-          onRename={manager.renameMenu}
-          onArchive={
-            target.kind === "workspace"
-              ? () => manager.archiveWorkspace(target.workspace)
-              : undefined
-          }
+          items={menuItems(overlay.target, {
+            rename: manager.renameMenu,
+            archive: manager.archiveWorkspace,
+            labels: onLabels,
+            canPin,
+            setPinned: onPin,
+          })}
           onClose={manager.close}
         />
       );

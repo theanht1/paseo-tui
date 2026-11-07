@@ -172,10 +172,35 @@ export function createAttentionTracker(
 ) {
   const emitter = createEmitter();
   let acknowledged: ReadonlySet<string> = new Set();
+  let held: { id: string; baseline: string; pinned: string | null } | null =
+    null;
   return {
     getSnapshot: () => acknowledged,
     subscribe: emitter.subscribe,
-    view(agent: AttentionFields) {
+    /**
+     * Keeps the user's mark on the viewed agent unread: the first new attention
+     * turn it gets is pinned, and only a later one or leaving the agent ends the hold.
+     */
+    hold(agent: AttentionFields) {
+      held = { id: agent.id, baseline: attentionKey(agent), pinned: null };
+    },
+    release() {
+      held = null;
+    },
+    /** The mark succeeded: a hold that saw no new turn was for another agent. */
+    settle() {
+      if (held?.pinned === null) held = null;
+    },
+    /** The agent now in view, or null when none is. */
+    view(agent: AttentionFields | null) {
+      if (held && agent?.id !== held.id) held = null;
+      if (agent && held) {
+        const key = attentionKey(agent);
+        if (held.pinned === null && key !== held.baseline) held.pinned = key;
+        if (key === held.pinned) return;
+        if (held.pinned !== null) held = null;
+      }
+      if (!agent) return;
       if (agentIndicator(agent, acknowledged).kind !== "unread") return;
       acknowledged = new Set(acknowledged).add(attentionKey(agent));
       emitter.notify();

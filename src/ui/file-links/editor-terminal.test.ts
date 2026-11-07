@@ -34,3 +34,35 @@ it("lets a shell expand ~ while quoting the rest of the path", () => {
     args: ["-c", "exec vim '+3' -- ~/'it'\\''s here/n.md'"],
   });
 });
+
+it("runs a configured vim-family editor with the same positioning", () => {
+  expect(editorTerminal(link("/repo/x.ts", 12, 5), "nvim")).toEqual({
+    name: "x.ts",
+    command: "nvim",
+    args: ["+call cursor(12,5)", "--", "/repo/x.ts"],
+  });
+});
+
+it("passes only +line to other editors", () => {
+  expect(editorTerminal(link("/repo/x.ts", 12, 5), "nano")).toEqual({
+    name: "x.ts",
+    command: "nano",
+    args: ["+12", "/repo/x.ts"],
+  });
+  expect(editorTerminal(link("/repo/x.ts"), "micro").args).toEqual([
+    "/repo/x.ts",
+  ]);
+});
+
+it("runs an editor command with arguments through a shell", () => {
+  expect(editorTerminal(link("/repo/a b.ts", 3), "nvim -u NONE")).toEqual({
+    name: "a b.ts",
+    command: "sh",
+    args: ["-c", "exec nvim -u NONE '+3' -- '/repo/a b.ts'"],
+  });
+  expect(editorTerminal(link("~/n.md", 3), "emacs -nw")).toEqual({
+    name: "n.md",
+    command: "sh",
+    args: ["-c", "exec emacs -nw '+3' ~/'n.md'"],
+  });
+});

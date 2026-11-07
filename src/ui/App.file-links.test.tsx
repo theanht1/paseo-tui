@@ -147,6 +147,22 @@ describe("file links", () => {
     expect(app.lastFrame()).toContain("NORMAL");
   });
 
+  it("opens files with the configured file editor", async () => {
+    const { app, test, opened } = await fileSetup(undefined, {
+      fileEditor: "nvim",
+    });
+    app.stdin.write("F");
+    await settle();
+    app.stdin.write("a");
+    await expectEditorTab(test, app.lastFrame);
+    expect(opened).toEqual([
+      {
+        ...expected,
+        editor: { ...expected.editor, command: "nvim" },
+      },
+    ]);
+  });
+
   it("labels visible paths with F and opens the typed hint", async () => {
     const { app, test, opened } = await fileSetup();
     app.stdin.write("F");

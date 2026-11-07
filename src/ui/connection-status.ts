@@ -1,5 +1,5 @@
-import type { ConnectionState } from "@getpaseo/client";
 import type { Connection } from "../connection/connect.js";
+import type { HostConnectionState as ConnectionState } from "../connection/ports.js";
 import { createEmitter } from "../state/emitter.js";
 import type { ExternalStore } from "./use-store.js";
 export function watchConnection(

@@ -45,6 +45,8 @@ export function PaneFrame(props: PaneFrameProps) {
       <WorkspaceTabs
         id={`pane-tabs:${paneId}`}
         scope={props.focusedPane ? undefined : paneId}
+        width={rect.width}
+        dimmed={!props.focusedPane}
         tabs={props.tabs}
         indicators={props.indicators}
         selected={props.selectedTab}

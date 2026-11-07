@@ -1,14 +1,15 @@
 import { useTerminalDimensions } from "@opentui/react";
-import { useContext, useRef, useState } from "react";
+import { useContext } from "react";
 import { Spinner } from "../agent/WorkingIndicator.js";
 import { useKeyOwner } from "../input/key-router.js";
+import { listWindow, useListCursor } from "../input/list-keys.js";
 import {
   backgroundProp,
   foregroundProp,
   type Theme,
   ThemeContext,
 } from "../render/theme.js";
-import { moveCursor, type SubagentPopupRow } from "./subagent-popup.js";
+import type { SubagentPopupRow } from "./subagent-popup.js";
 import { BUCKET_LABEL, type SubagentBucket } from "./subagents.js";
 
 function BucketGlyph({
@@ -44,24 +45,14 @@ export function SubagentPopup({
   if (!context) throw Error("ThemeContext required");
   const { theme } = context;
   const { width, height } = useTerminalDimensions();
-  const [cursor, setCursor] = useState(0);
-  const latest = useRef(0);
+  const boxHeight = Math.min(height, rows.length + 2);
+  const visible = Math.max(1, boxHeight - 2);
+  const list = useListCursor(rows.length, visible);
+  const cursor = list.cursor;
   useKeyOwner(true, (stroke) => {
-    const delta =
-      stroke.name === "down" ||
-      stroke.name === "j" ||
-      (stroke.ctrl && stroke.name === "n")
-        ? 1
-        : stroke.name === "up" ||
-            stroke.name === "k" ||
-            (stroke.ctrl && stroke.name === "p")
-          ? -1
-          : 0;
-    if (delta) {
-      latest.current = moveCursor(latest.current, delta, rows.length);
-      setCursor(latest.current);
-    } else if (stroke.name === "return") {
-      const row = rows[latest.current];
+    if (list.key(stroke)) return true;
+    if (stroke.name === "return") {
+      const row = rows[list.current()];
       if (row) onSelect(row);
     } else if (
       stroke.name === "escape" ||
@@ -73,7 +64,7 @@ export function SubagentPopup({
     return true;
   });
   const boxWidth = Math.min(72, Math.max(20, width - 4));
-  const boxHeight = Math.min(height, rows.length + 2);
+  const start = listWindow(cursor, rows.length, visible);
   return (
     <box
       position="absolute"
@@ -92,52 +83,55 @@ export function SubagentPopup({
         width={boxWidth}
         height={boxHeight}
         border
-        title="Subagents · j/k Enter Esc"
+        title="Subagents · j/k gg/G ^d/^u Enter Esc"
         borderColor={foregroundProp(theme.borderFocused)}
         backgroundColor={backgroundProp(theme.codeBg)}
         flexDirection="column"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        {rows.map((row, index) => (
-          <box
-            key={row.key}
-            id={`subagent-row:${index}`}
-            height={1}
-            flexDirection="row"
-            backgroundColor={backgroundProp(
-              index === cursor ? theme.selectionBg : theme.codeBg,
-            )}
-            onMouseDown={(event) => {
-              event.stopPropagation();
-              onSelect(row);
-            }}
-          >
-            <text
-              flexGrow={1}
-              minWidth={0}
-              wrapMode="none"
-              fg={foregroundProp(theme.fg)}
+        {rows.slice(start, start + visible).map((row, offset) => {
+          const index = start + offset;
+          return (
+            <box
+              key={row.key}
+              id={`subagent-row:${index}`}
+              height={1}
+              flexDirection="row"
+              backgroundColor={backgroundProp(
+                index === cursor ? theme.selectionBg : theme.codeBg,
+              )}
+              onMouseDown={(event) => {
+                event.stopPropagation();
+                onSelect(row);
+              }}
             >
-              {index === cursor ? "› " : "  "}
-              {row.kind === "parent" ? (
-                <span fg={foregroundProp(theme.accent)}>↑</span>
-              ) : (
-                <BucketGlyph bucket={row.bucket} theme={theme} />
-              )}{" "}
-              {row.label}
-              {row.kind === "subagent" && row.subtitle ? (
-                <span
-                  fg={foregroundProp(theme.muted)}
-                >{`  ${row.subtitle}`}</span>
-              ) : null}
-            </text>
-            {row.kind === "subagent" ? (
-              <text flexShrink={0} fg={foregroundProp(theme.faint)}>
-                {` ${BUCKET_LABEL[row.bucket]} `}
+              <text
+                flexGrow={1}
+                minWidth={0}
+                wrapMode="none"
+                fg={foregroundProp(theme.fg)}
+              >
+                {index === cursor ? "› " : "  "}
+                {row.kind === "parent" ? (
+                  <span fg={foregroundProp(theme.accent)}>↑</span>
+                ) : (
+                  <BucketGlyph bucket={row.bucket} theme={theme} />
+                )}{" "}
+                {row.label}
+                {row.kind === "subagent" && row.subtitle ? (
+                  <span
+                    fg={foregroundProp(theme.muted)}
+                  >{`  ${row.subtitle}`}</span>
+                ) : null}
               </text>
-            ) : null}
-          </box>
-        ))}
+              {row.kind === "subagent" ? (
+                <text flexShrink={0} fg={foregroundProp(theme.faint)}>
+                  {` ${BUCKET_LABEL[row.bucket]} `}
+                </text>
+              ) : null}
+            </box>
+          );
+        })}
       </box>
     </box>
   );

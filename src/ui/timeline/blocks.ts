@@ -2,6 +2,10 @@ import type {
   AgentTimelineItem,
   ToolCallTimelineItem,
 } from "@getpaseo/protocol/agent-types";
+import {
+  CLEARED_DIVIDER,
+  isSessionSwitchNotice,
+} from "../agent/clear-session.js";
 
 type TimelineItem = AgentTimelineItem | { type: string };
 export type PlanOutcome = "proposed" | "approved" | "rejected" | "canceled";
@@ -95,6 +99,14 @@ export function toBlocks(
         continue;
       }
       blocks.push({ kind: "tool", key: `tool:${item.callId}`, call });
+      continue;
+    }
+    if (item.type === "assistant_message" && isSessionSwitchNotice(item.text)) {
+      blocks.push({
+        kind: "notice",
+        key: `notice:${seq}`,
+        text: CLEARED_DIVIDER,
+      });
       continue;
     }
     if (item.type === "assistant_message" || item.type === "reasoning") {

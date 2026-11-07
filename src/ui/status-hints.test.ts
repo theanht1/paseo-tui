@@ -34,6 +34,9 @@ it("shows the most urgent status message ahead of the connection label", () => {
   expect(statusLabel({ ...idle, createError: "no provider" })).toBe(
     "! no provider · local",
   );
+  expect(statusLabel({ ...idle, filter: "filter: Bug" })).toBe(
+    "local · filter: Bug",
+  );
   expect(
     statusLabel({ ...idle, operation: "Creating…", createError: "x" }),
   ).toBe("Creating…");

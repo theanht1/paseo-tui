@@ -27,10 +27,14 @@ afterEach(async () => {
 });
 
 it("lists the mock catalogs and observes agent lifecycle and streaming pages", async () => {
-  expect(
-    (await session.agentsPort.providers()).find((p) => p.id === "mock")
-      ?.available,
-  ).toBe(true);
+  await expect
+    .poll(
+      async () =>
+        (await session.agentsPort.providers()).find((p) => p.id === "mock")
+          ?.available,
+      { timeout: 15000 },
+    )
+    .toBe(true);
   expect(
     (await session.agentsPort.models("mock")).some(
       (m) => m.id === "ten-second-stream",

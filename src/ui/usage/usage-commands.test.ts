@@ -83,3 +83,24 @@ test("the config filters the item subtitle but not the view rows", async () => {
   expect(rows[0]?.title).toBe("Claude · Session 62%");
   expect(rows[0]?.subtitle).toContain("id claude.session · hidden");
 });
+
+test("an offline daemon's usage shows as unavailable instead of an error", async () => {
+  const { store, refreshes } = fakeUsage({
+    kind: "error",
+    message: "Transport not connected",
+    reports: [claude],
+  });
+  const [entry] = usageCommands(
+    store,
+    () => NOW,
+    undefined,
+    () => "Unavailable · local is offline, reconnecting…",
+  );
+  expect(entry?.subtitle).toBe("Unavailable · local is offline, reconnecting…");
+  const step = entry?.run();
+  if (step?.kind !== "choice") throw Error("Expected a choice step");
+  expect((await step.items()).map((row) => row.title)).toEqual([
+    "Unavailable · local is offline, reconnecting…",
+  ]);
+  expect(refreshes).toEqual([]);
+});

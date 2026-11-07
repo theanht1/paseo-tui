@@ -1,7 +1,9 @@
 import type {
+  ConnectionState,
   PaseoAgent,
   PaseoAgentHandle,
   PaseoProject,
+  PaseoProviderSnapshotResult,
   TerminalStreamEvent,
 } from "@getpaseo/client";
 import type {
@@ -15,6 +17,7 @@ import type {
   StoredSchedule,
 } from "@getpaseo/protocol/schedule/types";
 import type { TerminalActivity } from "@getpaseo/protocol/terminal-activity";
+import type { WorkspaceLabelDefinition } from "@getpaseo/protocol/workspace-labels";
 
 export type {
   ScheduleRun,
@@ -22,6 +25,7 @@ export type {
   StoredSchedule,
   TerminalActivity,
   UsageReportEntry,
+  WorkspaceLabelDefinition,
 };
 export interface HistoryEntry {
   agent: PaseoAgent;
@@ -38,6 +42,15 @@ export interface HistoryPort {
   searchable: boolean;
   list(query: string): Promise<HistoryPage>;
   unarchive(agentId: string): Promise<void>;
+}
+/** Workspace read state; `markUnread` is null without the daemon's `workspaceMarkUnread`. */
+export interface WorkspaceReadPort {
+  markRead(workspaceIds: readonly string[]): Promise<void>;
+  markUnread: ((workspaceId: string) => Promise<void>) | null;
+}
+/** Pins a workspace to the sidebar top; absent without the daemon's `workspacePinning`. */
+export interface WorkspacePinPort {
+  setPinned(workspaceId: string, pinned: boolean): Promise<void>;
 }
 /** Provider usage/quota reports; absent unless the daemon has `usageSources` or `providerUsageList`. */
 export interface UsagePort {
@@ -109,6 +122,8 @@ export type CommandListSource =
 export interface CompletionPort {
   commands(source: CommandListSource): Promise<SlashCommand[]>;
   files(cwd: string, query: string): Promise<FileEntry[]>;
+  /** A completion session starts for this source; a caching port drops answers from earlier ones. */
+  opened?(source: CommandListSource): void;
 }
 export interface TerminalStreamPort {
   /** `onExit` runs as soon as the terminal's process exits cleanly, before the daemon's lists catch up. */
@@ -157,6 +172,18 @@ export type ProviderSubagentTimelinePage = Pick<
     "seq" | "seqEnd" | "timestamp" | "item"
   >[];
 };
+export type ProviderSnapshotEntry =
+  PaseoProviderSnapshotResult["entries"][number];
+/** The daemon's provider snapshot (`providersSnapshot`, checked at connect). */
+export interface ProviderCatalogPort {
+  snapshot(): Promise<readonly ProviderSnapshotEntry[]>;
+  /** Asks the daemon to detect providers again; changes arrive through `observe`. */
+  refresh(): Promise<void>;
+  /** Pushed snapshots; the returned stop resolves once the daemon released it. */
+  observe(
+    handler: (entries: readonly ProviderSnapshotEntry[]) => void,
+  ): () => Promise<void>;
+}
 export interface ProviderSubagentPort {
   list(parentAgentId: string): Promise<ProviderSubagent[]>;
   observe(handler: (update: ProviderSubagentUpdate) => void): () => void;
@@ -223,4 +250,64 @@ export interface ProjectPort {
   remove: ((projectId: string) => Promise<void>) | null;
   /** Directories on the host matching `query`, best first. */
   directories(query: string): Promise<string[]>;
+}
+/** What the window shows of a daemon connection beyond its state. */
+export interface HostInfoPort {
+  /** `server_info.version`; null while disconnected or unreported. */
+  version(): string | null;
+  /** Retries a dropped connection now instead of after the client's backoff. */
+  reconnect(): void;
+}
+/** The client's connection state, with the retry details the public type leaves out. */
+export type HostConnectionState =
+  | Exclude<ConnectionState, { status: "disconnected" }>
+  | {
+      status: "disconnected";
+      reason?: string;
+      /** When the client library retries; absent once it stopped retrying. */
+      nextRetryAt?: string;
+      failureCode?: string;
+    };
+/** A label catalog listing: a full `snapshot`, or the `changes` after a sync cursor. */
+export type WorkspaceLabelList = Extract<
+  SessionOutboundMessage,
+  { type: "workspace.label.list.response" }
+>["payload"];
+/** One pushed catalog change, numbered `seq` within `generation`. */
+export type WorkspaceLabelChange = Extract<
+  SessionOutboundMessage,
+  { type: "workspace.label.update" }
+>["payload"];
+export interface WorkspaceLabelCursor {
+  generation: string;
+  afterSeq: number;
+}
+export interface WorkspaceLabelObserver {
+  list(payload: WorkspaceLabelList): void;
+  change(change: WorkspaceLabelChange): void;
+  error(error: unknown): void;
+}
+/** A host's workspace label catalog (`workspaceLabels`). */
+export interface WorkspaceLabelPort {
+  /** The whole catalog, or only what changed after `sync`. */
+  list(sync?: WorkspaceLabelCursor): Promise<WorkspaceLabelList>;
+  /** The catalog snapshot (again after each reconnect), then its changes; stop resolves once released. */
+  observe(observer: WorkspaceLabelObserver): () => Promise<void>;
+  /** Assigns or unassigns a label, creating it when the catalog lacks it; resolves to the workspace's labels. */
+  setAssignment(input: {
+    workspaceId: string;
+    label: WorkspaceLabelDefinition;
+    assigned: boolean;
+  }): Promise<readonly string[]>;
+  /** Renames and/or recolors in one request; omitted fields are left alone. */
+  update(input: WorkspaceLabelEdit): Promise<WorkspaceLabelDefinition>;
+  /** How many workspaces deleting the label would unassign. */
+  inspectDelete(name: string): Promise<number>;
+  /** Deletes the label; resolves to how many workspaces lost it. */
+  delete(name: string): Promise<number>;
+}
+export interface WorkspaceLabelEdit {
+  name: string;
+  newName?: string;
+  color?: WorkspaceLabelDefinition["color"];
 }

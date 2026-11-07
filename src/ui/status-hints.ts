@@ -46,6 +46,8 @@ export interface StatusLabelInput {
   createError: string | null;
   /** Queued messages across agents; quitting loses them. */
   queued?: number;
+  /** The sidebar's active label filter. */
+  filter?: string | null;
 }
 /** The status bar's left text: the most urgent message, else the connection label. */
 export function statusLabel(input: StatusLabelInput): string {
@@ -57,6 +59,7 @@ export function statusLabel(input: StatusLabelInput): string {
   }
   if (input.notice) return input.notice;
   if (input.operation) return input.operation;
-  if (input.createError) return `! ${input.createError} · ${input.label}`;
-  return input.label;
+  const label = input.filter ? `${input.label} · ${input.filter}` : input.label;
+  if (input.createError) return `! ${input.createError} · ${label}`;
+  return label;
 }

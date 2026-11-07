@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceRow } from "../workspace/workspaces.js";
-import { hostTag, setupTag, workspaceMeta } from "./workspace-meta.js";
+import {
+  hostTag,
+  labelChips,
+  setupTag,
+  workspaceMeta,
+} from "./workspace-meta.js";
 
 const base: WorkspaceRow = {
   id: "w",
   projectId: "p",
   name: "Fix login",
   projectRootPath: "/p",
+  activityAt: null,
+  statusEnteredAt: null,
   workspaceDirectory: "/p",
 };
 function pr(
@@ -102,4 +109,20 @@ describe("hostTag", () => {
     expect(hostTag("build-server-eu-west")).toBe("build-ser…");
     expect(hostTag("  GPU box ")).toBe("GPU box");
   });
+});
+
+it("draws a workspace's labels in its host's colors, skipping names the host does not know", () => {
+  const row = { ...base, labels: ["ui", "gone", "Bug"] };
+  const catalog = [
+    { name: "Bug", color: "red" as const },
+    { name: "UI", color: "sky" as const },
+  ];
+  expect(
+    labelChips(row, { kind: "ready", labels: catalog, error: null }),
+  ).toEqual([
+    { name: "UI", color: "sky" },
+    { name: "Bug", color: "red" },
+  ]);
+  expect(labelChips(row, { kind: "loading" })).toEqual([]);
+  expect(labelChips(row, { kind: "unsupported" })).toEqual([]);
 });
