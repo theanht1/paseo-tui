@@ -157,6 +157,22 @@ export function createAgentFeaturesAdapter(
   };
 }
 
+/**
+ * Closes the client. @getpaseo/client 0.15.0 rejects close() with "Daemon client closed"
+ * when a subscription release is still in flight: close rejects that release's request,
+ * then awaits it. The transport is gone by then, so the rejection carries no failure.
+ */
+export async function closeDaemon(
+  daemon: Pick<ReturnType<typeof createHostClient>, "close">,
+): Promise<void> {
+  try {
+    await daemon.close();
+  } catch (error) {
+    if (!(error instanceof Error && error.message === "Daemon client closed"))
+      throw error;
+  }
+}
+
 export function requireWorkspaceCapabilities(
   daemon: Pick<ReturnType<typeof createHostClient>, "getLastServerInfoMessage">,
 ): void {

@@ -3,6 +3,7 @@ import { createPaseoApi, type PaseoApi } from "@getpaseo/client";
 import { createHostClient, parseHostTarget } from "@getpaseo/client/node";
 import packageJson from "../../package.json" with { type: "json" };
 import {
+  closeDaemon,
   createAgentFeaturesAdapter,
   createCompletionAdapter,
   createDaemonAdapter,
@@ -150,6 +151,6 @@ export async function connect(
     labels: createWorkspaceLabelAdapter(daemon),
     host: createHostInfoAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
-    close: () => daemon.close(),
+    close: () => closeDaemon(daemon),
   };
 }

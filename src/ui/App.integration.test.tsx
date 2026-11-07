@@ -79,14 +79,13 @@ async function setup() {
           const line = (await frame())
             .split("\n")
             .find((value) => value.includes("Command Center"));
-          if (!line) return false;
+          if (!line) return null;
           const start = line.indexOf("Command Center");
-          const header = (line.slice(start).split("│")[0] ?? "").trim();
-          return header === breadcrumb;
+          return (line.slice(start).split("│")[0] ?? "").trim();
         },
         { timeout: 15000, interval: 50 },
       )
-      .toBe(true);
+      .toBe(breadcrumb);
   }
   async function waitForChoice(id: string) {
     await expect
@@ -100,9 +99,13 @@ async function setup() {
     await renderer.mockInput.typeText(text);
     await renderer.waitForVisualIdle();
   }
-  async function openAgent(title: string) {
+  async function openAgent(id: string, title: string) {
+    await key(":");
+    await waitForBreadcrumb("Command Center");
+    await type(title);
+    await waitForChoice(`agent:${id}`);
     await key("\r");
-    await waitFor(`Message ${title}`);
+    await waitFor(`to message ${title}`);
     await waitFor("turn idle");
   }
   async function sendPrompt(text: string) {
@@ -126,7 +129,7 @@ async function setup() {
       },
     });
     ids.add(handle.id);
-    await waitFor(title);
+    await openAgent(handle.id, title);
     return handle;
   }
   return {
@@ -140,7 +143,6 @@ async function setup() {
     waitForBreadcrumb,
     waitForChoice,
     create,
-    openAgent,
     sendPrompt,
   };
 }
@@ -151,7 +153,6 @@ it("shows an external agent, sends prompts and handles plan, question and failur
   const events: PaseoAgentTimelineEvent[] = [];
   const unsubscribe = handle.timeline.subscribe((event) => events.push(event));
   await unsubscribe.ready;
-  await app.openAgent("UI prompts");
   await app.sendPrompt("emit synthetic plan approval");
   await app.waitFor("Review the proposed plan");
   await app.key("1");
@@ -172,8 +173,8 @@ it("shows an external agent, sends prompts and handles plan, question and failur
     .not.toContain("Review the proposed plan");
   await app.waitFor("turn idle");
   await app.sendPrompt("emit synthetic question");
-  await app.waitFor("answer in the app");
-  await app.key("n");
+  await app.waitFor("Which surface should this apply to?");
+  app.renderer.mockInput.pressEscape();
   await expect
     .poll(
       () =>
@@ -187,7 +188,7 @@ it("shows an external agent, sends prompts and handles plan, question and failur
     .toBe(true);
   await expect
     .poll(app.frame, { timeout: 10000, interval: 50 })
-    .not.toContain("answer in the app");
+    .not.toContain("Which surface should this apply to?");
   await app.waitFor("turn idle");
   await app.sendPrompt("emit synthetic turn failure");
   await app.waitFor("Requested mock provider failure");
@@ -200,7 +201,6 @@ it("renders a streaming response and stops the running turn", async () => {
     mockStreamingAssistantResponse: "Streaming markdown **hello** ".repeat(80),
     mockStreamingAssistantIntervalMs: 80,
   });
-  await app.openAgent("UI streaming");
   await app.sendPrompt("stream please");
   await app.waitFor("Streaming markdown");
   await app.key("\u0018");
@@ -214,13 +214,7 @@ it("renders a streaming response and stops the running turn", async () => {
 
 it("renders the default mock turn's edit and shell tools", async () => {
   const app = await setup();
-  const handle = await app.connection.api.agents.create({
-    cwd: process.cwd(),
-    title: "UI tools",
-    config: { provider: "mock/ten-second-stream" },
-  });
-  await app.waitFor("UI tools");
-  await app.openAgent("UI tools");
+  const handle = await app.create("UI tools");
   await app.sendPrompt("show tools");
   const agent = handle.current();
   if (!agent) throw new Error("missing agent");
@@ -261,7 +255,6 @@ it("reports a connection error for an unavailable host", async () => {
 it("creates and manages a mock agent through Command Center", async () => {
   const app = await setup();
   await app.create("Workspace seed");
-  await app.openAgent("Workspace seed");
   await app.key(":");
   await app.waitForBreadcrumb("Command Center");
   await app.type("new agent");
@@ -278,15 +271,19 @@ it("creates and manages a mock agent through Command Center", async () => {
   await app.waitForChoice("mode:load-test");
   await app.key("\r");
   await app.waitForBreadcrumb(
-    "Command Center › Provider › Model › Mode › Title",
+    "Command Center › Provider › Model › Mode › Thinking",
+  );
+  await app.key("\r");
+  await app.waitForBreadcrumb(
+    "Command Center › Provider › Model › Mode › Thinking › Title",
   );
   await app.type("Created from UI");
   await app.key("\r");
   await app.waitForBreadcrumb(
-    "Command Center › Provider › Model › Mode › Title › First prompt",
+    "Command Center › … › Model › Mode › Thinking › Title › First prompt",
   );
   await app.key("\r");
-  await app.waitFor("Message Created from UI");
+  await app.waitFor("to message Created from UI");
   await expect
     .poll(
       () =>

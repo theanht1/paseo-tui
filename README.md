@@ -115,7 +115,7 @@ npm run dev
 | `npm run test:integration` | Tests against an isolated, spawned Paseo daemon |
 | `npm run build`            | Compile to `dist/`                              |
 
-Pass options to the dev build after `--`, for example `npm run dev -- --host <target>`. Run the compiled build with `npm start` (or `node --experimental-ffi dist/cli.js`). CI runs typecheck, lint, unit tests and build on every push and pull request.
+Pass options to the dev build after `--`, for example `npm run dev -- --host <target>`. Run the compiled build with `npm start` (or `node --experimental-ffi dist/cli.js`). CI runs typecheck, lint, unit tests, build and the integration tests on every push and pull request.
 
 Tests live beside their implementation as `*.test.ts` / `*.test.tsx` and are excluded from the build. Shared test helpers live in `src/test/`.
 
@@ -330,7 +330,7 @@ Issues and pull requests are welcome. Before opening a pull request:
 
 - Read [AGENTS.md](AGENTS.md); it holds the project rules (layering, strict TypeScript, testing style). They apply to human and AI-assisted changes alike.
 - Write a failing behavioral test first, colocated as `*.test.ts` / `*.test.tsx`.
-- Make sure `npm run typecheck`, `npm run lint`, `npm test` and `npm run build` pass; CI runs the same checks. Run `npm run test:integration` when you touch the connection layer.
+- Make sure `npm run typecheck`, `npm run lint`, `npm test`, `npm run build` and `npm run test:integration` pass; CI runs the same checks.
 
 ## License
 
