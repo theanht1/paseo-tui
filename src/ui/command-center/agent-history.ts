@@ -8,6 +8,7 @@ import type { CatalogModel } from "../../state/ports.js";
 import type { TimelineStore } from "../../state/timeline-store.js";
 import { agentName, shortPath } from "../agent/agent-display.js";
 import type { AgentSeed } from "../management-controller.js";
+import { splitForkHistory } from "../timeline/blocks.js";
 import type { CreateDeps } from "./create-agent.js";
 import type { CommandItem, CommandStep } from "./registry.js";
 
@@ -15,11 +16,13 @@ export interface HistoryCommandContext {
   agent: PaseoAgent;
   store: TimelineStore;
   models?(provider: string): Promise<CatalogModel[]>;
-  createAgent?: Pick<CreateDeps, "create" | "opened" | "failed">;
+  createAgent?: Pick<CreateDeps, "create" | "opened" | "failed" | "workspaces">;
   /** The New workspace steps (host, project, placement) for a fork into a new workspace. */
   forkWorkspace?(seed: AgentSeed): CommandStep;
   /** Scrolls the agent's pane to the prompt at `seq` of the prompt index `epoch`. */
   goto?(epoch: string, seq: number): void;
+  /** Puts a rewound prompt back in the agent's input. */
+  restorePrompt?(agentId: string, text: string): void;
 }
 /** Jump to prompt, set thinking, rewind and fork, each shown only when the daemon and agent support it. */
 export function historyCommands(context: HistoryCommandContext): CommandItem[] {
@@ -162,6 +165,7 @@ function jumpCommand(context: HistoryCommandContext): CommandItem | null {
 function rewindCommand({
   agent,
   store,
+  restorePrompt,
 }: HistoryCommandContext): CommandItem | null {
   const { prompts, rewind } = store;
   const modes = MODES.filter(
@@ -176,7 +180,13 @@ function rewindCommand({
     kind: "confirm",
     title: `Rewind ${agentName(agent)} to before “${prompt.preview}” (${mode.label.toLowerCase()})?`,
     confirm() {
-      void rewind({ epoch: index.epoch, seq: prompt.seq }, mode.mode);
+      void rewind({ epoch: index.epoch, seq: prompt.seq }, mode.mode).then(
+        (text) => {
+          // Rewinding files alone leaves the message in the conversation.
+          if (text === null || mode.mode === "files") return;
+          restorePrompt?.(agent.id, splitForkHistory(text)?.prompt ?? text);
+        },
+      );
     },
   });
   return {
@@ -213,6 +223,9 @@ function forkCommand({
   const model = agent.model;
   if (!prompts || !fork || !createAgent || !model) return null;
   const forkFrom = fork;
+  const home = createAgent.workspaces.find(
+    (workspace) => workspace.key === agent.workspaceId,
+  );
   /** Thinking is copied only when the daemon can set it (`agentThinkingUpdate`). */
   const thinkingOptionId =
     store.setThinking && agent.thinkingOptionId
@@ -261,28 +274,34 @@ function forkCommand({
             kind: "choice",
             title: "Fork into",
             items: () => [
-              {
-                id: "fork:here",
-                group: "Agent",
-                title: "This workspace",
-                subtitle: shortPath(agent.cwd),
-                run(): undefined {
-                  void seed()
-                    .then((start) =>
-                      createAgent.create({
-                        ...settings,
-                        cwd: agent.cwd,
-                        prompt: start.prompt,
-                        attachments: start.attachments,
-                      }),
-                    )
-                    .then(createAgent.opened, (error: unknown) =>
-                      createAgent.failed(
-                        error instanceof Error ? error.message : String(error),
-                      ),
-                    );
-                },
-              },
+              ...(home
+                ? [
+                    {
+                      id: "fork:here",
+                      group: "Agent" as const,
+                      title: "This workspace",
+                      subtitle: shortPath(agent.cwd),
+                      run(): undefined {
+                        void seed()
+                          .then((start) =>
+                            createAgent.create(home.key, {
+                              ...settings,
+                              cwd: agent.cwd,
+                              prompt: start.prompt,
+                              attachments: start.attachments,
+                            }),
+                          )
+                          .then(createAgent.opened, (error: unknown) =>
+                            createAgent.failed(
+                              error instanceof Error
+                                ? error.message
+                                : String(error),
+                            ),
+                          );
+                      },
+                    },
+                  ]
+                : []),
               ...(forkWorkspace
                 ? [
                     {

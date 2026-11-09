@@ -95,7 +95,6 @@ function connectionTo(name: string, agents: PaseoAgent[]) {
       models: unexpected,
       modes: unexpected,
       onProvidersChange: () => () => {},
-      create: unexpected,
     },
     refreshProviders: async () => {},
     clearAttention: async () => {},

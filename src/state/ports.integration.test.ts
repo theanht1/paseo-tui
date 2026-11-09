@@ -47,14 +47,14 @@ it("lists the mock catalogs and observes agent lifecycle and streaming pages", a
   const stopUpdates = session.agentsPort.onUpdate((update) =>
     updates.push(update),
   );
-  const agent = await session.agentsPort.create({
-    provider: "mock",
-    model: "ten-second-stream",
-    modeId: null,
-    cwd: process.cwd(),
-    title: "Port lifecycle",
-    prompt: null,
-  });
+  const agent = (
+    await connection.api.agents.create({
+      cwd: process.cwd(),
+      title: "Port lifecycle",
+      config: { provider: "mock/ten-second-stream" },
+    })
+  ).current();
+  if (!agent) throw Error("Agent created but no snapshot");
   created.push(agent.id);
   const list = await session.agentsPort.list();
   expect(list.entries.some((entry) => entry.agent.id === agent.id)).toBe(true);
@@ -153,14 +153,14 @@ it("lists the mock catalogs and observes agent lifecycle and streaming pages", a
 }, 20000);
 
 it("sets mode and model, renames and archives an agent", async () => {
-  const agent = await session.agentsPort.create({
-    provider: "mock",
-    model: "ten-second-stream",
-    modeId: null,
-    cwd: process.cwd(),
-    title: "Before rename",
-    prompt: null,
-  });
+  const agent = (
+    await connection.api.agents.create({
+      cwd: process.cwd(),
+      title: "Before rename",
+      config: { provider: "mock/ten-second-stream" },
+    })
+  ).current();
+  if (!agent) throw Error("Agent created but no snapshot");
   created.push(agent.id);
   const port = createAgentPort(
     connection.api.agents.ref(agent),

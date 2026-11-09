@@ -23,14 +23,15 @@ afterEach(async () => {
 });
 
 it("searches the daemon's history, lists prompts and seeds a fork from one", async () => {
-  const agent = await session.agentsPort.create({
-    provider: "mock",
-    model: "ten-second-stream",
-    modeId: null,
-    cwd: process.cwd(),
-    title: "History features",
-    prompt: "find the haystack needle",
-  });
+  const agent = (
+    await connection.api.agents.create({
+      cwd: process.cwd(),
+      title: "History features",
+      config: { provider: "mock/ten-second-stream" },
+      prompt: "find the haystack needle",
+    })
+  ).current();
+  if (!agent) throw Error("Agent created but no snapshot");
   created.push(agent.id);
   const store = createTimelineStore(
     createAgentPort(

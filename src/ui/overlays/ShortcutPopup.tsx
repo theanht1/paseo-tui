@@ -3,6 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { Fragment, useContext, useMemo, useRef } from "react";
 import { useKeyOwner } from "../input/key-router.js";
 import { type Binding, helpRows } from "../input/keymap.js";
+import { WrappingInput } from "../prompt/WrappingInput.js";
 import {
   backgroundProp,
   foregroundProp,
@@ -96,7 +97,7 @@ export function ShortcutPopup({
             ×{" "}
           </text>
         </box>
-        <input
+        <WrappingInput
           id="shortcut-search"
           value={state.query}
           onInput={search.change}

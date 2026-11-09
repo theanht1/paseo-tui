@@ -1,7 +1,6 @@
 import type {
   OwnedSubscription,
   PaseoAgent,
-  PaseoAgentCreateOptions,
   PaseoAgentHandle,
   PaseoAgentListResult,
   PaseoAgentTimelineEvent,
@@ -81,11 +80,7 @@ export interface CreateAgentInput {
   prompt: string | null;
 }
 interface AgentsApi {
-  agents: Pick<PaseoApi["agents"], "list" | "subscribe"> & {
-    create(
-      options: PaseoAgentCreateOptions,
-    ): Promise<Pick<PaseoAgentHandle, "current">>;
-  };
+  agents: Pick<PaseoApi["agents"], "list" | "subscribe">;
   providers: Pick<PaseoApi["providers"], "listModels" | "listModes">;
 }
 export interface AgentsPort {
@@ -94,7 +89,6 @@ export interface AgentsPort {
   modes(provider: string): Promise<CatalogMode[]>;
   /** Called when the provider list may have changed (a snapshot update). */
   onProvidersChange(listener: () => void): () => void;
-  create(input: CreateAgentInput): Promise<PaseoAgent>;
   list(): Promise<AgentsList>;
   onUpdate(handler: (update: PaseoAgentUpdate) => void): () => void;
 }
@@ -244,30 +238,6 @@ export function createAgentsPort(
       });
     },
     onProvidersChange: (listener) => catalog.subscribe(listener),
-    async create(input) {
-      const options: PaseoAgentCreateOptions = {
-        config: {
-          provider: `${input.provider}/${input.model}`,
-        },
-        cwd: input.cwd,
-      };
-      if (input.thinkingOptionId !== undefined) {
-        if (!thinkingSupported)
-          throw Error(
-            "Update the Paseo daemon to configure thinking (agentThinkingUpdate required).",
-          );
-        options.config.thinkingOptionId = input.thinkingOptionId;
-      }
-      if (input.modeId !== null) options.config.modeId = input.modeId;
-      if (input.title !== null) options.title = input.title;
-      if (input.prompt !== null) options.prompt = input.prompt;
-      if (input.attachments?.length)
-        options.attachments = [...input.attachments];
-      const handle = await api.agents.create(options);
-      const current = handle.current();
-      if (current === null) throw new Error("Agent created but no snapshot");
-      return current;
-    },
     list: () => api.agents.list({ subscribe: {} }),
     onUpdate: (handler) => api.agents.subscribe(handler),
   };

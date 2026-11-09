@@ -20,6 +20,7 @@ import {
   CLOSED_COMPLETIONS,
   createCompletionStore,
 } from "../prompt/prompt-completion.js";
+import { WrappingInput } from "../prompt/WrappingInput.js";
 import {
   backgroundProp,
   foregroundProp,
@@ -427,8 +428,8 @@ export function CommandCenter({
                 : ""}
           </text>
         ) : (
-          <input
-            ref={(node: InputRenderable | null) => {
+          <WrappingInput
+            inputRef={(node) => {
               if (node) inputs.current.add(node);
             }}
             key={stack.length}

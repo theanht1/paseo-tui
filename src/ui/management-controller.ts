@@ -638,6 +638,7 @@ export function createManagementController(context: () => ManagementContext) {
       await context().refresh();
       context().opened({
         tab: { kind: "terminal", key: `terminal:${terminal.id}`, terminal },
+        input: true,
       });
     });
   }

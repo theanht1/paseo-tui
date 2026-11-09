@@ -1,6 +1,6 @@
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import { describe, expect, it } from "vitest";
-import { agents, settle, setup } from "../test/app-harness.js";
+import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
 import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
@@ -107,4 +107,58 @@ describe("Ctrl-C in text inputs", () => {
     expect(app.lastFrame()).not.toContain("Other: xy▌");
     expect(app.lastFrame()).not.toContain(quitNotice);
   });
+});
+
+const longText = `start-marker ${"lorem ipsum ".repeat(18)}end-marker`;
+/** Fits the three rows of a Command Center or shortcut search field. */
+const fieldText = `start-marker ${"lorem ipsum ".repeat(12)}end-marker`;
+it("wraps a long agent prompt so its start and end stay visible", async () => {
+  const { app } = await setup();
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "hello alpha");
+  app.stdin.write("i");
+  await settle();
+  app.stdin.write(longText);
+  await settle();
+  expect(app.lastFrame()).toContain("start-marker");
+  expect(app.lastFrame()).toContain("end-marker");
+});
+it("keeps wrapping when text is typed one word at a time", async () => {
+  const { app } = await setup();
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "hello alpha");
+  app.stdin.write("i");
+  await settle();
+  for (const word of longText.split(" ")) {
+    app.stdin.write(`${word} `);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("start-marker");
+  expect(app.lastFrame()).toContain("end-marker");
+});
+it("wraps long text in the Command Center", async () => {
+  const { app } = await setup();
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "hello alpha");
+  app.stdin.write("\u000b");
+  await settle();
+  for (const word of fieldText.split(" ")) {
+    app.stdin.write(`${word} `);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("start-marker");
+  expect(app.lastFrame()).toContain("end-marker");
+});
+it("wraps long text in the shortcut search", async () => {
+  const { app } = await setup();
+  app.stdin.write("?");
+  await settle();
+  app.stdin.write("\t");
+  await settle();
+  for (const word of fieldText.split(" ")) {
+    app.stdin.write(`${word} `);
+    await settle();
+  }
+  expect(app.lastFrame()).toContain("start-marker");
+  expect(app.lastFrame()).toContain("end-marker");
 });

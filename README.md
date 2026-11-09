@@ -157,6 +157,7 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Normal pane                | `Shift-Tab`                                | Cycle agent mode                                   |
 | Normal or insert           | `Ctrl-X`                                   | Stop running turn (again retries a slow stop)      |
 | Normal                     | `U`                                        | Jump to next agent that needs you                  |
+| Normal or insert           | `Ctrl-Tab` / `Ctrl-^`                      | Back to the last workspace (press again to return) |
 | Normal                     | `S`                                        | Group sidebar by project / status                  |
 | Normal                     | `]` / `[`                                  | Next / previous workspace                          |
 | Normal                     | `1`–`9`                                    | Select tab by position                             |

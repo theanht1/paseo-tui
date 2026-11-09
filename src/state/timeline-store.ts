@@ -516,13 +516,21 @@ export function createTimelineStore(port: AgentPort) {
       ? { find: searchHistory, reveal: revealSeq }
       : null;
   const rewind = rewindTo
-    ? (prompt: TimelineCursor, mode: RewindMode) =>
-        action(async () => {
+    ? /** The rewound prompt's full text; null when the rewind failed. */
+      async (
+        prompt: TimelineCursor,
+        mode: RewindMode,
+      ): Promise<string | null> => {
+        let rewound: string | null = null;
+        await action(async () => {
           const item = await promptItem(prompt);
           if (!item.messageId)
             throw Error("That prompt has no message id to rewind to");
           await rewindTo(item.messageId, mode);
-        })
+          rewound = item.text;
+        });
+        return rewound;
+      }
     : null;
   /** `withHistory` false forks from the first prompt, which has nothing before it. */
   const fork = forkContext

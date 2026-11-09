@@ -13,7 +13,11 @@ import type {
 import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot, flushSync } from "@opentui/react";
 import { afterEach } from "vitest";
-import type { HistoryEntry } from "../connection/ports.js";
+import type {
+  HistoryEntry,
+  RewindMode,
+  TimelineCursor,
+} from "../connection/ports.js";
 import { createAgentsStore } from "../state/agents-store.js";
 import type {
   AgentHistoryPort,
@@ -26,7 +30,12 @@ import type {
 import { createTimelineRegistry } from "../state/timeline-registry.js";
 import { createTimelineStore } from "../state/timeline-store.js";
 import { at } from "../test/at.js";
-import { agent, listSnapshot, page } from "../test/fixtures.js";
+import {
+  agent,
+  listSnapshot,
+  NO_PROJECT_ACTIONS,
+  page,
+} from "../test/fixtures.js";
 import { App, type AppProps } from "../ui/App.js";
 import type { ThinkingPreference } from "../ui/agent/thinking-preference.js";
 import type { SessionHistory } from "../ui/command-center/session-history.js";
@@ -84,6 +93,8 @@ export class FakeAgents implements AgentsPort {
   }
   createError: Error | null = null;
   createdInputs: CreateAgentInput[] = [];
+  /** The workspace each agent was created in. */
+  createdWorkspaces: string[] = [];
   created = agent("created", { title: "Created agent", cwd: "/repo/one" });
   async create(input: CreateAgentInput) {
     this.createdInputs.push(input);
@@ -138,6 +149,8 @@ export interface FakeHistoryOptions {
   search: boolean;
   /** Whether the daemon advertises `agentTimelinePromptIndex`. */
   prompts?: boolean;
+  /** Whether the daemon can rewind; prompts then read back through `fetchAfter`. */
+  rewind?: boolean;
 }
 export class FakeAgent implements AgentPort {
   sent: string[] = [];
@@ -199,12 +212,19 @@ export class FakeAgent implements AgentPort {
               ),
             })
           : null,
-        rewind: null,
+        rewind: options.rewind
+          ? async (messageId, mode) => {
+              this.rewinds.push([messageId, mode]);
+              if (this.rewindError) throw this.rewindError;
+            }
+          : null,
         forkContext: null,
         setThinking: null,
       };
     }
   }
+  rewinds: [string, RewindMode][] = [];
+  rewindError: Error | null = null;
   private tailSize: number | null = null;
   private rows(seqs: number[]) {
     const rows = page(seqs);
@@ -231,8 +251,9 @@ export class FakeAgent implements AgentPort {
       this.tailSize === null ? seqs : seqs.slice(-this.tailSize),
     );
   }
-  async fetchAfter(): Promise<never> {
-    throw new Error("unexpected catch-up");
+  async fetchAfter(cursor: TimelineCursor) {
+    if (!this.history?.rewind) throw new Error("unexpected catch-up");
+    return this.rows([cursor.seq + 1]);
   }
   async send(text: string) {
     this.sent.push(text);
@@ -339,6 +360,29 @@ export class FakeConnection {
     for (const listener of this.listeners) listener(state);
   }
 }
+/** Workspace actions that only create agents, recording them on `agentsPort`. */
+function creatingWorkspaceActions(
+  agentsPort: FakeAgents,
+): NonNullable<AppProps["management"]> {
+  function unexpected(): never {
+    throw Error("Unexpected workspace action");
+  }
+  return {
+    ...NO_PROJECT_ACTIONS,
+    baseBranches: unexpected,
+    createWorkspace: unexpected,
+    createTerminal: unexpected,
+    openFile: unexpected,
+    renameWorkspace: unexpected,
+    closeTab: unexpected,
+    archiveWorkspace: unexpected,
+    renameTab: unexpected,
+    createAgent(workspace, input) {
+      agentsPort.createdWorkspaces.push(workspace.id);
+      return agentsPort.create(input);
+    },
+  };
+}
 export const renders: (() => Promise<void>)[] = [];
 export async function settle() {
   for (let i = 0; i < 5; i++) {
@@ -433,6 +477,9 @@ export async function setup(
   const agentsPort = new FakeAgents(currentAgents);
   const store = createAgentsStore(agentsPort);
   await store.load();
+  const workspaceActions =
+    management ??
+    (catalog === "agents" ? creatingWorkspaceActions(agentsPort) : undefined);
   const ports = new Map<string, FakeAgent>();
   const connection = new FakeConnection();
   const status = watchConnection(connection, () => void store.resync());
@@ -523,7 +570,7 @@ export async function setup(
                 }
               : undefined
           }
-          management={management}
+          management={workspaceActions}
           thinkingPreference={thinkingPreference}
           clearAttention={async (agentId) => {
             cleared.push(agentId);

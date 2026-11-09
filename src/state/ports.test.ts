@@ -1,7 +1,5 @@
-import type { PaseoAgent, PaseoAgentCreateOptions } from "@getpaseo/client";
 import { expect, expectTypeOf, test } from "vitest";
 import { at } from "../test/at.js";
-import { agent } from "../test/fixtures.js";
 import { type CreateAgentInput, createAgentsPort } from "./ports.js";
 import {
   createProviderCatalog,
@@ -32,9 +30,7 @@ function setup(
     { provider: "off", status: "unavailable", enabled: false, label: "Off" },
   ],
 ) {
-  const created: PaseoAgentCreateOptions[] = [];
   const listed: string[] = [];
-  let current: PaseoAgent | null = agent("created");
   let push: (entries: readonly ProviderEntry[]) => void = () => {};
   const catalog = createProviderCatalog({
     async snapshot() {
@@ -85,33 +81,17 @@ function setup(
       subscribe() {
         return () => {};
       },
-      async create(options: PaseoAgentCreateOptions) {
-        created.push(options);
-        return { current: () => current };
-      },
     },
     providers,
   };
   return {
     port: createAgentsPort(api, catalog, thinkingSupported),
-    created,
     listed,
     push(next: ProviderEntry[]) {
       push(next);
     },
-    clear: () => {
-      current = null;
-    },
   };
 }
-const input: CreateAgentInput = {
-  provider: "codex",
-  model: "m",
-  modeId: "ask",
-  cwd: "/project",
-  title: "Title",
-  prompt: "Hi",
-};
 test("lists enabled snapshot entries, hiding disabled ones; only ready ones are available", async () => {
   expect(await setup().port.providers()).toEqual([
     {
@@ -219,44 +199,10 @@ test("tells listeners when the provider snapshot changes", async () => {
   push([CODEX, { provider: "other", status: "ready", enabled: true }]);
   expect(changes).toBe(1);
 });
-test("creates with provider/model and optional fields and returns the snapshot", async () => {
-  const { port, created } = setup();
-  expect(await port.create(input)).toEqual(agent("created"));
-  expect(created).toEqual([
-    {
-      config: { provider: "codex/m", modeId: "ask" },
-      cwd: "/project",
-      title: "Title",
-      prompt: "Hi",
-    },
-  ]);
-});
-test("keeps the model while omitting null optional fields", async () => {
-  const { port, created } = setup();
-  await port.create({
-    provider: "codex",
-    model: "m",
-    modeId: null,
-    cwd: "/project",
-    title: null,
-    prompt: null,
-  });
-  expect(created).toEqual([
-    { config: { provider: "codex/m" }, cwd: "/project" },
-  ]);
-});
-test("rejects a creation without a snapshot", async () => {
-  const { port, clear } = setup();
-  clear();
-  await expect(port.create(input)).rejects.toThrow(
-    "Agent created but no snapshot",
-  );
-});
-
 test("requires a concrete model when creating an agent", () => {
   expectTypeOf<CreateAgentInput["model"]>().toEqualTypeOf<string>();
 });
-test("preserves model thinking options and sends thinkingOptionId only with daemon support", async () => {
+test("preserves model thinking options only with daemon support", async () => {
   const supported = setup(true, [
     { id: "medium", label: "Medium" },
     { id: "high", label: "High" },
@@ -268,14 +214,8 @@ test("preserves model thinking options and sends thinkingOptionId only with daem
       { id: "high", label: "High" },
     ],
   });
-  await supported.port.create({ ...input, thinkingOptionId: "high" });
-  expect(at(supported.created, 0).config.thinkingOptionId).toBe("high");
   const unsupported = setup(false, [{ id: "medium", label: "Medium" }]);
   expect(at(await unsupported.port.models("codex"), 0).thinking).toMatchObject({
     kind: "unsupported",
   });
-  await expect(
-    unsupported.port.create({ ...input, thinkingOptionId: "medium" }),
-  ).rejects.toThrow(/Update/);
-  expect(unsupported.created).toEqual([]);
 });

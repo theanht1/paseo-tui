@@ -34,16 +34,27 @@ export function createWorkspaceNavigation(
   const removedIds = new Set<string>();
   /** Tab key to reselect when the keyed tab disappears (an exited editor terminal). */
   const returns = new Map<string, string>();
+  let lastWorkspaceId: string | null = null;
   let snapshot: NavigationSnapshot = {
     cursorId: null,
     workspaceId: null,
     tab: null,
   };
+  /** Call before `snapshot` moves to `workspaceId`. */
+  function rememberLeaving(workspaceId: string | null) {
+    if (
+      workspaceId &&
+      snapshot.workspaceId &&
+      workspaceId !== snapshot.workspaceId
+    )
+      lastWorkspaceId = snapshot.workspaceId;
+  }
   function selectTab(tab: WorkspaceTab, returnTo?: string) {
     // Refocusing a tab from itself keeps the tab it first returns to.
     if (returnTo && returnTo !== tab.key) returns.set(tab.key, returnTo);
     const workspaceId = tabWorkspaceId(tab);
     if (workspaceId) remembered.set(workspaceId, tab.key);
+    rememberLeaving(workspaceId);
     snapshot = { cursorId: workspaceId, workspaceId, tab };
     emitter.notify();
   }
@@ -67,6 +78,7 @@ export function createWorkspaceNavigation(
       tabs.find((tab) => tab.key === remembered.get(workspace.id)) ??
       tabs[0] ??
       null;
+    rememberLeaving(workspace.id);
     snapshot = { cursorId: workspace.id, workspaceId: workspace.id, tab };
     emitter.notify();
     return tab;
@@ -167,6 +179,8 @@ export function createWorkspaceNavigation(
   }
   return {
     getSnapshot: () => snapshot,
+    /** The workspace open before this one; it may since have been archived. */
+    lastWorkspaceId: () => lastWorkspaceId,
     subscribe: emitter.subscribe,
     selectWorkspace,
     selectTab,

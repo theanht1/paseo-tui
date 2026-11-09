@@ -53,6 +53,8 @@ export interface BuiltinContext {
   /** Messages queued for the focused agent's running turn. */
   queued?: number;
   createAgent?: CreateDeps;
+  /** Puts a rewound prompt back in the agent's input. */
+  restorePrompt?(agentId: string, text: string): void;
   models?(provider: string): Promise<CatalogModel[]>;
   open(agent: PaseoAgent): void;
   changeLayout(change: (layout: Layout) => Layout): void;
@@ -492,6 +494,9 @@ function agentCommands(context: BuiltinContext): CommandItem[] {
         models,
         createAgent: context.createAgent,
         ...(context.goto ? { goto: context.goto } : {}),
+        ...(context.restorePrompt
+          ? { restorePrompt: context.restorePrompt }
+          : {}),
         ...(context.manage
           ? { forkWorkspace: context.manage.forkWorkspace }
           : {}),

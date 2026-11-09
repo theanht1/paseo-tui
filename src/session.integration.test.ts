@@ -58,14 +58,14 @@ it("replicates the host's label catalog and assigns a label to a workspace", asy
     connection: inject("daemonHost"),
   });
   const session = createSession(connection);
-  const agent = await session.agentsPort.create({
-    provider: "mock",
-    model: "ten-second-stream",
-    modeId: null,
-    cwd: process.cwd(),
-    title: "Labels",
-    prompt: null,
-  });
+  const agent = (
+    await connection.api.agents.create({
+      cwd: process.cwd(),
+      title: "Labels",
+      config: { provider: "mock/ten-second-stream" },
+    })
+  ).current();
+  if (!agent) throw Error("Agent created but no snapshot");
   try {
     const labels = session.labels;
     if (!labels) throw Error("the test daemon should have workspaceLabels");

@@ -11,6 +11,7 @@ type TimelineItem = AgentTimelineItem | { type: string };
 export type PlanOutcome = "proposed" | "approved" | "rejected" | "canceled";
 export type Block =
   | { kind: "user" | "assistant" | "reasoning"; key: string; text: string }
+  | { kind: "history"; key: string; source: string | null; text: string }
   | { kind: "tool"; key: string; call: ToolCallTimelineItem }
   | { kind: "plan"; key: string; outcome: PlanOutcome; text: string }
   | {
@@ -48,6 +49,26 @@ function planOutcome(call: ToolCallTimelineItem): PlanOutcome {
   if (call.metadata?.approved === true) return "approved";
   return "proposed";
 }
+const HISTORY_OPEN = "<chat-history-summary>";
+const HISTORY_CLOSE = "</chat-history-summary>";
+/**
+ * The chat history the daemon puts before a fork's first prompt, or null for any other
+ * message. The last closing tag ends it: the history itself may quote the tag.
+ */
+export function splitForkHistory(text: string) {
+  if (!text.startsWith(HISTORY_OPEN)) return null;
+  const end = text.lastIndexOf(HISTORY_CLOSE);
+  if (end < 0) return null;
+  const history = text.slice(HISTORY_OPEN.length, end).trim();
+  return {
+    history,
+    source: /^Source agent: (.+)$/m.exec(history)?.[1] ?? null,
+    prompt: text.slice(end + HISTORY_CLOSE.length).trim(),
+  };
+}
+export function historyLabel(source: string | null): string {
+  return source ? `Chat history from ${source}` : "Chat history";
+}
 export function planLabel(outcome: PlanOutcome): string {
   switch (outcome) {
     case "proposed":
@@ -63,7 +84,10 @@ export function planLabel(outcome: PlanOutcome): string {
 /** Blocks the block toggle (`{` `}` `o` `O`) selects and expands. */
 export function isExpandable(block: Block): boolean {
   return (
-    block.kind === "tool" || block.kind === "reasoning" || block.kind === "plan"
+    block.kind === "tool" ||
+    block.kind === "reasoning" ||
+    block.kind === "plan" ||
+    block.kind === "history"
   );
 }
 
@@ -119,10 +143,23 @@ export function toBlocks(
       continue;
     }
     switch (item.type) {
-      case "user_message":
-        blocks.push({ kind: "user", key: `user:${seq}`, text: item.text });
+      case "user_message": {
+        const fork = splitForkHistory(item.text);
+        if (fork)
+          blocks.push({
+            kind: "history",
+            key: `history:${seq}`,
+            source: fork.source,
+            text: fork.history,
+          });
+        blocks.push({
+          kind: "user",
+          key: `user:${seq}`,
+          text: fork ? fork.prompt : item.text,
+        });
         owners?.set(seq, `user:${seq}`);
         break;
+      }
       case "todo":
         blocks.push({ kind: "todo", key: `todo:${seq}`, items: item.items });
         break;

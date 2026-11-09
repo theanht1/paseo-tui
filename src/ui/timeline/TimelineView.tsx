@@ -57,6 +57,7 @@ import {
 import { useStore } from "../use-store.js";
 import {
   type Block,
+  historyLabel,
   isExpandable,
   planLabel,
   toBlocks,
@@ -226,6 +227,19 @@ function BlockBody({
           {expanded ? <Markdown text={block.text} dim /> : null}
         </box>
       );
+    case "history":
+      return (
+        <box flexDirection="column">
+          <text
+            wrapMode="none"
+            fg={foregroundProp(theme.muted)}
+            onMouseDown={onToggle}
+          >
+            {expanded ? "▾" : "▸"} {historyLabel(block.source)}
+          </text>
+          {expanded ? <Markdown text={block.text} dim /> : null}
+        </box>
+      );
     case "tool": {
       const status = block.call.status;
       return (
@@ -306,6 +320,8 @@ function BlockBody({
 }
 export interface TimelineControls {
   act(action: Action): void;
+  /** Adds text to the pane's prompt; absent on panes without one. */
+  restoreDraft?(text: string): void;
 }
 /** Header fields; a provider subagent supplies them from its descriptor. */
 export type TimelineAgent = Pick<

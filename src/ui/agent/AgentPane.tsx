@@ -131,6 +131,18 @@ export function AgentPane({
     queueState.current = { ...queueState.current, confirming: id };
     confirmQueued(id);
   }
+  function promptBox() {
+    return box.current ? textarea(box.current) : undefined;
+  }
+  /** Adds text below any draft, leaving the cursor at its end. */
+  function restoreDraft(text: string) {
+    const input = promptBox();
+    if (!input) return;
+    const draft = input.plainText;
+    const next = draft.trim() ? `${draft}\n${text}` : text;
+    input.replaceText(next);
+    input.cursorOffset = next.length;
+  }
   function queueAction(action: Action) {
     if (!queue) return;
     const { items } = queue.getSnapshot();
@@ -153,13 +165,8 @@ export function AgentPane({
           );
         return;
       case "queue.edit": {
-        const input = box.current ? textarea(box.current) : undefined;
-        const text = target && input ? queue.take(target.id) : null;
-        if (!input || text === null) return;
-        const draft = input.plainText;
-        const next = draft.trim() ? `${draft}\n${text}` : text;
-        input.replaceText(next);
-        input.cursorOffset = next.length;
+        const text = target && promptBox() ? queue.take(target.id) : null;
+        if (text !== null) restoreDraft(text);
         return;
       }
       case "queue.remove":
@@ -178,6 +185,7 @@ export function AgentPane({
       return watchPermissions(store, (transition) => setFocus(transition));
   }, [store, focused, archived, setFocus]);
   useImperativeHandle(controls, () => ({
+    restoreDraft,
     act(action: Action) {
       if (action.type === "agent.cycleMode") {
         const id = nextMode(agent);

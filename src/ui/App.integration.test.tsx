@@ -254,7 +254,7 @@ it("reports a connection error for an unavailable host", async () => {
 
 it("creates and manages a mock agent through Command Center", async () => {
   const app = await setup();
-  await app.create("Workspace seed");
+  const seed = await app.create("Workspace seed");
   await app.key(":");
   await app.waitForBreadcrumb("Command Center");
   await app.type("new agent");
@@ -294,6 +294,12 @@ it("creates and manages a mock agent through Command Center", async () => {
       { timeout: 10000, interval: 50 },
     )
     .toBe("ten-second-stream");
+  expect(
+    app.session.agents
+      .getSnapshot()
+      .groups.flatMap((group) => group.agents)
+      .find((agent) => agent.title === "Created from UI")?.workspaceId,
+  ).toBe(seed.current()?.workspaceId);
   await app.waitFor("NORMAL");
   await app.key(":");
   await app.waitForBreadcrumb("Command Center");
@@ -356,3 +362,32 @@ it("creates and manages a mock agent through Command Center", async () => {
     )
     .toBe(false);
 }, 45000);
+
+it("puts the message back in the prompt after a real rewind", async () => {
+  const app = await setup();
+  await app.create("Rewind target");
+  await app.sendPrompt("message to take back");
+  await expect
+    .poll(app.frame, { timeout: 30000, interval: 100 })
+    .toContain("turn idle");
+  await app.key(":");
+  await app.waitForBreadcrumb("Command Center");
+  await app.type("rewind to prompt");
+  await app.waitForChoice("rewind");
+  await app.key("\r");
+  await app.waitForBreadcrumb("Command Center › Rewind to prompt");
+  await app.waitFor(`${new Date().getUTCFullYear()}-`);
+  await app.key("\r");
+  await app.waitForBreadcrumb("Command Center › Rewind to prompt › Rewind");
+  await app.waitForChoice("rewind:conversation");
+  await app.key("\r");
+  await app.waitFor("y confirm");
+  await app.key("y");
+  await app.waitFor("INSERT");
+  await expect
+    .poll(async () => (await app.frame()).split("\n").slice(-8).join("\n"), {
+      timeout: 15000,
+      interval: 100,
+    })
+    .toContain("message to take back");
+}, 60000);

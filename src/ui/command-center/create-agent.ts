@@ -8,6 +8,11 @@ import type {
 import type { ThinkingPreference } from "../agent/thinking-preference.js";
 import type { CommandStep } from "./registry.js";
 
+export interface WorkspaceTarget {
+  key: string;
+  cwd: string;
+  label: string;
+}
 export interface CreateDeps {
   providers(): Promise<CatalogProvider[]>;
   models(provider: string): Promise<CatalogModel[]>;
@@ -15,9 +20,10 @@ export interface CreateDeps {
   /** Re-lists the Provider step when the host's provider snapshot changes. */
   onProvidersChange?(listener: () => void): () => void;
   thinkingPreference?: ThinkingPreference;
-  workspaces: readonly { key: string; cwd: string; label: string }[];
-  defaultCwd: string | null;
-  create(input: CreateAgentInput): Promise<PaseoAgent>;
+  workspaces: readonly WorkspaceTarget[];
+  defaultWorkspace: WorkspaceTarget | null;
+  /** Adds the agent to the workspace, so the daemon never picks one from the cwd. */
+  create(workspaceId: string, input: CreateAgentInput): Promise<PaseoAgent>;
   opened(agent: PaseoAgent): void;
   failed(message: string): void;
 }
@@ -214,9 +220,9 @@ export function agentConfigurationFlow(
   return providerStep(cwd);
 }
 export function createAgentStep(deps: CreateDeps): CommandStep {
-  function configured(cwd: string) {
-    return agentConfigurationStep(deps, cwd, (input) => {
-      const create = () => deps.create(input);
+  function configured(workspace: WorkspaceTarget) {
+    return agentConfigurationStep(deps, workspace.cwd, (input) => {
+      const create = () => deps.create(workspace.key, input);
       void (
         deps.thinkingPreference
           ? deps.thinkingPreference.flush().then(create)
@@ -226,7 +232,7 @@ export function createAgentStep(deps: CreateDeps): CommandStep {
       );
     });
   }
-  if (deps.defaultCwd) return configured(deps.defaultCwd);
+  if (deps.defaultWorkspace) return configured(deps.defaultWorkspace);
   return {
     kind: "choice",
     title: "Workspace",
@@ -236,7 +242,7 @@ export function createAgentStep(deps: CreateDeps): CommandStep {
         group: "Workspaces",
         title: workspace.label,
         subtitle: workspace.cwd,
-        run: () => configured(workspace.cwd),
+        run: () => configured(workspace),
       })),
   };
 }

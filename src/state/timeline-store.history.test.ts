@@ -195,11 +195,15 @@ describe("timeline store history", () => {
     const history = new FakeHistory();
     const { store, afterCalls } = setup(history);
     await store.open();
-    await store.rewind?.({ epoch: "epoch", seq: 5 }, "conversation");
+    expect(
+      await store.rewind?.({ epoch: "epoch", seq: 5 }, "conversation"),
+    ).toBe("the full first prompt");
     expect(afterCalls).toEqual([[{ epoch: "epoch", seq: 4 }, 1]]);
     expect(history.rewinds).toEqual([["m5", "conversation"]]);
     history.rewindError = Error("Provider does not support rewinding files");
-    await store.rewind?.({ epoch: "epoch", seq: 5 }, "files");
+    expect(
+      await store.rewind?.({ epoch: "epoch", seq: 5 }, "files"),
+    ).toBeNull();
     expect(store.getSnapshot().lastActionError).toBe(
       "Provider does not support rewinding files",
     );

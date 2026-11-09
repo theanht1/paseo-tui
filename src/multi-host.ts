@@ -44,7 +44,7 @@ export interface HostSession {
   management: WorkspaceActions;
   agentsPort: Pick<
     AgentsPort,
-    "providers" | "models" | "modes" | "onProvidersChange" | "create"
+    "providers" | "models" | "modes" | "onProvidersChange"
   >;
   refreshProviders(): Promise<void>;
   clearAttention(agentId: string): Promise<void>;
@@ -544,10 +544,6 @@ export function createMultiHost(
       (
         (focused ? find(focused) : null) ?? first()
       ).live.session.agentsPort.onProvidersChange(listener),
-    async create(input: Parameters<AgentsPort["create"]>[0]) {
-      const host = current();
-      return owned(host, await host.live.session.agentsPort.create(input));
-    },
   };
   const stream = (id: string) => known(id).live.session.terminalStream;
   const terminalStream: TerminalStreamPort = {

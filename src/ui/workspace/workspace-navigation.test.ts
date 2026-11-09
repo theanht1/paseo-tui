@@ -225,3 +225,37 @@ it("returns to a workspace whose remembered tab is an open archived view", async
   nav.selectWorkspace(branch, live, [], [], [old]);
   expect(nav.selectWorkspace(main, live, [], [], [old])?.key).toBe("agent:old");
 });
+
+it("remembers the workspace left last, swapping on each return", async () => {
+  const { createWorkspaceNavigation } = await import(
+    "./workspace-navigation.js"
+  );
+  const nav = createWorkspaceNavigation();
+  const agents = [
+    agent("a", { workspaceId: "main" }),
+    agent("c", { workspaceId: "branch" }),
+  ];
+  expect(nav.lastWorkspaceId()).toBeNull();
+  nav.selectWorkspace(main, agents, []);
+  expect(nav.lastWorkspaceId()).toBeNull();
+  nav.selectWorkspace(branch, agents, []);
+  expect(nav.lastWorkspaceId()).toBe("main");
+  nav.selectWorkspace(main, agents, []);
+  expect(nav.lastWorkspaceId()).toBe("branch");
+});
+it("counts a tab opened in another workspace and ignores moves within one", async () => {
+  const { createWorkspaceNavigation } = await import(
+    "./workspace-navigation.js"
+  );
+  const nav = createWorkspaceNavigation();
+  const agents = [
+    agent("a", { workspaceId: "main" }),
+    agent("b", { workspaceId: "main" }),
+    agent("c", { workspaceId: "branch" }),
+  ];
+  nav.selectWorkspace(branch, agents, []);
+  nav.selectTab(at(workspaceTabs("main", agents, []), 0));
+  expect(nav.lastWorkspaceId()).toBe("branch");
+  nav.selectTab(at(workspaceTabs("main", agents, []), 1));
+  expect(nav.lastWorkspaceId()).toBe("branch");
+});

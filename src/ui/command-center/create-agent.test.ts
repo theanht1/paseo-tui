@@ -6,6 +6,7 @@ import {
   agentConfigurationStep,
   type CreateDeps,
   createAgentStep,
+  type WorkspaceTarget,
 } from "./create-agent.js";
 import type { CommandItem } from "./registry.js";
 
@@ -17,9 +18,11 @@ function submit(step: ReturnType<CommandItem["run"]>, text: string) {
   if (step?.kind !== "input") throw Error("Expected input");
   return step.submit(text);
 }
-function fixture(defaultCwd: string | null = "/repo") {
+const repo = { key: "repo", cwd: "/repo", label: "Repo" };
+function fixture(defaultWorkspace: WorkspaceTarget | null = repo) {
   const created = agent("new");
   const inputs: CreateAgentInput[] = [];
+  const workspaceIds: string[] = [];
   const opened: string[] = [];
   const failed: string[] = [];
   const deps: CreateDeps = {
@@ -47,9 +50,10 @@ function fixture(defaultCwd: string | null = "/repo") {
       { id: "auto", label: "Auto", description: null },
       { id: "ask", label: "Ask", description: null },
     ],
-    workspaces: [{ key: "repo", cwd: "/repo", label: "Repo" }],
-    defaultCwd,
-    async create(input) {
+    workspaces: [repo],
+    defaultWorkspace,
+    async create(workspaceId, input) {
+      workspaceIds.push(workspaceId);
       inputs.push(input);
       return created;
     },
@@ -60,7 +64,7 @@ function fixture(defaultCwd: string | null = "/repo") {
       failed.push(message);
     },
   };
-  return { deps, created, inputs, opened, failed };
+  return { deps, created, inputs, workspaceIds, opened, failed };
 }
 async function titleStep(deps: CreateDeps) {
   const providers = await choices(createAgentStep(deps));
@@ -88,7 +92,18 @@ describe("create agent steps", () => {
         prompt: null,
       },
     ]);
+    expect(f.workspaceIds).toEqual(["repo"]);
     expect(f.opened).toEqual([f.created.id]);
+  });
+  it("creates in the workspace picked when none is focused", async () => {
+    const f = fixture(null);
+    const workspaces = await choices(createAgentStep(f.deps));
+    const providers = await choices(at(workspaces, 0).run());
+    const models = await choices(at(providers, 1).run());
+    const modes = await choices(at(models, 0).run());
+    submit(submit(at(modes, 0).run(), ""), "");
+    await Promise.resolve();
+    expect(f.workspaceIds).toEqual(["repo"]);
   });
   it("offers existing workspaces when no cwd is focused", async () => {
     const f = fixture(null);

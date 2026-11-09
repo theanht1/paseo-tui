@@ -10,12 +10,14 @@ import {
   ThemeContext,
 } from "../render/theme.js";
 import { useStore } from "../use-store.js";
+import { fitInput } from "./input-rows.js";
 import {
   CLOSED_COMPLETIONS,
   createCompletionStore,
 } from "./prompt-completion.js";
 
 const VISIBLE_ITEMS = 8;
+const MAX_INPUT_ROWS = 6;
 
 interface PromptInputProps {
   store: TimelineStore;
@@ -64,7 +66,15 @@ export function PromptInput({
   );
   useEffect(() => () => completion?.close(), [completion]);
   const popup = useStore(completion ?? CLOSED_COMPLETIONS);
+  const [wrappedRows, setWrappedRows] = useState(1);
+  // A focused prompt always keeps two rows, even when empty.
+  const inputHeight = Math.max(wrappedRows, focused ? 2 : 1);
+  function measure() {
+    const current = editor.current;
+    if (current) setWrappedRows(fitInput(current, MAX_INPUT_ROWS));
+  }
   function sync() {
+    measure();
     const current = editor.current;
     if (current && completion)
       completion.update(current.plainText, current.cursorOffset);
@@ -181,7 +191,7 @@ export function PromptInput({
     <box
       flexDirection="column"
       flexShrink={0}
-      height={(focused ? 3 : 1) + popupHeight}
+      height={inputHeight + (focused ? 1 : 0) + popupHeight}
     >
       {open ? (
         <box
@@ -243,8 +253,9 @@ export function PromptInput({
       ) : null}
       <textarea
         ref={editor}
-        height={focused ? 2 : 1}
+        height={inputHeight}
         focused={focused && !sending && !editing}
+        onSizeChange={measure}
         placeholder={
           focused && busy && queue
             ? `Message ${name}…  (Enter queues${queueKey ? ` · ${queueKey} send now` : ""})`

@@ -8,6 +8,7 @@ import {
 import {
   type Block,
   blockText,
+  historyLabel,
   planLabel,
   toolGlyph,
   toolSummary,
@@ -37,6 +38,8 @@ export function blockCopyText(block: Block, expanded: boolean): string {
       return expanded
         ? `▾ ${planLabel(block.outcome)}\n${block.text}`
         : `▸ ${planLabel(block.outcome)}`;
+    case "history":
+      return `${expanded ? "▾" : "▸"} ${historyLabel(block.source)}${expanded ? `\n${block.text}` : ""}`;
     case "todo":
       return block.items
         .map((item) => `${item.completed ? "☑" : "☐"} ${item.text}`)
@@ -136,6 +139,8 @@ function blockCopyLines(block: Block, expanded: boolean): StyledLine[] {
       return markdownLines(text);
     case "reasoning":
       return headed("reasoning", () => plain(rest, "muted"));
+    case "history":
+      return headed("muted", () => plain(rest, "muted"));
     case "tool":
       return headed(toolTone(block.call.status), () => plain(rest, "fg"));
     case "plan":

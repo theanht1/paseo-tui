@@ -140,6 +140,7 @@ import {
   parsePrefix,
   type Stroke,
   shortcutFor,
+  terminalInputAction,
 } from "./input/keymap.js";
 import { confirmQuit } from "./input/quit-confirmation.js";
 import { useKeymap } from "./input/use-keymap.js";
@@ -246,7 +247,7 @@ export interface AppProps {
   prefix?: Stroke;
   catalog?: Pick<
     AgentsPort,
-    "providers" | "models" | "modes" | "onProvidersChange" | "create"
+    "providers" | "models" | "modes" | "onProvidersChange"
   >;
   commands?: CommandRegistry;
   clearAttention?(agentId: string): Promise<void>;
@@ -1084,6 +1085,8 @@ export function App({
         editorTabs.current.add(result.tab.key);
         navigation.selectTab(result.tab, tabKey ?? undefined);
         setFocus({ pane: "prompt" });
+        // Closing the Command Center restores this mode.
+        returnMode.current = { kind: "insert" };
         setMode({ kind: "insert" });
       } else if (result.tab) {
         if (result.tab.kind === "agent")
@@ -1091,6 +1094,7 @@ export function App({
         openTab(result.tab);
         if (result.tab.kind === "agent") {
           setFocus({ pane: "prompt" });
+          returnMode.current = { kind: "insert" };
           setMode({ kind: "insert" });
         }
       } else if (result.workspace) openWorkspace(result.workspace);
@@ -1297,6 +1301,14 @@ export function App({
         if (workspace) openWorkspace(workspace);
         break;
       }
+      case "workspace.last": {
+        const last = workspaces.find(
+          (workspace) => workspace.id === navigation.lastWorkspaceId(),
+        );
+        if (last) openWorkspace(last);
+        else setNotice({ text: "No previous workspace" });
+        break;
+      }
       case "workspace.cycle": {
         const count = sidebarOrder.length;
         const index = sidebarOrder.findIndex(
@@ -1485,33 +1497,43 @@ export function App({
         controls.current.get(layout.focusedId)?.act(action);
     }
   }
-  const createAgent: CreateDeps | undefined = catalog
-    ? {
-        thinkingPreference,
-        providers: () => catalog.providers(),
-        models: (provider) => catalog.models(provider),
-        modes: (provider) => catalog.modes(provider),
-        onProvidersChange: (listener) => catalog.onProvidersChange(listener),
-        create: (input) => catalog.create(input),
-        workspaces: workspaces.map((workspace) => ({
-          key: workspace.id,
-          cwd: workspace.workspaceDirectory ?? workspace.projectRootPath,
-          label: workspace.title || workspace.name,
-        })),
-        defaultCwd:
-          workspaces.find((workspace) => workspace.id === activeWorkspaceId)
-            ?.workspaceDirectory ??
-          flat.find((agent) => agent.id === current?.agentId)?.cwd ??
-          null,
-        opened(agent) {
-          pending.add(agent.id, Date.now());
-          open(agent);
-        },
-        failed(message) {
-          setCreateError({ message });
-        },
-      }
-    : undefined;
+  const workspaceTargets = workspaces.map((workspace) => ({
+    key: workspace.id,
+    cwd: workspace.workspaceDirectory ?? workspace.projectRootPath,
+    label: workspace.title || workspace.name,
+  }));
+  const focusedWorkspaceId =
+    activeWorkspaceId ??
+    flat.find((agent) => agent.id === current?.agentId)?.workspaceId;
+  const createAgent: CreateDeps | undefined =
+    catalog && management
+      ? {
+          thinkingPreference,
+          providers: () => catalog.providers(),
+          models: (provider) => catalog.models(provider),
+          modes: (provider) => catalog.modes(provider),
+          onProvidersChange: (listener) => catalog.onProvidersChange(listener),
+          async create(workspaceId, input) {
+            const workspace = workspaces.find(
+              (candidate) => candidate.id === workspaceId,
+            );
+            if (!workspace) throw Error("That workspace no longer exists");
+            return management.createAgent(workspace, input);
+          },
+          workspaces: workspaceTargets,
+          defaultWorkspace:
+            workspaceTargets.find(
+              (workspace) => workspace.key === focusedWorkspaceId,
+            ) ?? null,
+          opened(agent) {
+            pending.add(agent.id, Date.now());
+            open(agent);
+          },
+          failed(message) {
+            setCreateError({ message });
+          },
+        }
+      : undefined;
   const focusedAgent = terminalId
     ? undefined
     : viewable.find((a) => a.id === current?.agentId);
@@ -1580,6 +1602,28 @@ export function App({
     controls.current
       .get(layout.focusedId)
       ?.act({ type: "timeline.goto", epoch, seq });
+  }
+  /** A rewind finishes later: read what is focused then, not when it started. */
+  const focusedPane = useRef({ paneId: layout.focusedId, agentId: focusedId });
+  focusedPane.current = { paneId: layout.focusedId, agentId: focusedId };
+  function restorePrompt(agentId: string, text: string) {
+    const { paneId, agentId: shown } = focusedPane.current;
+    const restore =
+      shown === agentId
+        ? controls.current.get(paneId)?.restoreDraft
+        : undefined;
+    if (!restore) {
+      setNotice({
+        text: "Rewound, but the agent is no longer focused so its prompt was not restored",
+      });
+      return;
+    }
+    restore(text);
+    returnMode.current = { kind: "insert" };
+    setFocus({ pane: "prompt" });
+    setMode((current) =>
+      current.kind === "palette" ? current : { kind: "insert" },
+    );
   }
   function historyContext(source: SessionHistory): SessionHistoryContext {
     return { history: source, now: Date.now, open: openFromHistory };
@@ -1768,6 +1812,7 @@ export function App({
         if (focusedArchived) unarchive(focusedArchived);
       },
       goto: gotoPrompt,
+      restorePrompt,
       refreshProviders: refreshAllProviders,
       open,
       changeLayout: setLayout,
@@ -1789,10 +1834,13 @@ export function App({
       }),
     [registry],
   );
-  const terminalInput =
-    terminalId !== null && focus.pane === "prompt" && mode.kind === "insert";
   /** Help or a management overlay holds input; panes stay rendered but inactive. */
   const blocked = help || managementState.overlay.kind !== "closed";
+  const terminalInput =
+    terminalId !== null &&
+    focus.pane === "prompt" &&
+    mode.kind === "insert" &&
+    !blocked;
   const overlayOpen = blocked || mode.kind === "palette";
   useKeyboard((event) => {
     if (terminalInput) {
@@ -1801,6 +1849,13 @@ export function App({
         event.stopPropagation();
         setMode({ kind: "normal", pending: "" });
         setFocus({ pane: "timeline" });
+        return;
+      }
+      const action = terminalInputAction(event, bindings);
+      if (action) {
+        event.preventDefault();
+        event.stopPropagation();
+        act(action);
       }
       return;
     }

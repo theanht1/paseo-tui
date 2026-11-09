@@ -1,7 +1,7 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { expect, it } from "vitest";
 import type { CreateAgentInput } from "../state/ports.js";
-import { agents, settle, setup } from "../test/app-harness.js";
+import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
 import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
@@ -1235,4 +1235,42 @@ it("moves the sidebar cursor half a page with Ctrl-d / Ctrl-u and to the ends wi
   expect(await cursorRow()).toBe("agent 00");
   await press({ ctrl: "d" }, { ctrl: "d" });
   expect(await cursorRow()).toBe("agent 20");
+});
+
+const CTRL_CARET = "\u001e";
+const CTRL_TAB = "\u001b[9;5u";
+async function twoWorkspaces(kitty = false) {
+  const result = await setup(agents, 24, kitty);
+  const { app } = result;
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "hello alpha");
+  return result;
+}
+it("toggles between the last two workspaces with Ctrl-^", async () => {
+  const { app } = await twoWorkspaces();
+  app.stdin.write("]");
+  await settleUntil(app.lastFrame, "hello gamma");
+  app.stdin.write(CTRL_CARET);
+  await settleUntil(app.lastFrame, "hello alpha");
+  expect(app.lastFrame()).toContain("hello alpha");
+  app.stdin.write(CTRL_CARET);
+  await settleUntil(app.lastFrame, "hello gamma");
+  expect(app.lastFrame()).toContain("hello gamma");
+});
+it("jumps to the last workspace with Ctrl-Tab, even while typing", async () => {
+  const { app } = await twoWorkspaces(true);
+  app.stdin.write("]");
+  await settleUntil(app.lastFrame, "hello gamma");
+  app.stdin.write("i");
+  await settle();
+  app.stdin.write(CTRL_TAB);
+  await settleUntil(app.lastFrame, "hello alpha");
+  expect(app.lastFrame()).toContain("hello alpha");
+});
+it("says so when there is no workspace to go back to", async () => {
+  const { app } = await twoWorkspaces();
+  app.stdin.write(CTRL_CARET);
+  await settleUntil(app.lastFrame, "No previous workspace");
+  expect(app.lastFrame()).toContain("No previous workspace");
+  expect(app.lastFrame()).toContain("hello alpha");
 });

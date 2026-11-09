@@ -443,9 +443,6 @@ it("loads models asynchronously, marks current/default, and applies a clicked ch
       providers: async () => [],
       modes: async () => [],
       onProvidersChange: () => () => {},
-      create: async () => {
-        throw Error("Unexpected create");
-      },
       models(provider) {
         requested.push(provider);
         return pending;
@@ -480,9 +477,6 @@ it("shows catalog failures and returns to the preserved root query", async () =>
       providers: async () => [],
       modes: async () => [],
       onProvidersChange: () => () => {},
-      create: async () => {
-        throw Error("Unexpected create");
-      },
       models: async () => {
         throw Error("Catalog unavailable");
       },
@@ -540,6 +534,7 @@ it("creates from the focused workspace and keeps the assigned pane pending until
     app.stdin.write(key);
     await settle();
   }
+  expect(agentsPort.createdWorkspaces).toEqual(["one"]);
   expect(agentsPort.createdInputs).toEqual([
     {
       provider: "codex",

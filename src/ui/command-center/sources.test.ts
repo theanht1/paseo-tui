@@ -523,7 +523,7 @@ describe("archived focused agent", () => {
       focusedAgent: value,
       focusedStore: timelineStore({
         prompts: async () => ({ epoch: "e", prompts: [] }),
-        rewind: async () => {},
+        rewind: async () => null,
         fork: async () => {
           throw Error("Unexpected fork");
         },
@@ -536,7 +536,7 @@ describe("archived focused agent", () => {
         modes: async () => [],
         create: async () => value,
         workspaces: [],
-        defaultCwd: null,
+        defaultWorkspace: null,
         opened() {},
         failed() {},
       },

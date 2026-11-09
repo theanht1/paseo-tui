@@ -593,6 +593,13 @@ export const BINDINGS: readonly Binding[] = [
     description: "Group sidebar by project / status",
   },
   {
+    // Most terminals keep Ctrl-Tab for their own tabs; kitty-protocol ones report Ctrl-^ as Ctrl-6.
+    keys: "Ctrl-Tab / Ctrl-^ / Ctrl-6",
+    modes: ["normal", "insert"],
+    action: { type: "workspace.last" },
+    description: "Last-used workspace",
+  },
+  {
     keys: "]",
     modes: ["normal"],
     action: { type: "workspace.cycle", delta: 1 },

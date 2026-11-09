@@ -124,7 +124,6 @@ function host(
         calls.push(`${id}.onProvidersChange()`);
         return () => {};
       },
-      create: unexpected,
     },
     clearAttention: record("clearAttention"),
     refresh: record("refresh"),
@@ -349,6 +348,33 @@ it("sends each action to the host that owns its workspace, agent or terminal", a
   ]);
 });
 
+it("creates an agent on the host owning its workspace, whichever host is focused", async () => {
+  const { multi, hosts, local } = setup();
+  const [w1, w2] = multi.directory.getSnapshot().workspaces;
+  if (!w1 || !w2) throw Error("missing workspaces");
+  const remote = hosts.getSnapshot().find((host) => host !== local);
+  if (!remote) throw Error("missing remote host");
+  const created: string[] = [];
+  local.live.session.management.createAgent = async (workspace) => {
+    created.push(`local:${workspace.id}`);
+    return agent("from-local", { workspaceId: workspace.id });
+  };
+  remote.live.session.management.createAgent = async (workspace) => {
+    created.push(`remote:${workspace.id}`);
+    return agent("from-remote", { workspaceId: workspace.id });
+  };
+  const input = {
+    provider: "codex",
+    model: "m",
+    modeId: null,
+    cwd: "/repo",
+    title: null,
+    prompt: null,
+  };
+  multi.focus(w1.id);
+  await multi.management.createAgent(w2, input);
+  expect(created).toEqual(["remote:w2"]);
+});
 it("sends host-less requests to the focused workspace's host", async () => {
   const { multi } = setup();
   expect(await multi.management.directories("app")).toEqual(["home:app"]);

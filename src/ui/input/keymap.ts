@@ -56,6 +56,8 @@ export type Action =
         | "workspace.togglePin"
         /** Opens the Labels toggle list for the workspace under the sidebar cursor. */
         | "workspace.labels"
+        /** Returns to the workspace open before this one. */
+        | "workspace.last"
         | "diff.open"
         | "workspace.editor"
         | "history.open"
@@ -123,6 +125,19 @@ export function globalAction(
   return (
     bindings.find((b) => b.global && !b.inert && matches(b, key, stroke))
       ?.action ?? null
+  );
+}
+/** Terminal programs keep every key but Ctrl-Tab, which reaches the last workspace. */
+export function terminalInputAction(
+  stroke: Stroke,
+  bindings: readonly Binding[] = BINDINGS,
+): Action | null {
+  if (!stroke.ctrl || stroke.name !== "tab") return null;
+  const key = label(stroke);
+  return (
+    bindings.find(
+      (b) => b.action.type === "workspace.last" && matches(b, key, stroke),
+    )?.action ?? null
   );
 }
 function label(stroke: Stroke): string {

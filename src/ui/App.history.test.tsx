@@ -472,3 +472,141 @@ it("t asks for a newer daemon without the prompt index", async () => {
   );
   expect(app.lastFrame()).not.toContain("Jump to prompt");
 });
+
+it("shows a fork's chat history collapsed until it is expanded", async () => {
+  const { app } = await setup(
+    agents,
+    24,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    () => [
+      {
+        type: "user_message",
+        text: "<chat-history-summary>\nSource agent: Origin\n\n[User] old secret ask\n</chat-history-summary>\n\ncarry on",
+      },
+      { type: "assistant_message", text: "ok" },
+    ],
+  );
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "carry on");
+  expect(app.lastFrame()).toContain("Chat history from Origin");
+  expect(app.lastFrame()).not.toContain("old secret ask");
+  app.stdin.write("O");
+  await settleUntil(app.lastFrame, "old secret ask");
+  expect(app.lastFrame()).toContain("old secret ask");
+});
+
+const rewindable = agent("alpha", {
+  title: "Alpha agent",
+  cwd: "/repo/one",
+  workspaceId: "one",
+  capabilities: {
+    ...at(agents, 0).capabilities,
+    supportsRewindConversation: true,
+  },
+});
+const asked = "please rewrite the parser and keep every existing test green";
+async function rewindSetup() {
+  const result = await setup(
+    [rewindable],
+    24,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    () => [
+      { type: "user_message", text: asked, messageId: "m1" },
+      { type: "assistant_message", text: "done" },
+    ],
+    () => ({ tail: 2, search: false, prompts: true, rewind: true }),
+  );
+  const { app } = result;
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "done");
+  async function rewind() {
+    for (const key of ["\u000b", "rewind to prompt", "\r"]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    await settleUntil(app.lastFrame, "Rewind to prompt");
+    app.stdin.write("\r");
+    await settleUntil(app.lastFrame, "to before");
+    app.stdin.write("y");
+    await settle();
+  }
+  return { ...result, rewind };
+}
+it("fills the prompt with the rewound message, ready to edit and send", async () => {
+  const { app, ports, rewind } = await rewindSetup();
+  await rewind();
+  expect(ports.get("alpha")?.rewinds).toEqual([["m1", "conversation"]]);
+  expect(app.lastFrame()).toContain("INSERT");
+  app.stdin.write(" please");
+  await settle();
+  app.stdin.write("\r");
+  await settle();
+  expect(ports.get("alpha")?.sent).toEqual([`${asked} please`]);
+});
+it("keeps a draft when restoring a rewound message", async () => {
+  const { app, ports, rewind } = await rewindSetup();
+  app.stdin.write("i");
+  await settle();
+  app.stdin.write("my draft");
+  await settle();
+  await rewind();
+  app.stdin.write("\r");
+  await settle();
+  expect(ports.get("alpha")?.sent).toEqual([`my draft\n${asked}`]);
+});
+it("leaves the prompt empty when the rewind fails", async () => {
+  const { app, ports, rewind } = await rewindSetup();
+  const port = ports.get("alpha");
+  if (!port) throw Error("missing port");
+  port.rewindError = Error("Rewind denied");
+  await rewind();
+  expect(app.lastFrame()).toContain("Rewind denied");
+  expect(app.lastFrame()).not.toContain("INSERT");
+});
+
+it("grows the prompt to show a long rewound message from its first word", async () => {
+  const long = `start-marker ${"lorem ipsum ".repeat(18)}end-marker`;
+  const result = await setup(
+    [rewindable],
+    24,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {},
+    () => [
+      { type: "user_message", text: long, messageId: "m1" },
+      { type: "assistant_message", text: "done" },
+    ],
+    () => ({ tail: 2, search: false, prompts: true, rewind: true }),
+  );
+  const { app } = result;
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "done");
+  for (const key of ["\u000b", "rewind to prompt", "\r"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  await settleUntil(app.lastFrame, "Rewind to prompt");
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "to before");
+  app.stdin.write("y");
+  await settle();
+  const prompt = app.lastFrame().split("\n").slice(-8).join("\n");
+  expect(prompt).toContain("start-marker");
+  expect(prompt).toContain("end-marker");
+});

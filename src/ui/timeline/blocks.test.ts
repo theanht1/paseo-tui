@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import { at } from "../../test/at.js";
-import { blockText, toBlocks } from "./blocks.js";
+import {
+  blockText,
+  isExpandable,
+  splitForkHistory,
+  toBlocks,
+} from "./blocks.js";
 
 function rows(...items: Parameters<typeof toBlocks>[0][number]["item"][]) {
   return items.map((item, seq) => ({ seq: seq + 1, item }));
@@ -162,4 +167,52 @@ test("a session switch notice becomes a divider that old history stays above", (
     ["notice", "── session cleared ──"],
     ["assistant", "after"],
   ]);
+});
+
+const forkHistory = [
+  "<chat-history-summary>",
+  "Chat history from a previous Paseo agent.",
+  "Source agent: Update:",
+  "Source directory: /repo",
+  "",
+  "[User] first ask mentioning </chat-history-summary> literally",
+  "[Assistant] reply",
+  "</chat-history-summary>",
+].join("\n");
+test("splits a fork's first message into collapsible history and the prompt", () => {
+  const blocks = toBlocks(
+    rows({ type: "user_message", text: `${forkHistory}\n\ncarry on` }),
+  );
+  expect(blocks.map((block) => block.kind)).toEqual(["history", "user"]);
+  expect(at(blocks, 0)).toMatchObject({
+    key: "history:1",
+    source: "Update:",
+  });
+  expect(blockText(at(blocks, 0))).toContain("[Assistant] reply");
+  expect(blockText(at(blocks, 1))).toBe("carry on");
+  expect(at(blocks, 1).key).toBe("user:1");
+  expect(isExpandable(at(blocks, 0))).toBe(true);
+});
+test("records the prompt, not the history, as the owner of a fork's message", () => {
+  const owners = new Map<number, string>();
+  toBlocks(
+    rows({ type: "user_message", text: `${forkHistory}\n\ncarry on` }),
+    owners,
+  );
+  expect(owners.get(1)).toBe("user:1");
+});
+test("leaves a message without a complete history block untouched", () => {
+  for (const text of [
+    "<chat-history-summary>\nnever closed",
+    "plain <chat-history-summary>x</chat-history-summary>",
+  ])
+    expect(toBlocks(rows({ type: "user_message", text }))).toEqual([
+      { kind: "user", key: "user:1", text },
+    ]);
+});
+test("splitForkHistory returns only the fork prompt", () => {
+  expect(splitForkHistory(`${forkHistory}\n\ncarry on`)?.prompt).toBe(
+    "carry on",
+  );
+  expect(splitForkHistory("no history")).toBeNull();
 });

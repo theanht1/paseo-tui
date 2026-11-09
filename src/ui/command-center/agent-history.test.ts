@@ -51,9 +51,16 @@ const models: CatalogModel[] = [
   },
   { id: "small", label: "Small", description: null, isDefault: false },
 ];
-function setup(value: PaseoAgent, enabled = true, createError?: Error) {
+function setup(
+  value: PaseoAgent,
+  enabled = true,
+  createError?: Error,
+  rewound: string | null = "the full ask",
+) {
+  const restored: [string, string][] = [];
   const calls: unknown[][] = [];
   const created: CreateAgentInput[] = [];
+  const workspaceIds: string[] = [];
   const failures: string[] = [];
   const opened: string[] = [];
   const seeds: AgentSeed[] = [];
@@ -63,6 +70,7 @@ function setup(value: PaseoAgent, enabled = true, createError?: Error) {
           prompts: async () => prompts,
           rewind: async (prompt: TimelineCursor, mode: RewindMode) => {
             calls.push(["rewind", prompt, mode]);
+            return rewound;
           },
           fork: async (
             prompt: TimelineCursor,
@@ -85,8 +93,10 @@ function setup(value: PaseoAgent, enabled = true, createError?: Error) {
     store,
     models: async () => models,
     createAgent: {
-      async create(input) {
+      workspaces: [{ key: "workspace", cwd: "/project", label: "Project" }],
+      async create(workspaceId, input) {
         if (createError) throw createError;
+        workspaceIds.push(workspaceId);
         created.push(input);
         return agent("fork");
       },
@@ -97,12 +107,24 @@ function setup(value: PaseoAgent, enabled = true, createError?: Error) {
         failures.push(message);
       },
     },
+    restorePrompt(agentId, text) {
+      restored.push([agentId, text]);
+    },
     forkWorkspace(seed) {
       seeds.push(seed);
       return { kind: "confirm", title: "New workspace", confirm() {} };
     },
   });
-  return { items, calls, created, failures, opened, seeds };
+  return {
+    items,
+    calls,
+    created,
+    workspaceIds,
+    failures,
+    opened,
+    seeds,
+    restored,
+  };
 }
 function find(items: readonly CommandItem[], id: string) {
   const item = items.find((candidate) => candidate.id === id);
@@ -176,6 +198,46 @@ describe("history commands", () => {
     confirm.confirm();
     expect(calls).toEqual([["rewind", { epoch: "e", seq: 9 }, "both"]]);
   });
+  /** Rewinds to the newest prompt with the mode titled `title`. */
+  async function rewindWith(
+    title: string,
+    rewound?: string | null,
+  ): Promise<[string, string][]> {
+    const { items, restored } = setup(
+      agent("a", {
+        capabilities: { ...rewindable, supportsRewindFiles: true },
+      }),
+      true,
+      undefined,
+      rewound,
+    );
+    const list = await choices(find(items, "rewind").run());
+    const modes = await choices(at(list, 0).run());
+    const confirm = modes.find((mode) => mode.title === title)?.run();
+    if (confirm?.kind !== "confirm") throw Error("expected confirmation");
+    confirm.confirm();
+    await settle();
+    return restored;
+  }
+  it("restores the full prompt after rewinding the conversation", async () => {
+    expect(await rewindWith("Conversation only")).toEqual([
+      ["a", "the full ask"],
+    ]);
+    expect(await rewindWith("Conversation and files")).toEqual([
+      ["a", "the full ask"],
+    ]);
+  });
+  it("restores nothing when only files rewind or the rewind fails", async () => {
+    expect(await rewindWith("Files only")).toEqual([]);
+    expect(await rewindWith("Conversation only", null)).toEqual([]);
+  });
+  it("restores only the prompt of a fork's first message", async () => {
+    const text =
+      "<chat-history-summary>\nold\n</chat-history-summary>\n\ncarry on";
+    expect(await rewindWith("Conversation only", text)).toEqual([
+      ["a", "carry on"],
+    ]);
+  });
   it("skips the mode choice when the provider rewinds one way only", async () => {
     const { items } = setup(
       agent("a", {
@@ -193,7 +255,7 @@ describe("history commands", () => {
     expect(step?.kind).toBe("confirm");
   });
   it("forks from a prompt with the history before it and the agent's settings", async () => {
-    const { items, calls, created, opened } = setup(
+    const { items, calls, created, workspaceIds, opened } = setup(
       agent("a", {
         title: "Alpha",
         model: "big",
@@ -208,6 +270,7 @@ describe("history commands", () => {
     await into(input.submit("  "), "This workspace");
     await settle();
     expect(calls).toEqual([["fork", { epoch: "e", seq: 9 }, true]]);
+    expect(workspaceIds).toEqual(["workspace"]);
     expect(created).toEqual([
       {
         provider: "codex",
@@ -221,6 +284,14 @@ describe("history commands", () => {
       },
     ]);
     expect(opened).toEqual(["fork"]);
+  });
+  it("only offers This workspace while the source agent's workspace exists", async () => {
+    const { items } = setup(agent("a", { model: "big", workspaceId: "gone" }));
+    const list = await choices(find(items, "fork").run());
+    const input = at(list, 0).run();
+    if (input?.kind !== "input") throw Error("expected a prompt input");
+    const options = await choices(input.submit("x"));
+    expect(options.map((option) => option.title)).toEqual(["New workspace…"]);
   });
   it("forks from the first prompt without history, using the typed prompt", async () => {
     const { items, calls, created } = setup(agent("a", { model: "big" }));
