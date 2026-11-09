@@ -244,6 +244,24 @@ export interface AgentFeaturesPort {
     | ((agentId: string, optionId: string) => Promise<string | null>)
     | null;
 }
+/** A checkout's git state; `baseRef` is the daemon-reported default or comparison branch. */
+export interface CheckoutState {
+  branch: string | null;
+  dirty: boolean;
+  baseRef: string | null;
+}
+/** Git operations on a host's checkouts: baseline daemon requests. */
+export interface CheckoutPort {
+  status(cwd: string): Promise<CheckoutState>;
+  switchBranch(cwd: string, branch: string): Promise<void>;
+  /** Renames the branch `cwd` has checked out. */
+  renameBranch(cwd: string, branch: string): Promise<void>;
+  /** Stashes tracked and untracked changes under `label`. */
+  stash(cwd: string, label: string): Promise<void>;
+  /** Applies and drops the stash saved under `label`; stashes are shared across worktrees. */
+  unstash(cwd: string, label: string): Promise<void>;
+  push(cwd: string): Promise<void>;
+}
 /** Project registry operations; `add` and `remove` are null when the daemon lacks `projectAdd` / `projectRemove`. */
 export interface ProjectPort {
   add: ((cwd: string) => Promise<PaseoProject>) | null;

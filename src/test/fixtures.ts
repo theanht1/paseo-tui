@@ -136,7 +136,40 @@ export function timelineStore(
   };
 }
 /** Project operations for WorkspaceActions fakes in tests that don't touch projects. */
+export const NO_TRANSFER_API = {
+  checkout: {
+    status: async (): Promise<never> => {
+      throw Error("Unexpected checkout");
+    },
+    switchBranch: async (): Promise<never> => {
+      throw Error("Unexpected checkout");
+    },
+    renameBranch: async (): Promise<never> => {
+      throw Error("Unexpected checkout");
+    },
+    stash: async (): Promise<never> => {
+      throw Error("Unexpected checkout");
+    },
+    unstash: async (): Promise<never> => {
+      throw Error("Unexpected checkout");
+    },
+    push: async (): Promise<never> => {
+      throw Error("Unexpected checkout");
+    },
+  },
+  forkContext: null,
+};
 export const NO_PROJECT_ACTIONS = {
+  checkout: (): never => {
+    throw Error("Unexpected checkout");
+  },
+  hostId: () => null,
+  forkChat: async (): Promise<never> => {
+    throw Error("Unexpected forkChat");
+  },
+  createWorktree: async (): Promise<never> => {
+    throw Error("Unexpected createWorktree");
+  },
   directories: async (): Promise<string[]> => [],
   addProject: async (): Promise<never> => {
     throw Error("Unexpected addProject");

@@ -137,6 +137,7 @@ export interface ManageCommands {
   /** Hosts can be listed and added. */
   hosts: boolean;
   archiveWorkspace(workspace: WorkspaceRow): void;
+  transferWorkspace(workspace: WorkspaceRow): void;
   addProject(): void;
   listProjects(): void;
   removeProject(): void;
@@ -166,6 +167,13 @@ function manageCommands(manage: ManageCommands): CommandItem[] {
   return [
     ...(workspace
       ? [
+          item(
+            "transfer-workspace",
+            "Transfer workspace…",
+            "Move the branch, changes and agents to a worktree or host",
+            ["transfer", "move", "worktree", "host", "handoff"],
+            () => manage.transferWorkspace(workspace),
+          ),
           item(
             "archive-workspace",
             "Archive workspace…",

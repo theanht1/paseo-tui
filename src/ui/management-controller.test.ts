@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
+import {
+  agent,
+  NO_PROJECT_ACTIONS,
+  NO_TRANSFER_API,
+} from "../test/fixtures.js";
 import type { CommandStep } from "./command-center/registry.js";
 import { createManagementController } from "./management-controller.js";
 import {
@@ -800,6 +804,7 @@ it("new workspace title step says it names the workspace and tab", async () => {
 it("fork into a new workspace names the workspace after the fork", async () => {
   const created: unknown[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     createWorkspace: async (options) => {
       created.push(options);
       return {

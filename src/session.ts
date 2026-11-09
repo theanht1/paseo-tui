@@ -22,6 +22,8 @@ export function createSession(connection: Connection) {
       renameTerminal: connection.management.renameTerminal,
       branches: connection.git.branches,
       projects: connection.projects,
+      checkout: connection.git.checkout,
+      forkContext: connection.agentFeatures.forkContext,
     }),
     connection.management.capabilities,
   );

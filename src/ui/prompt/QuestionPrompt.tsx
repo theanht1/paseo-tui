@@ -9,6 +9,9 @@ import { foregroundProp, ThemeContext } from "../render/theme.js";
 import { useStore } from "../use-store.js";
 import {
   createQuestionStore,
+  OTHER_PLACEHOLDER,
+  optionLead,
+  otherLead,
   type QuestionForm,
   type QuestionRow,
   questionRows,
@@ -20,12 +23,15 @@ export function QuestionPrompt({
   store,
   focused,
   maxRows,
+  width,
 }: {
   request: AgentPermissionRequest;
   form: QuestionForm;
   store: TimelineStore;
   focused: boolean;
   maxRows: number;
+  /** Columns the prompt's content wraps at. */
+  width: number;
 }) {
   const [question] = useState(() =>
     createQuestionStore(form, (response) =>
@@ -84,7 +90,7 @@ export function QuestionPrompt({
       setSteer(steerPaste(steer, new TextDecoder().decode(event.bytes)));
     else question.paste(new TextDecoder().decode(event.bytes));
   });
-  const rows = questionRows(state, maxRows);
+  const rows = questionRows(state, maxRows, width);
   function render(row: QuestionRow, index: number) {
     switch (row.kind) {
       case "tabs":
@@ -109,31 +115,25 @@ export function QuestionPrompt({
         return (
           <text
             key={index}
+            flexShrink={0}
             fg={foregroundProp(theme.fg)}
             attributes={TextAttributes.BOLD}
           >
             {row.text}
           </text>
         );
-      case "option": {
-        const mark = row.multiSelect
-          ? row.checked
-            ? "[x] "
-            : "[ ] "
-          : row.checked
-            ? "● "
-            : "";
+      case "option":
         return (
           <text
             key={index}
             id={`question-option:${row.index}`}
-            wrapMode="none"
+            flexShrink={0}
             fg={foregroundProp(row.cursor ? theme.accent : theme.fg)}
             onMouseDown={() =>
               question.click({ kind: "option", index: row.index })
             }
           >
-            {`${row.cursor ? "›" : " "} ${row.index + 1}. ${mark}${row.label}`}
+            {optionLead(row)}
             {row.description ? (
               <span
                 fg={foregroundProp(theme.muted)}
@@ -141,30 +141,29 @@ export function QuestionPrompt({
             ) : null}
           </text>
         );
-      }
       case "other":
         return (
           <text
             key={index}
             id="question-other"
-            wrapMode="none"
+            flexShrink={0}
             fg={foregroundProp(row.cursor ? theme.accent : theme.fg)}
             onMouseDown={() => question.click({ kind: "other" })}
           >
-            {`${row.cursor ? "›" : " "} ${row.number}. ${row.label}: ${row.text}`}
+            {otherLead(row)}
             {row.editing ? (
               "▌"
             ) : row.text ? (
               ""
             ) : (
-              <span fg={foregroundProp(theme.faint)}>type an answer</span>
+              <span fg={foregroundProp(theme.faint)}>{OTHER_PLACEHOLDER}</span>
             )}
           </text>
         );
       case "hint":
         if (steer !== null && row.text.endsWith("Esc cancel"))
           return (
-            <text key={index} wrapMode="none" fg={foregroundProp(theme.fg)}>
+            <text key={index} flexShrink={0} fg={foregroundProp(theme.fg)}>
               {`Message › ${steer}▌`}
               <span fg={foregroundProp(theme.muted)}>
                 {"  Enter send · Esc back"}
@@ -172,7 +171,7 @@ export function QuestionPrompt({
             </text>
           );
         return (
-          <text key={index} wrapMode="none" fg={foregroundProp(theme.muted)}>
+          <text key={index} flexShrink={0} fg={foregroundProp(theme.muted)}>
             {row.text}
           </text>
         );

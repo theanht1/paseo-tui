@@ -532,6 +532,13 @@ export function createMultiHost(
     },
     archiveWorkspace: async (workspace) =>
       actions(owner(workspace.id)).archiveWorkspace(workspace),
+    checkout: (workspace) => actions(owner(workspace.id)).checkout(workspace),
+    hostId: (workspace) => owner(workspace.id).id,
+    forkChat: async (agent) => actions(owner(agent.id)).forkChat(agent),
+    async createWorktree(project, spec) {
+      const { host, project: own } = projectOwner(project.projectId);
+      return owned(host, await actions(host).createWorktree(own, spec));
+    },
   };
 
   const catalog = {

@@ -127,6 +127,23 @@ export function globalAction(
       ?.action ?? null
   );
 }
+/** Ctrl keys a focused question or permission prompt uses itself: list movement and cancel. */
+const PROMPT_CTRL_KEYS = new Set(["b", "c", "d", "f", "n", "p", "u"]);
+/** The app shortcut for a chord pressed while a prompt has focus; plain keys stay the prompt's. */
+export function promptChordAction(
+  stroke: Stroke,
+  bindings: readonly Binding[] = BINDINGS,
+): Action | null {
+  if (!stroke.ctrl && !stroke.meta && !stroke.super) return null;
+  if (stroke.ctrl && PROMPT_CTRL_KEYS.has(stroke.name.toLowerCase()))
+    return null;
+  const key = label(stroke);
+  return (
+    bindings.find(
+      (b) => b.modes.includes("normal") && !b.inert && matches(b, key, stroke),
+    )?.action ?? null
+  );
+}
 /** Terminal programs keep every key but Ctrl-Tab, which reaches the last workspace. */
 export function terminalInputAction(
   stroke: Stroke,

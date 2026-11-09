@@ -7,6 +7,7 @@ import {
   questionClick,
   questionForm,
   questionKey,
+  questionRowHeight,
   questionRows,
 } from "./question-form.js";
 
@@ -194,7 +195,7 @@ describe("questionForm", () => {
   });
 
   it("renders tabs, options, Other, and a submit row, windowing options around the cursor", () => {
-    const rows = questionRows(form(), 20);
+    const rows = questionRows(form(), 20, 200);
     expect(rows.map((row) => row.kind)).toEqual([
       "tabs",
       "question",
@@ -217,13 +218,58 @@ describe("questionForm", () => {
       },
     });
     if (!many) throw Error("question did not parse");
-    const windowed = questionRows(formAfter(many, "8"), 8);
+    const windowed = questionRows(formAfter(many, "8"), 8, 200);
     expect(windowed).toHaveLength(8);
     const options = windowed.flatMap((row) =>
       row.kind === "option" ? [row.index] : [],
     );
     expect(options).toContain(7);
     expect(options).not.toContain(0);
+  });
+});
+
+describe("question rows at a narrow width", () => {
+  const label = "word ".repeat(12).trim();
+  function wide() {
+    const parsed = questionForm({
+      ...request,
+      input: {
+        questions: [
+          {
+            question: "Pick",
+            header: "Pick",
+            options: Array.from({ length: 6 }, () => ({ label })),
+          },
+        ],
+      },
+    });
+    if (!parsed) throw Error("question did not parse");
+    return parsed;
+  }
+  it("counts the rows a wrapped option takes", () => {
+    const option = questionRows(wide(), 40, 40).find(
+      (row) => row.kind === "option",
+    );
+    if (!option) throw Error("no option row");
+    expect(questionRowHeight(option, 40)).toBe(2);
+    expect(questionRowHeight(option, 200)).toBe(1);
+  });
+  it("shows only the options that fit once wrapped, keeping the cursor visible", () => {
+    const rows = questionRows(
+      formAfter(wide(), key("G", { shift: true })),
+      12,
+      40,
+    );
+    const height = rows.reduce(
+      (total, row) => total + questionRowHeight(row, 40),
+      0,
+    );
+    expect(height).toBeLessThanOrEqual(12);
+    const shown = rows.flatMap((row) =>
+      row.kind === "option" ? [row.index] : [],
+    );
+    expect(shown).toContain(5);
+    expect(shown.length).toBeLessThan(6);
   });
 });
 

@@ -107,6 +107,83 @@ describe("Ctrl-C in text inputs", () => {
     expect(app.lastFrame()).not.toContain("Other: xy▌");
     expect(app.lastFrame()).not.toContain(quitNotice);
   });
+  it("runs app shortcuts like Ctrl-^ while a question prompt has focus", async () => {
+    const asking = agent("alpha", {
+      cwd: "/repo/one",
+      workspaceId: "one",
+      pendingPermissions: [
+        {
+          id: "ask",
+          provider: "claude",
+          name: "AskUserQuestion",
+          kind: "question",
+          input: {
+            questions: [
+              {
+                question: "Which database?",
+                header: "Database",
+                options: [{ label: "Postgres" }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const other = agent("gamma", { cwd: "/repo/two", workspaceId: "two" });
+    const { app } = await setup([other, asking], 30);
+    await press(app, "\r", "]");
+    await settleUntil(app.lastFrame, "Which database?");
+    await press(app, "\u001e");
+    await settleUntil(app.lastFrame, "hello gamma");
+    expect(app.lastFrame()).toContain("hello gamma");
+  });
+  it("shows all of a long question, wrapped", async () => {
+    const request: AgentPermissionRequest = {
+      id: "ask",
+      provider: "claude",
+      name: "AskUserQuestion",
+      kind: "question",
+      input: {
+        questions: [
+          {
+            question: `${"lorem ipsum ".repeat(30)}finalword`,
+            header: "Database",
+            options: [{ label: "Postgres" }],
+          },
+        ],
+      },
+    };
+    const { app } = await setup(
+      [agent("alpha", { pendingPermissions: [request] })],
+      30,
+    );
+    await press(app, "\r");
+    expect(app.lastFrame()).toContain("finalword");
+  });
+  it("wraps a long question option instead of cutting it off", async () => {
+    const request: AgentPermissionRequest = {
+      id: "ask",
+      provider: "claude",
+      name: "AskUserQuestion",
+      kind: "question",
+      input: {
+        questions: [
+          {
+            question: "Which database?",
+            header: "Database",
+            multiSelect: false,
+            options: [{ label: "Postgres", description: longText }],
+          },
+        ],
+      },
+    };
+    const { app } = await setup(
+      [agent("alpha", { pendingPermissions: [request] })],
+      30,
+    );
+    await press(app, "\r");
+    expect(app.lastFrame()).toContain("end-marker");
+  });
 });
 
 const longText = `start-marker ${"lorem ipsum ".repeat(18)}end-marker`;

@@ -240,6 +240,7 @@ it("leaves archiving an agent to Close tab, and archives the open workspace inst
   const manage = {
     workspace,
     hosts: true,
+    transferWorkspace: () => {},
     archiveWorkspace: (target: typeof workspace) =>
       ran.push(["archive", target.id]),
     addProject: () => ran.push("add-project"),
@@ -267,6 +268,7 @@ it("leaves archiving an agent to Close tab, and archives the open workspace inst
     manage,
   }).items();
   const titles = [
+    "Transfer workspace…",
     "Archive workspace…",
     "Add project…",
     "Projects…",

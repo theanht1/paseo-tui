@@ -2,16 +2,18 @@ import type { PaseoAgent, PaseoProject, PaseoTerminal } from "@getpaseo/client";
 import type { ForkAttachment } from "../connection/ports.js";
 import { createEmitter } from "../state/emitter.js";
 import type { AgentsPort, CreateAgentInput } from "../state/ports.js";
+import { agentName, shortPath } from "./agent/agent-display.js";
 import type { ThinkingPreference } from "./agent/thinking-preference.js";
 import {
   agentConfigurationStep,
   type ConfigurationDeps,
 } from "./command-center/create-agent.js";
-import type { CommandStep } from "./command-center/registry.js";
+import type { CommandItem, CommandStep } from "./command-center/registry.js";
 import { editorTerminal } from "./file-links/editor-terminal.js";
 import type { FileLink } from "./file-links/links.js";
 import { type HostScope, type HostsPort, hostSubtitle } from "./hosts/hosts.js";
 import type { ProjectPlacement } from "./hosts/merge.js";
+import { defaultBaseBranch } from "./workspace/base-branch.js";
 import { diffToolTab, diffToolTerminal } from "./workspace/diff-tool.js";
 import { newTabInput } from "./workspace/tab-template.js";
 import type {
@@ -22,6 +24,10 @@ import {
   editorTab,
   workspaceEditorTerminal,
 } from "./workspace/workspace-editor.js";
+import {
+  transferWorkspace as runTransfer,
+  type TransferDestination,
+} from "./workspace/workspace-transfer.js";
 import {
   tabName,
   type WorkspaceRow,
@@ -93,6 +99,11 @@ interface Target {
   catalog: ConfigurationDeps;
   created(workspace: WorkspaceRow, agent: PaseoAgent | null): Promise<void>;
   added(project: PaseoProject): Promise<void>;
+}
+function toggled(selected: ReadonlySet<string>, id: string) {
+  const next = new Set(selected);
+  if (!next.delete(id)) next.add(id);
+  return next;
 }
 function projectName(project: PaseoProject) {
   return project.projectCustomName || project.projectDisplayName;
@@ -786,6 +797,209 @@ export function createManagementController(context: () => ManagementContext) {
     if (snapshot.operation.kind === "running") return;
     publish({ ...snapshot, overlay: { kind: "confirm-archive", workspace } });
   }
+  function startTransfer(
+    source: WorkspaceRow,
+    destination: TransferDestination,
+    target: Target,
+    agentIds: ReadonlySet<string>,
+  ) {
+    run("Transferring workspace…", async () => {
+      const from = actions();
+      const to = target.actions();
+      const workspaceAgents = transferableAgents(source);
+      const result = await runTransfer(
+        {
+          source,
+          destination,
+          agents: workspaceAgents.filter((agent) => agentIds.has(agent.id)),
+          workspaceAgents,
+        },
+        {
+          sourceGit: from.checkout(source),
+          targetGit: to.checkout(source),
+          unique: () => Date.now().toString(36),
+          createWorktree: (project, spec) => to.createWorktree(project, spec),
+          forkChat: (agent) => from.forkChat(agent),
+          createAgent: (workspace, input) => to.createAgent(workspace, input),
+          progress(message) {
+            publish({ ...snapshot, operation: { kind: "running", message } });
+          },
+        },
+      );
+      await context().refresh();
+      opened(result.workspace, result.agents[0] ?? null);
+      if (result.notices.length)
+        wizard("Transfer finished", {
+          kind: "readOnly",
+          title: "Transfer finished",
+          lines: () => result.notices,
+        });
+    });
+  }
+  function transferableAgents(source: WorkspaceRow) {
+    return context().agents.filter((agent) => agent.workspaceId === source.id);
+  }
+  function transferAgentsStep(
+    source: WorkspaceRow,
+    destination: TransferDestination,
+    target: Target,
+    selected: ReadonlySet<string>,
+  ): CommandStep {
+    return {
+      kind: "choice",
+      title: "Agents to transfer",
+      items: () => [
+        {
+          id: "transfer:go",
+          group: "Workspaces",
+          title: `Transfer ${selected.size} agent${selected.size === 1 ? "" : "s"}`,
+          subtitle: "Originals stay where they are",
+          run(): undefined {
+            startTransfer(source, destination, target, selected);
+          },
+        },
+        ...transferableAgents(source).map((agent) => ({
+          id: `transfer:agent:${agent.id}`,
+          group: "Workspaces" as const,
+          title: `[${selected.has(agent.id) ? "x" : " "}] ${agentName(agent)}`,
+          subtitle: agent.provider,
+          run: () =>
+            transferAgentsStep(
+              source,
+              destination,
+              target,
+              toggled(selected, agent.id),
+            ),
+        })),
+      ],
+    };
+  }
+  function transferDestinationStep(
+    source: WorkspaceRow,
+    target: Target,
+    project: PaseoProject,
+    sameHost: boolean,
+  ): CommandStep {
+    const current = context().tab;
+    const newest = transferableAgents(source)[0];
+    const start = new Set(
+      current?.kind === "agent" && current.agent.workspaceId === source.id
+        ? [current.agent.id]
+        : newest
+          ? [newest.id]
+          : [],
+    );
+    const agents = (destination: TransferDestination) =>
+      transferAgentsStep(source, destination, target, start);
+    return {
+      kind: "choice",
+      title: "Transfer to",
+      items: async () => {
+        const from = actions();
+        const state = await from
+          .checkout(source)
+          .status(source.workspaceDirectory);
+        const onDefault = state.branch === defaultBaseBranch([], state.baseRef);
+        const newWorktree: CommandItem = {
+          id: "transfer:new-worktree",
+          group: "Workspaces",
+          title: "New worktree",
+          subtitle: sameHost
+            ? `Takes ${state.branch ?? "this checkout"} and its uncommitted changes`
+            : `Pushes ${state.branch ?? "this checkout"}; commit changes first`,
+          run: (): CommandStep =>
+            !sameHost
+              ? agents({ kind: "other-host-worktree", project })
+              : onDefault
+                ? {
+                    kind: "input",
+                    title: "Branch name",
+                    placeholder:
+                      "New branch name (optional, Enter to auto-name)",
+                    submit: (name) =>
+                      agents({
+                        kind: "new-worktree",
+                        project,
+                        branchName: name.trim() || null,
+                      }),
+                  }
+                : agents({ kind: "new-worktree", project, branchName: null }),
+        };
+        const home = from.hostId(source);
+        return [
+          newWorktree,
+          ...(sameHost
+            ? context()
+                .workspaces.filter(
+                  (workspace) =>
+                    workspace.projectId === source.projectId &&
+                    workspace.id !== source.id &&
+                    from.hostId(workspace) === home,
+                )
+                .map(
+                  (workspace): CommandItem => ({
+                    id: `transfer:workspace:${workspace.id}`,
+                    group: "Workspaces",
+                    title: workspace.title || workspace.name,
+                    subtitle: shortPath(workspace.workspaceDirectory),
+                    run: () => agents({ kind: "existing", workspace }),
+                  }),
+                )
+            : []),
+        ];
+      },
+    };
+  }
+  /** Transfer › Host (when on several) › Destination › Agents. */
+  function transferWorkspace(source: WorkspaceRow) {
+    if (snapshot.operation.kind === "running") return;
+    const project = context().projects.find(
+      (candidate) => candidate.projectId === source.projectId,
+    );
+    if (project?.projectKind !== "git") {
+      notify("Only git workspaces can be transferred");
+      return;
+    }
+    const { hosts, placements } = context();
+    const found = placements?.(project.projectId) ?? [];
+    if (!hosts || found.length === 0) {
+      wizard(
+        "Transfer workspace",
+        transferDestinationStep(source, here, project, true),
+      );
+      return;
+    }
+    const home = actions().hostId(source);
+    function on(hostId: string, own: PaseoProject) {
+      if (!hosts) throw Error("Hosts are unavailable");
+      return transferDestinationStep(
+        source,
+        scoped(hosts.scope(hostId)),
+        own,
+        hostId === home,
+      );
+    }
+    const only = found.length === 1 ? found[0] : undefined;
+    if (only) {
+      wizard("Transfer workspace", on(only.hostId, only.project));
+      return;
+    }
+    wizard("Transfer workspace", {
+      kind: "choice",
+      title: "Host",
+      items: () =>
+        found.map(({ hostId, project: own }) => {
+          const host = hosts.list().find((option) => option.id === hostId);
+          return {
+            id: `host:${hostId}`,
+            group: "Workspaces" as const,
+            title: host?.label ?? hostId,
+            subtitle: `${own.projectRootPath} · ${hostId === home ? "this workspace's host" : (host?.status ?? "offline")}`,
+            run: () => on(hostId, own),
+          };
+        }),
+    });
+  }
   function confirmArchiveWorkspace() {
     if (snapshot.overlay.kind !== "confirm-archive") return;
     const { workspace } = snapshot.overlay;
@@ -834,6 +1048,7 @@ export function createManagementController(context: () => ManagementContext) {
     renameCurrentTab,
     closeTab,
     archiveWorkspace,
+    transferWorkspace,
     confirmArchiveWorkspace,
     confirmCloseTab,
     menu,

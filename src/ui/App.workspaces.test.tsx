@@ -289,6 +289,54 @@ it("dims the sidebar title and accents the agent title when pane focus moves", a
     ),
   ).toBe(true);
 });
+it("spins in the status bar while an operation runs", async () => {
+  let finish = () => {};
+  const renamed = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const management: NonNullable<AppProps["management"]> = {
+    ...NO_PROJECT_ACTIONS,
+    baseBranches: async () => ({ branches: ["main"], defaultBranch: "main" }),
+    openFile: async () => {
+      throw Error("Unexpected");
+    },
+    createWorkspace: async () => {
+      throw Error("Unexpected create");
+    },
+    createAgent: async () => agent("new"),
+    createTerminal: async () => {
+      throw Error("Unexpected terminal");
+    },
+    renameWorkspace: () => renamed,
+    closeTab: async () => {},
+    archiveWorkspace: async () => {},
+    renameTab: async () => {},
+  };
+  const { app, test } = await setup(
+    agents,
+    24,
+    false,
+    {},
+    "agents",
+    undefined,
+    management,
+  );
+  app.stdin.write("R");
+  await settle();
+  app.stdin.write("\u0015");
+  app.stdin.write("Renamed");
+  await settle();
+  const apply = test.renderer.root.findDescendantById("command:submit");
+  if (!apply) throw Error("Missing Apply");
+  await test.mockMouse.click(apply.x + 2, apply.y);
+  await settle();
+  app.stdin.write("\r");
+  await settle();
+  expect(app.lastFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Renaming workspace…/);
+  finish();
+  await settle();
+  expect(app.lastFrame()).not.toContain("Renaming workspace…");
+});
 it("runs workspace and tab rename from shortcuts and the mouse Apply button", async () => {
   const names: { kind: string; id: string; name: string }[] = [];
   const management: NonNullable<AppProps["management"]> = {

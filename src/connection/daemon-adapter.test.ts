@@ -352,16 +352,82 @@ test("surfaces command and file listing errors", async () => {
   await expect(adapter.files("/repo", "")).rejects.toThrow("denied");
 });
 
+const STATUS = {
+  baseRef: null,
+  currentBranch: null,
+  isDirty: null,
+  error: null,
+};
+const OK = { error: null };
+const NO_CHECKOUT_DAEMON = {
+  checkoutSwitchBranch: async () => OK,
+  renameBranch: async () => OK,
+  stashSave: async () => OK,
+  stashPop: async () => OK,
+  stashList: async () => ({ entries: [], error: null }),
+  checkoutPush: async () => OK,
+};
+test("reports a checkout's state and raises the daemon's git errors", async () => {
+  const { checkout } = createGitAdapter({
+    ...NO_CHECKOUT_DAEMON,
+    getBranchSuggestions: async () => ({ branches: [], error: null }),
+    getCheckoutStatus: async () => ({
+      baseRef: "origin/main",
+      currentBranch: "feat",
+      isDirty: true,
+      error: null,
+    }),
+    checkoutSwitchBranch: async () => ({
+      error: { message: "main is already used by worktree" },
+    }),
+  });
+  expect(await checkout.status("/repo")).toEqual({
+    branch: "feat",
+    dirty: true,
+    baseRef: "origin/main",
+  });
+  await expect(checkout.switchBranch("/repo", "main")).rejects.toThrow(
+    "already used by worktree",
+  );
+});
+test("pops the stash saved under a label, wherever it sits in the list", async () => {
+  const popped: number[] = [];
+  const { checkout } = createGitAdapter({
+    ...NO_CHECKOUT_DAEMON,
+    getBranchSuggestions: async () => ({ branches: [], error: null }),
+    getCheckoutStatus: async () => STATUS,
+    stashList: async () => ({
+      entries: [
+        { index: 0, message: "On main: paseo-auto-stash other" },
+        { index: 1, message: "On feat: paseo-auto-stash paseo-transfer-x1" },
+      ],
+      error: null,
+    }),
+    async stashPop(_, index) {
+      popped.push(index);
+      return OK;
+    },
+  });
+  await checkout.unstash("/trees/new", "paseo-transfer-x1");
+  expect(popped).toEqual([1]);
+  await expect(checkout.unstash("/trees/new", "missing")).rejects.toThrow(
+    "No stash named missing",
+  );
+});
 test("lists repository branches and the daemon-reported base ref for new worktrees", async () => {
   const calls: unknown[] = [];
   const adapter = createGitAdapter({
+    ...NO_CHECKOUT_DAEMON,
     async getBranchSuggestions(options) {
       calls.push(["branches", options]);
       return { branches: ["dev", "main"], error: null };
     },
     async getCheckoutStatus(cwd) {
       calls.push(["status", cwd]);
-      return { isGit: true, baseRef: "origin/main", error: null };
+      return {
+        ...STATUS,
+        baseRef: "origin/main",
+      };
     },
   });
   expect(await adapter.branches("/repo")).toEqual({
@@ -373,11 +439,12 @@ test("lists repository branches and the daemon-reported base ref for new worktre
     ["status", "/repo"],
   ]);
   const failing = createGitAdapter({
+    ...NO_CHECKOUT_DAEMON,
     async getBranchSuggestions() {
       return { branches: [], error: "not a repository" };
     },
     async getCheckoutStatus() {
-      return { isGit: false, baseRef: null, error: null };
+      return STATUS;
     },
   });
   await expect(failing.branches("/x")).rejects.toThrow("not a repository");

@@ -1,7 +1,7 @@
 import type { PaseoProject } from "@getpaseo/client";
 import { expect, it } from "vitest";
 import type { CreateAgentInput } from "../state/ports.js";
-import { agent } from "../test/fixtures.js";
+import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { CommandStep } from "./command-center/registry.js";
 import type { HostOption, HostScope, HostsPort } from "./hosts/hosts.js";
 import {
@@ -46,6 +46,7 @@ type Call =
   | { kind: "directories"; host: string; query: string };
 function actions(host: string, calls: Call[]): WorkspaceActions {
   return {
+    ...NO_PROJECT_ACTIONS,
     directories: async (query) => {
       calls.push({ kind: "directories", host, query });
       return [`/${host}/app`, `/${host}/api`];

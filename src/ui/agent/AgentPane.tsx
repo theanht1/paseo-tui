@@ -27,6 +27,7 @@ import {
 } from "../permission/permission-focus.js";
 import { permissionHeight as measurePermissionHeight } from "../permission/permission-layout.js";
 import { PromptInput } from "../prompt/PromptInput.js";
+import type { PromptDrafts } from "../prompt/prompt-drafts.js";
 import { QuestionPrompt } from "../prompt/QuestionPrompt.js";
 import { QueuedMessages } from "../prompt/QueuedMessages.js";
 import { questionForm } from "../prompt/question-form.js";
@@ -68,8 +69,10 @@ export function AgentPane({
   setMode,
   controls,
   height,
+  width,
   prefix,
   onSearchStatus,
+  drafts,
   completions,
   editPrompt,
   editRequest = 0,
@@ -91,8 +94,10 @@ export function AgentPane({
   setMode: (mode: Mode) => void;
   controls: Ref<TimelineControls>;
   height: number;
+  width: number;
   prefix: Stroke;
   onSearchStatus: (status: string) => void;
+  drafts: PromptDrafts;
   completions?: CompletionPort;
   editPrompt?(text: string): Promise<string>;
   /** Incremented to open the external editor on the prompt (Command Center action). */
@@ -243,6 +248,7 @@ export function AgentPane({
           store={store}
           focused={focused && focus.pane === "permission"}
           maxRows={Math.max(4, height - 5)}
+          width={width - 4}
         />
       ) : permission ? (
         <PermissionPrompt
@@ -277,6 +283,7 @@ export function AgentPane({
           name={agentName(agent)}
           agentId={agent.id}
           cwd={agent.cwd}
+          drafts={drafts}
           completions={completions}
           editPrompt={editPrompt}
           editRequest={editRequest}

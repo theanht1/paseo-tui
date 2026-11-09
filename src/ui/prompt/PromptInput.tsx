@@ -15,6 +15,7 @@ import {
   CLOSED_COMPLETIONS,
   createCompletionStore,
 } from "./prompt-completion.js";
+import type { PromptDrafts } from "./prompt-drafts.js";
 
 const VISIBLE_ITEMS = 8;
 const MAX_INPUT_ROWS = 6;
@@ -25,6 +26,7 @@ interface PromptInputProps {
   name: string;
   agentId: string;
   cwd: string;
+  drafts: PromptDrafts;
   completions?: CompletionPort;
   editPrompt?(text: string): Promise<string>;
   editRequest?: number;
@@ -40,6 +42,7 @@ export function PromptInput({
   name,
   agentId,
   cwd,
+  drafts,
   completions,
   editPrompt,
   editRequest = 0,
@@ -48,6 +51,7 @@ export function PromptInput({
   onClose,
 }: PromptInputProps) {
   const editor = useRef<TextareaRenderable>(null);
+  const [restored] = useState(() => drafts.get(agentId));
   const inFlight = useRef(false);
   const [sending, setSending] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -76,8 +80,20 @@ export function PromptInput({
   function sync() {
     measure();
     const current = editor.current;
-    if (current && completion)
-      completion.update(current.plainText, current.cursorOffset);
+    if (!current) return;
+    drafts.record(agentId, {
+      text: current.plainText,
+      cursor: current.cursorOffset,
+    });
+    completion?.update(current.plainText, current.cursorOffset);
+  }
+  useEffect(() => {
+    if (restored && editor.current)
+      editor.current.cursorOffset = restored.cursor;
+  }, [restored]);
+  function forgetInput() {
+    editor.current?.clear();
+    drafts.record(agentId, { text: "", cursor: 0 });
   }
   function replace(text: string, cursor: number) {
     const current = editor.current;
@@ -151,7 +167,7 @@ export function PromptInput({
     if (queue && (kind === "running" || kind === "stopping")) {
       // The turn is busy: hold the message, and stay in the prompt for the next one.
       queue.enqueue(text);
-      editor.current?.clear();
+      forgetInput();
       return;
     }
     inFlight.current = true;
@@ -160,7 +176,7 @@ export function PromptInput({
     inFlight.current = false;
     setSending(false);
     if (!store.getSnapshot().lastActionError) {
-      editor.current?.clear();
+      forgetInput();
       onClose();
     }
   }
@@ -253,6 +269,7 @@ export function PromptInput({
       ) : null}
       <textarea
         ref={editor}
+        initialValue={restored?.text ?? ""}
         height={inputHeight}
         focused={focused && !sending && !editing}
         onSizeChange={measure}

@@ -4,6 +4,56 @@ import type { CommandListSource } from "../connection/ports.js";
 import { agents, settle, setup } from "../test/app-harness.js";
 import type { AppProps } from "./App.js";
 
+describe("prompt drafts", () => {
+  /** Presses each key in turn; a lone Escape needs the parser's timeout to pass. */
+  async function type(
+    app: Awaited<ReturnType<typeof setup>>["app"],
+    ...keys: string[]
+  ) {
+    for (const key of keys) {
+      app.stdin.write(key);
+      if (key === "\u001b")
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      await settle();
+    }
+  }
+  it("keeps the typed message across switching agent tabs", async () => {
+    const { app } = await setup();
+    await type(app, "\r", "i", ..."half a thought", "\u001b", "g", "t");
+    expect(app.lastFrame()).toContain("hello beta");
+    expect(app.lastFrame()).not.toContain("half a thought");
+    await type(app, "g", "T");
+    expect(app.lastFrame()).toContain("half a thought");
+  });
+  it("keeps the cursor where it was", async () => {
+    const { app, ports } = await setup();
+    await type(
+      app,
+      "\r",
+      "i",
+      "a",
+      "d",
+      "\u001b[D",
+      "\u001b",
+      "g",
+      "t",
+      "g",
+      "T",
+      "i",
+      "b",
+      "\r",
+    );
+    expect(ports.get("alpha")?.sent).toEqual(["abd"]);
+  });
+  it("forgets the message once it is sent", async () => {
+    const { app, ports } = await setup();
+    await type(app, "\r", "i", ..."done", "\r");
+    expect(ports.get("alpha")?.sent).toEqual(["done"]);
+    await type(app, "g", "t", "g", "T");
+    expect(app.lastFrame()).toContain("Press i or a to message Alpha agent");
+  });
+});
+
 describe("prompt completions and external editor", () => {
   const completions = {
     fileQueries: [] as string[],

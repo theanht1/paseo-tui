@@ -7,10 +7,16 @@ import type {
   PaseoWorkspaceAgentCreateOptions,
   PaseoWorkspaceCreateOptions,
 } from "@getpaseo/client";
-import type { ProjectPort } from "../../connection/ports.js";
+import type {
+  AgentFeaturesPort,
+  CheckoutPort,
+  ForkAttachment,
+  ProjectPort,
+} from "../../connection/ports.js";
 import type { CreateAgentInput } from "../../state/ports.js";
 import type { EditorTerminal } from "../file-links/editor-terminal.js";
 import { defaultBaseBranch } from "./base-branch.js";
+import type { WorktreeSpec } from "./workspace-transfer.js";
 import type { WorkspaceRow, WorkspaceTab } from "./workspaces.js";
 export interface ManagementCapabilities {
   create: boolean;
@@ -53,6 +59,8 @@ export interface ManagementApi {
     cwd: string,
   ): Promise<{ branches: string[]; baseRef: string | null }>;
   projects: ProjectPort;
+  checkout: CheckoutPort;
+  forkContext: AgentFeaturesPort["forkContext"];
 }
 function updateRequired(feature: string) {
   return Error(`Update the Paseo daemon to use ${feature}.`);
@@ -142,6 +150,48 @@ export function createWorkspaceActions(
         agent: agentOptions(input),
         ...(input.title ? { title: input.title } : {}),
       });
+    },
+    /** A worktree workspace with no first agent. */
+    async createWorktree(
+      project: PaseoProject,
+      spec: WorktreeSpec,
+    ): Promise<WorkspaceRow> {
+      requireCapability(
+        capabilities.create,
+        "workspace creation (creationLifecycle)",
+      );
+      requireCapability(
+        capabilities.workspace,
+        "workspaces (workspaceMultiplicity)",
+      );
+      const { workspace } = await api.createWorkspace({
+        source: {
+          kind: "worktree",
+          projectId: project.projectId,
+          cwd: project.projectRootPath,
+          ...(spec.kind === "checkout"
+            ? { action: "checkout", refName: spec.branch }
+            : {
+                action: "branch-off",
+                baseBranch: spec.base,
+                ...(spec.branch ? { branchName: spec.branch } : {}),
+              }),
+        },
+      });
+      return workspace;
+    },
+    /** The git port of the host holding `workspace`. */
+    checkout(_workspace: WorkspaceRow): CheckoutPort {
+      return api.checkout;
+    },
+    /** The host holding `workspace`; null with a single daemon. */
+    hostId(_workspace: WorkspaceRow): string | null {
+      return null;
+    },
+    async forkChat(agent: PaseoAgent): Promise<ForkAttachment> {
+      if (!api.forkContext)
+        throw updateRequired("agent transfer (agentForkContext)");
+      return api.forkContext(agent.id, null);
     },
     async createAgent(workspace: WorkspaceRow, input: CreateAgentInput) {
       requireCapability(
@@ -238,7 +288,12 @@ export function managementApi(
   api: Pick<PaseoApi, "workspaces" | "terminals" | "agents">,
   daemon: Pick<
     ManagementApi,
-    "renameAgent" | "renameTerminal" | "branches" | "projects"
+    | "renameAgent"
+    | "renameTerminal"
+    | "branches"
+    | "projects"
+    | "checkout"
+    | "forkContext"
   >,
 ): ManagementApi {
   return {

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { ProjectPort } from "../../connection/ports.js";
-import { agent } from "../../test/fixtures.js";
+import { agent, NO_TRANSFER_API } from "../../test/fixtures.js";
 import {
   createWorkspaceActions,
   type ManagementApi,
@@ -37,6 +37,7 @@ const input = {
 it("creates a project worktree with the requested initial agent and creates tabs in the exact workspace", async () => {
   const calls: unknown[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     createWorkspace: async (options) => {
       calls.push(options);
       return { workspace, agent: agent("a", { workspaceId: "w" }) };
@@ -122,6 +123,7 @@ it("creates a project worktree with the requested initial agent and creates tabs
 it("blocks unsupported operations before RPC and rejects blank names", async () => {
   let calls = 0;
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     createWorkspace: async () => {
       calls++;
       return { workspace, agent: null };
@@ -179,6 +181,7 @@ it("blocks unsupported operations before RPC and rejects blank names", async () 
 it("archives agent tabs and kills terminal tabs, gating terminals before RPC", async () => {
   const calls: string[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     branches: async () => ({ branches: [], baseRef: null }),
     projects: NO_PROJECTS,
     createWorkspace: async () => {
@@ -224,6 +227,7 @@ it("archives agent tabs and kills terminal tabs, gating terminals before RPC", a
 it("archives the exact workspace and blocks unsupported workspace archive before RPC", async () => {
   const calls: string[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     branches: async () => ({ branches: [], baseRef: null }),
     projects: NO_PROJECTS,
     createWorkspace: async () => {
@@ -260,6 +264,7 @@ it("archives the exact workspace and blocks unsupported workspace archive before
 it("lists base branches for the project root with the default first", async () => {
   const roots: string[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     createWorkspace: async () => ({ workspace, agent: null }),
     createAgent: async () => agent("a"),
     createTerminal: async () => ({
@@ -295,6 +300,7 @@ it("lists base branches for the project root with the default first", async () =
 it("opens a file by creating a named terminal in the workspace that runs the editor", async () => {
   const created: unknown[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     createWorkspace: async () => ({ workspace, agent: null }),
     createAgent: async () => agent("a"),
     createTerminal: async (workspaceId, options) => {
@@ -344,6 +350,7 @@ it("adds and removes projects through the host, asking for an update when it can
     directories: async (query) => [`/src/${query}`],
   };
   const api = (port: ProjectPort): ManagementApi => ({
+    ...NO_TRANSFER_API,
     createWorkspace: async () => {
       throw Error("Unexpected");
     },
@@ -400,6 +407,7 @@ it("gives a new workspace's first agent the fork's chat history", async () => {
   const calls: unknown[] = [];
   const actions = createWorkspaceActions(
     {
+      ...NO_TRANSFER_API,
       createWorkspace: async (options) => {
         calls.push(options);
         return { workspace, agent: null };
@@ -439,6 +447,7 @@ it("gives a new workspace's first agent the fork's chat history", async () => {
 function titleRecorder() {
   const calls: unknown[] = [];
   const api: ManagementApi = {
+    ...NO_TRANSFER_API,
     createWorkspace: async (options) => {
       calls.push(options);
       return { workspace, agent: null };

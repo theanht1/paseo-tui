@@ -3,6 +3,7 @@ import type {
   AgentPermissionRequest,
   AgentPermissionResponse,
 } from "@getpaseo/protocol/agent-types";
+import stringWidth from "fast-string-width";
 import { createEmitter } from "../../state/emitter.js";
 import type { Stroke } from "../input/keymap.js";
 import { listKey } from "../input/list-keys.js";
@@ -323,9 +324,96 @@ export function questionClick(
   }
 }
 
+type OptionRow = Extract<QuestionRow, { kind: "option" }>;
+type OtherRow = Extract<QuestionRow, { kind: "other" }>;
+export const OTHER_PLACEHOLDER = "type an answer";
+export function optionLead(row: OptionRow) {
+  const mark = row.multiSelect
+    ? row.checked
+      ? "[x] "
+      : "[ ] "
+    : row.checked
+      ? "● "
+      : "";
+  return `${row.cursor ? "›" : " "} ${row.index + 1}. ${mark}${row.label}`;
+}
+export function otherLead(row: OtherRow) {
+  return `${row.cursor ? "›" : " "} ${row.number}. ${row.label}: ${row.text}`;
+}
+/** Rows `text` takes when word-wrapped to `width` columns. */
+function wrappedHeight(text: string, width: number) {
+  const limit = Math.max(1, width);
+  let rows = 0;
+  for (const line of text.split(/\r?\n/)) {
+    rows += 1;
+    let used = 0;
+    for (const word of line.split(/(?<=\s)/)) {
+      const visible = stringWidth(word.trimEnd());
+      if (used > 0 && used + visible > limit) {
+        rows += 1;
+        used = 0;
+      }
+      if (visible > limit) {
+        rows += Math.ceil(visible / limit) - 1;
+        used = visible % limit;
+      } else used += stringWidth(word);
+    }
+  }
+  return rows;
+}
+/** Screen rows `row` takes in a prompt `width` columns wide. */
+export function questionRowHeight(row: QuestionRow, width: number): number {
+  switch (row.kind) {
+    case "tabs":
+    case "buttons":
+      return 1;
+    case "question":
+    case "hint":
+      return wrappedHeight(row.text, width);
+    case "option":
+      return wrappedHeight(
+        `${optionLead(row)}${row.description ? ` — ${row.description}` : ""}`,
+        width,
+      );
+    case "other":
+      return wrappedHeight(
+        `${otherLead(row)}${row.editing ? "▌" : row.text ? "" : OTHER_PLACEHOLDER}`,
+        width,
+      );
+  }
+}
+function rowsHeight(rows: readonly QuestionRow[], width: number) {
+  return rows.reduce((total, row) => total + questionRowHeight(row, width), 0);
+}
+/** The options around the cursor that fit `room` rows; the cursor's always shows. */
+function optionWindow(
+  options: readonly QuestionRow[],
+  cursor: number,
+  room: number,
+  width: number,
+) {
+  const heights = options.map((row) => questionRowHeight(row, width));
+  let first = cursor;
+  let last = cursor;
+  let used = heights[cursor] ?? 0;
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const next of [first - 1, last + 1]) {
+      const height = heights[next];
+      if (height === undefined || used + height > room) continue;
+      used += height;
+      if (next < first) first = next;
+      else last = next;
+      grew = true;
+    }
+  }
+  return options.slice(first, last + 1);
+}
+
 export function questionRows(
   form: QuestionForm,
   maxRows: number,
+  width: number,
 ): QuestionRow[] {
   const question = current(form);
   const head: QuestionRow[] = [
@@ -371,12 +459,11 @@ export function questionRows(
     },
     { kind: "buttons", canSubmit: canSubmitQuestions(form) },
   ];
-  const room = Math.max(1, maxRows - head.length - tail.length);
-  const start = Math.max(
-    0,
-    Math.min(options.length - room, form.cursor - Math.floor(room / 2)),
+  const room = Math.max(
+    1,
+    maxRows - rowsHeight(head, width) - rowsHeight(tail, width),
   );
-  return [...head, ...options.slice(start, start + room), ...tail];
+  return [...head, ...optionWindow(options, form.cursor, room, width), ...tail];
 }
 
 export function createQuestionStore(

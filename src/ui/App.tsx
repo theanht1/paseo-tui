@@ -138,6 +138,7 @@ import {
   type Mode,
   paletteReturnMode,
   parsePrefix,
+  promptChordAction,
   type Stroke,
   shortcutFor,
   terminalInputAction,
@@ -180,6 +181,7 @@ import { ManagementOverlayView } from "./overlays/ManagementOverlayView.js";
 import { ShortcutPopup } from "./overlays/ShortcutPopup.js";
 import type { Focus } from "./permission/permission-focus.js";
 import { cachedCommands } from "./prompt/command-cache.js";
+import { createPromptDrafts } from "./prompt/prompt-drafts.js";
 import {
   backgroundProp,
   foregroundProp,
@@ -363,6 +365,7 @@ export function App({
   const router = useMemo(() => createKeyRouter(), []);
   const clipboardWriter: ClipboardWriter = clipboard ?? renderer;
   const [notice, setNotice] = useState<{ text: string } | null>(null);
+  const [drafts] = useState(createPromptDrafts);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 2500);
@@ -1676,6 +1679,7 @@ export function App({
         null,
       hosts: hosts !== undefined,
       archiveWorkspace: (workspace) => manager.archiveWorkspace(workspace),
+      transferWorkspace: (workspace) => manager.transferWorkspace(workspace),
       addProject: () => manager.addProject(),
       listProjects: () => manager.listProjects(),
       removeProject: () => manager.removeProject(),
@@ -1875,6 +1879,21 @@ export function App({
       event.stopPropagation();
       act(always);
       return;
+    }
+    if (
+      focus.pane === "permission" &&
+      !help &&
+      subagentPopup === null &&
+      managementState.overlay.kind === "closed" &&
+      mode.kind !== "palette"
+    ) {
+      const chord = promptChordAction(event, bindings);
+      if (chord) {
+        event.preventDefault();
+        event.stopPropagation();
+        act(chord);
+        return;
+      }
     }
     if (event.ctrl && event.name === "c") {
       event.preventDefault();
@@ -2141,11 +2160,13 @@ export function App({
                             setFocus={setFocus}
                             setMode={setMode}
                             height={rect.height - 3}
+                            width={rect.width - 2}
                             prefix={prefix}
                             controls={(value) => {
                               if (value) controls.current.set(pane.id, value);
                               else controls.current.delete(pane.id);
                             }}
+                            drafts={drafts}
                             completions={commandPort}
                             editPrompt={promptEditor}
                             editRequest={
@@ -2229,6 +2250,7 @@ export function App({
             </text>
           ) : null}
           <StatusBar
+            loading={managementState.operation.kind === "running"}
             onHelp={() => {
               manager.close();
               setHelp(true);

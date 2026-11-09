@@ -7,6 +7,7 @@ import {
   type ContextWindow,
   contextMeterText,
 } from "./agent/context-window.js";
+import { Spinner } from "./agent/WorkingIndicator.js";
 import type { UsageConfig } from "./config/user-config.js";
 import { BINDINGS } from "./input/bindings.js";
 import type { Binding, Context, Mode } from "./input/keymap.js";
@@ -73,6 +74,8 @@ function levelColor(level: "ok" | "warn" | "error", theme: Theme): string {
 }
 export interface StatusBarProps {
   label: string;
+  /** Spins before the label while a workspace operation runs. */
+  loading?: boolean;
   connection: ExternalStore<ConnectionState>;
   timeline: ExternalStore<TimelineSnapshot> | null;
   mode: Mode;
@@ -91,6 +94,7 @@ export interface StatusBarProps {
 
 export function StatusBar({
   label,
+  loading = false,
   connection,
   timeline,
   mode,
@@ -137,6 +141,7 @@ export function StatusBar({
       suffix={suffix}
       meter={meter}
       hints={hints}
+      loading={loading}
       searchStatus={searchStatus ?? ""}
       onHelp={onHelp}
     />
@@ -146,6 +151,7 @@ export function StatusBar({
       prefix={`${prefix}${suffix}`}
       meter={meter}
       hints={hints}
+      loading={loading}
       onHelp={onHelp}
     />
   );
@@ -164,6 +170,7 @@ function TimelineStatus({
   searchStatus: string;
   width: number;
   hints: readonly string[];
+  loading: boolean;
   onHelp?: () => void;
 }) {
   const { turn } = useStore(store);
@@ -189,21 +196,29 @@ function StatusText({
   prefix,
   meter,
   hints,
+  loading,
   onHelp,
 }: {
   width: number;
   prefix: string;
   meter: Meter | null;
   hints: readonly string[];
+  loading: boolean;
   onHelp?: () => void;
 }) {
   const context = useContext(ThemeContext);
   if (!context) throw Error("ThemeContext required");
-  const line = statusLine(width, prefix, hints);
-  const head = truncateCells(prefix, Math.max(0, width - 14));
+  const room = loading ? width - 2 : width;
+  const line = statusLine(room, prefix, hints);
+  const head = truncateCells(prefix, Math.max(0, room - 14));
   const parts = headParts(head, meter);
   return (
     <box height={1} flexShrink={0} flexDirection="row">
+      {loading ? (
+        <text wrapMode="none" flexShrink={0}>
+          <Spinner color={context.theme.accent} />{" "}
+        </text>
+      ) : null}
       {parts.map((part) => (
         <text
           key={part.at}

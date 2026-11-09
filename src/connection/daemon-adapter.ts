@@ -6,6 +6,7 @@ import type {
 } from "@getpaseo/protocol/messages";
 import type {
   AgentFeaturesPort,
+  CheckoutPort,
   CompletionPort,
   DirectoryPort,
   DraftCommandConfig,
@@ -381,7 +382,38 @@ interface GitDaemon {
     cwd: string;
     limit?: number;
   }): Promise<{ branches: string[]; error: string | null }>;
-  getCheckoutStatus(cwd: string): Promise<{ baseRef: string | null }>;
+  getCheckoutStatus(cwd: string): Promise<{
+    baseRef: string | null;
+    currentBranch: string | null;
+    isDirty: boolean | null;
+    error: DaemonGitError;
+  }>;
+  checkoutSwitchBranch(
+    cwd: string,
+    branch: string,
+  ): Promise<{ error: DaemonGitError }>;
+  renameBranch(input: {
+    cwd: string;
+    branch: string;
+  }): Promise<{ error: DaemonGitError }>;
+  stashSave(
+    cwd: string,
+    options: { branch: string },
+  ): Promise<{ error: DaemonGitError }>;
+  stashPop(cwd: string, index: number): Promise<{ error: DaemonGitError }>;
+  stashList(
+    cwd: string,
+    options: { paseoOnly: boolean },
+  ): Promise<{
+    entries: { index: number; message: string }[];
+    error: DaemonGitError;
+  }>;
+  checkoutPush(cwd: string): Promise<{ error: DaemonGitError }>;
+}
+type DaemonGitError = { message: string } | null;
+function gitResult<T extends { error: DaemonGitError }>(result: T): T {
+  if (result.error) throw Error(result.error.message);
+  return result;
 }
 /** Baseline daemon requests (no server_info feature flag gates them). */
 export function createGitAdapter(daemon: GitDaemon) {
@@ -392,6 +424,36 @@ export function createGitAdapter(daemon: GitDaemon) {
       const status = await daemon.getCheckoutStatus(cwd);
       return { branches: result.branches, baseRef: status.baseRef };
     },
+    checkout: {
+      async status(cwd) {
+        const status = gitResult(await daemon.getCheckoutStatus(cwd));
+        return {
+          branch: status.currentBranch,
+          dirty: status.isDirty === true,
+          baseRef: status.baseRef,
+        };
+      },
+      async switchBranch(cwd, branch) {
+        gitResult(await daemon.checkoutSwitchBranch(cwd, branch));
+      },
+      async renameBranch(cwd, branch) {
+        gitResult(await daemon.renameBranch({ cwd, branch }));
+      },
+      async stash(cwd, label) {
+        gitResult(await daemon.stashSave(cwd, { branch: label }));
+      },
+      async unstash(cwd, label) {
+        const { entries } = gitResult(
+          await daemon.stashList(cwd, { paseoOnly: true }),
+        );
+        const entry = entries.find((item) => item.message.includes(label));
+        if (!entry) throw Error(`No stash named ${label}`);
+        gitResult(await daemon.stashPop(cwd, entry.index));
+      },
+      async push(cwd) {
+        gitResult(await daemon.checkoutPush(cwd));
+      },
+    } satisfies CheckoutPort,
   };
 }
 

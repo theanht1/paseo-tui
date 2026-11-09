@@ -14,6 +14,7 @@ import {
   paletteActions,
   paletteReturnMode,
   parsePrefix,
+  promptChordAction,
   type Stroke,
   shortcutFor,
 } from "./keymap.js";
@@ -558,4 +559,16 @@ test("Ctrl-d/Ctrl-u move the sidebar cursor half a page and still scroll panes",
     type: "scroll.half",
     dir: 1,
   });
+});
+
+test("a focused prompt leaves app chords to the app", () => {
+  expect(promptChordAction(key("k", true))).not.toBeNull();
+  expect(promptChordAction(key("6", true))).toEqual({
+    type: "workspace.last",
+  });
+});
+test("a focused prompt keeps plain keys and its own Ctrl keys", () => {
+  expect(promptChordAction(key("j"))).toBeNull();
+  for (const name of ["b", "c", "d", "f", "n", "p", "u"])
+    expect(promptChordAction(key(name, true))).toBeNull();
 });
