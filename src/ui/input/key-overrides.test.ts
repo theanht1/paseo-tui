@@ -152,6 +152,28 @@ test("the default table has no conflicts and named keys are normalized", () => {
       .action,
   ).toEqual({ type: "sidebar.toggle" });
 });
+test("Alt-Shift keys rebind to Meta-Shift-", () => {
+  const { bindings, errors } = rebind({ "sidebar.toggle": ["alt-shift-B"] });
+  expect(errors).toEqual([]);
+  expect(bindings.find((b) => b.action.type === "sidebar.toggle")?.keys).toBe(
+    "Meta-Shift-b",
+  );
+});
+test("Cmd-Shift keys rebind to Super-Shift- and need Shift held", () => {
+  const { bindings, errors } = rebind({ "sidebar.toggle": ["cmd-shift-B"] });
+  expect(errors).toEqual([]);
+  expect(bindings.find((b) => b.action.type === "sidebar.toggle")?.keys).toBe(
+    "Super-Shift-b",
+  );
+  const stroke = { ...key("b"), super: true };
+  expect(
+    dispatch(normal, "pane", { ...stroke, shift: true }, undefined, bindings)
+      .action,
+  ).toEqual({ type: "sidebar.toggle" });
+  expect(
+    dispatch(normal, "pane", stroke, undefined, bindings).action,
+  ).not.toEqual({ type: "sidebar.toggle" });
+});
 test("Cmd and Super keys rebind to Super- and work while typing", () => {
   const { bindings, errors } = rebind({
     "tab.create": ["cmd-t"],

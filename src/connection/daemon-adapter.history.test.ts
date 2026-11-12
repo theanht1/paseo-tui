@@ -1,4 +1,5 @@
 import type { PaseoAgent } from "@getpaseo/client";
+import type { WorkspaceRecoveryState } from "@getpaseo/protocol/messages";
 import { expect, test } from "vitest";
 import { agent } from "../test/fixtures.js";
 import { createHistoryAdapter, type HistoryDaemon } from "./daemon-adapter.js";
@@ -6,6 +7,15 @@ import { createHistoryAdapter, type HistoryDaemon } from "./daemon-adapter.js";
 class FakeDaemon implements HistoryDaemon {
   requests: unknown[] = [];
   refreshed: string[] = [];
+  calls: string[] = [];
+  recovery: (workspaceId: string) => WorkspaceRecoveryState = (
+    workspaceId,
+  ) => ({
+    kind: "unavailable",
+    workspaceId,
+    reason: "workspace_not_archived",
+    message: "Workspace is not archived",
+  });
   hasMore = false;
   searchTruncated: boolean | undefined;
   entries: {
@@ -34,6 +44,14 @@ class FakeDaemon implements HistoryDaemon {
   }
   async refreshAgent(agentId: string) {
     this.refreshed.push(agentId);
+    this.calls.push(`refresh ${agentId}`);
+  }
+  async inspectWorkspaceRecovery(workspaceId: string) {
+    this.calls.push(`inspect ${workspaceId}`);
+    return this.recovery(workspaceId);
+  }
+  async restoreWorkspace(workspaceId: string) {
+    this.calls.push(`restore ${workspaceId}`);
   }
 }
 
@@ -79,8 +97,53 @@ test("marks truncation", async () => {
   expect((await createHistoryAdapter(searched).list("x")).truncated).toBe(true);
 });
 
-test("unarchive refreshes the agent", async () => {
+test("unarchive refreshes the agent and leaves an active workspace alone", async () => {
   const fake = new FakeDaemon(false);
-  await createHistoryAdapter(fake).unarchive("a9");
-  expect(fake.refreshed).toEqual(["a9"]);
+  await createHistoryAdapter(fake).unarchive({ id: "a9", workspaceId: "w" });
+  expect(fake.calls).toEqual(["inspect w", "refresh a9"]);
+  await createHistoryAdapter(fake).unarchive({ id: "a8" });
+  expect(fake.calls).toEqual(["inspect w", "refresh a9", "refresh a8"]);
+});
+
+test("unarchive restores the agent's archived workspace first, so it returns to the sidebar", async () => {
+  const fake = new FakeDaemon(false);
+  fake.recovery = (workspaceId) => ({
+    kind: "recoverable",
+    workspaceId,
+    workspaceName: "fw-fix-error-watch",
+    action: "unarchive",
+    branch: null,
+  });
+  await createHistoryAdapter(fake).unarchive({ id: "a9", workspaceId: "w" });
+  expect(fake.calls).toEqual(["inspect w", "restore w", "refresh a9"]);
+});
+
+test("unarchive keeps the agent archived when its workspace cannot come back", async () => {
+  const fake = new FakeDaemon(false);
+  fake.recovery = (workspaceId) => ({
+    kind: "unavailable",
+    workspaceId,
+    reason: "workspace_directory_missing",
+    message: "The worktree directory no longer exists",
+  });
+  await expect(
+    createHistoryAdapter(fake).unarchive({ id: "a9", workspaceId: "w" }),
+  ).rejects.toThrow("The worktree directory no longer exists");
+  expect(fake.calls).toEqual(["inspect w"]);
+});
+
+test("restores a live agent's archived workspace without touching the agent", async () => {
+  const fake = new FakeDaemon(false);
+  fake.recovery = (workspaceId) => ({
+    kind: "recoverable",
+    workspaceId,
+    workspaceName: "fw-fix-error-watch",
+    action: "unarchive",
+    branch: null,
+  });
+  await createHistoryAdapter(fake).restoreWorkspace({
+    id: "a9",
+    workspaceId: "w",
+  });
+  expect(fake.calls).toEqual(["inspect w", "restore w"]);
 });

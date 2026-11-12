@@ -160,8 +160,14 @@ export function terminalInputAction(
 function label(stroke: Stroke): string {
   if (stroke.ctrl) return `Ctrl-${stroke.name.toLowerCase()}`;
   if (stroke.name === "tab" && stroke.shift) return "Shift-Tab";
-  if (stroke.super) return `Super-${stroke.name}`;
-  if (stroke.meta) return `Meta-${stroke.name}`;
+  if (stroke.super)
+    return stroke.shift
+      ? `Super-Shift-${stroke.name.toLowerCase()}`
+      : `Super-${stroke.name}`;
+  if (stroke.meta)
+    return stroke.shift && stroke.name.length === 1
+      ? `Meta-Shift-${stroke.name.toLowerCase()}`
+      : `Meta-${stroke.name}`;
   const names: Record<string, string> = {
     return: "Enter",
     enter: "Enter",
@@ -409,7 +415,7 @@ export function shortcutFor(
             .map((key) => `${key} ${key}`)
             .join(" / ")
         : binding.keys;
-      return binding.modes.includes("prefix") ? `${prefixLabel} ${keys}` : keys;
+      return needsPrefix(binding) ? `${prefixLabel} ${keys}` : keys;
     });
   return labels.length ? [...new Set(labels)].join(" / ") : null;
 }
@@ -434,8 +440,13 @@ export function paletteActions(
   }
   return [...entries.values()];
 }
+/** Global keys run in every mode, prefix included, so only the others follow the prefix. */
+function needsPrefix(binding: Binding): boolean {
+  return !binding.global && binding.modes.includes("prefix");
+}
 export function bindingSection(binding: Binding, prefixLabel: string) {
-  if (binding.modes.includes("prefix")) return prefixLabel;
+  if (binding.global) return "any";
+  if (needsPrefix(binding)) return prefixLabel;
   if (binding.modes.every((mode) => mode === "copy")) return "copy mode";
   return binding.context ?? "any";
 }

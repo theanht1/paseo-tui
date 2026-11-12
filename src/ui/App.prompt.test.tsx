@@ -54,6 +54,52 @@ describe("prompt drafts", () => {
   });
 });
 
+describe("prompt history", () => {
+  async function history() {
+    const harness = await setup(
+      agents,
+      24,
+      false,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {},
+      (id) => [
+        { type: "user_message", text: `older ${id}` },
+        { type: "assistant_message", text: "ok" },
+        { type: "user_message", text: `newer ${id}` },
+      ],
+    );
+    const type = async (...keys: string[]) => {
+      for (const key of keys) {
+        harness.app.stdin.write(key);
+        await settle();
+      }
+    };
+    await type("\r", "i");
+    return { ...harness, type };
+  }
+  it("recalls older prompts with Up or Ctrl-P and newer ones with Down or Ctrl-N", async () => {
+    const { ports, type } = await history();
+    await type("\u001b[A", "\u0010", "\u001b[B", "\r");
+    await type("i", "\u0010", "\u001b[A", "\u000e", "\r");
+    expect(ports.get("alpha")?.sent).toEqual(["newer alpha", "newer alpha"]);
+  });
+  it("goes back to an empty input past the newest prompt", async () => {
+    const { ports, type } = await history();
+    await type("\u001b[A", "\u001b[B", ..."fresh", "\r");
+    expect(ports.get("alpha")?.sent).toEqual(["fresh"]);
+  });
+  it("leaves the keys alone once the input has the user's own changes", async () => {
+    const { ports, type } = await history();
+    await type(..."draft", "\u0010", "\u001b[A", "\r");
+    await type("i", "\u001b[A", "!", "\u001b[A", "\u000e", "\r");
+    expect(ports.get("alpha")?.sent).toEqual(["draft", "newer alpha!"]);
+  });
+});
+
 describe("prompt completions and external editor", () => {
   const completions = {
     fileQueries: [] as string[],

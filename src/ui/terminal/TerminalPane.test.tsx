@@ -134,6 +134,18 @@ it("renders streamed VT colors and cursor positioning and forwards control keys"
     });
     await test.renderOnce();
     expect(surface.screen().cursor.visible).toBe(true);
+    // The daemon answers terminal queries (nvim's DA1, kitty, DSR, colors); a second
+    // answer from this pane reaches the shell as typed text once nvim exits.
+    receive({
+      terminalId: "t",
+      subscriptionId: "s",
+      type: "output",
+      data: new TextEncoder().encode(
+        "\x1b[c\x1b[?u\x1b[5n\x1b[6n\x1b]11;?\x07",
+      ),
+    });
+    await test.renderOnce();
+    expect(input).toEqual([]);
     for (const key of ["\x1b", "\x03", "\x0e", "\x0b"]) {
       test.mockInput.pressKey(key);
       await test.renderOnce();
@@ -336,4 +348,140 @@ it("sends shifted letters as text after the app enables the kitty keyboard proto
     await test.dispose();
     syntaxStyle.destroy();
   }
+});
+
+/** Clicks a pane whose program (nvim, lazygit) tracks the mouse: what reached the program. */
+async function clickMouseApp(
+  focused: boolean,
+  modes = "\x1b[?1002h\x1b[?1006h\x1b[?1004h",
+  gesture?: (
+    mouse: Awaited<ReturnType<typeof createTestRenderer>>["mockMouse"],
+    x: number,
+    y: number,
+  ) => Promise<void>,
+  /** "replay": the modes arrive in the daemon's saved screen, as when attaching to a running program. */
+  delivery: "output" | "replay" = "output",
+) {
+  const test = await createTestRenderer({
+    width: 40,
+    height: 10,
+    exitOnCtrlC: false,
+  });
+  const theme = createTheme({});
+  const syntaxStyle = createSyntaxStyle(test.renderer, theme);
+  const root = createRoot(test.renderer);
+  let receive: (event: TerminalStreamEvent) => void = () => {};
+  const input: string[] = [];
+  const clicks: string[] = [];
+  const stream: TerminalStreamPort = {
+    observe(_id, handler) {
+      receive = handler;
+      return { ready: Promise.resolve(), async close() {} };
+    },
+    write(_id, data) {
+      input.push(data);
+    },
+    resize() {},
+  };
+  const terminal: PaseoTerminalHandle = {
+    id: "t",
+    current: () => null,
+    refresh: async () => null,
+    write: () => 0,
+    sendKeys: () => 0,
+    kill: async () => {},
+    capture: async () => ({
+      terminalId: "t",
+      lines: [],
+      totalLines: 0,
+      requestId: "r",
+    }),
+  };
+  try {
+    flushSync(() =>
+      root.render(
+        <ThemeContext value={{ theme, syntaxStyle }}>
+          <TerminalPane
+            terminal={terminal}
+            stream={stream}
+            focused={focused}
+            paneFocused
+            onFocus={() => clicks.push("pane")}
+          />
+        </ThemeContext>,
+      ),
+    );
+    await test.renderOnce();
+    // Mouse tracking, SGR mouse, focus reporting.
+    const data = new TextEncoder().encode(`${modes}app`);
+    if (delivery === "output")
+      receive({ terminalId: "t", subscriptionId: "s", type: "output", data });
+    else {
+      const replay = {
+        terminalId: "t",
+        subscriptionId: "s",
+        type: "replay" as const,
+      };
+      receive({ ...replay, replay: { type: "begin", cols: 38, rows: 7 } });
+      receive({ ...replay, replay: { type: "data", data } });
+      receive({ ...replay, replay: { type: "end" } });
+    }
+    await test.renderOnce();
+    const surface = test.renderer.root.findDescendantById("terminal-surface");
+    if (!surface) throw Error("Missing terminal surface");
+    input.length = 0;
+    if (gesture) await gesture(test.mockMouse, surface.x, surface.y);
+    else await test.mockMouse.click(surface.x + 3, surface.y + 1);
+    await test.renderOnce();
+    return { clicks, input, focused: surface.focused };
+  } finally {
+    await test.dispose();
+    syntaxStyle.destroy();
+  }
+}
+
+it("keeps a normal-mode click from focusing the terminal or reaching its program", async () => {
+  const result = await clickMouseApp(false);
+  expect(result.clicks).toEqual(["pane"]);
+  expect(result.focused).toBe(false);
+  expect(result.input).toEqual([]);
+});
+
+it("sends the whole click to a mouse-tracking program while typing in the terminal (lazygit files)", async () => {
+  const result = await clickMouseApp(true);
+  expect(result.input).toEqual(["\x1b[<0;4;2M", "\x1b[<0;4;2m"]);
+});
+
+it("gives lazygit a press, drag and release, then buttonless motion for hovering", async () => {
+  // lazygit's modes: any-motion SGR mouse, focus, kitty keys, modifyOtherKeys, win32 input.
+  const lazygit =
+    "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[>1u\x1b[>4;2m\x1b[?9001h";
+  const result = await clickMouseApp(true, lazygit, async (mouse, x, y) => {
+    await mouse.moveTo(x + 2, y + 1);
+    await mouse.pressDown(x + 3, y + 1);
+    await mouse.emitMouseEvent("drag", x + 4, y + 1, 0);
+    await mouse.release(x + 4, y + 1);
+    await mouse.moveTo(x + 6, y + 3);
+  });
+  expect(result.input).toEqual([
+    "\x1b[<35;3;2M",
+    "\x1b[<0;4;2M",
+    "\x1b[<32;5;2M",
+    "\x1b[<0;5;2m",
+    "\x1b[<35;7;4M",
+  ]);
+});
+
+it("reports the mouse in SGR after attaching to a running program, since the daemon's saved screen drops that mode (lazygit read X10 hovers as keys)", async () => {
+  // xterm's serializer keeps mouse tracking (?1003h) but not SGR encoding (?1006h).
+  const saved = "\x1b[?1049h\x1b[?1003h\x1b[?1004h";
+  const result = await clickMouseApp(
+    true,
+    saved,
+    async (mouse, x, y) => {
+      await mouse.moveTo(x + 2, y + 1);
+    },
+    "replay",
+  );
+  expect(result.input).toEqual(["\x1b[<35;3;2M"]);
 });

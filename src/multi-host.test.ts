@@ -154,8 +154,11 @@ function host(
           truncated: id === "home",
         };
       },
-      async unarchive(agentId) {
-        calls.push(`${id}.unarchive(${agentId})`);
+      async unarchive(agent) {
+        calls.push(`${id}.unarchive(${agent.id})`);
+      },
+      async restoreWorkspace(agent) {
+        calls.push(`${id}.restoreWorkspace(${agent.id})`);
       },
     },
     workspaceRead: {
@@ -406,7 +409,7 @@ it("history merges hosts newest first and routes unarchive to the owner", async 
   ]);
   expect(page.truncated).toBe(true);
   expect(page.hostErrors).toEqual([]);
-  await history.unarchive("h-build");
+  await history.unarchive({ id: "h-build" });
   expect(calls).toEqual(["build.unarchive(h-build)"]);
 });
 
@@ -443,7 +446,7 @@ it("history unarchive rejects instead of throwing for an unknown agent", async (
   if (!history) throw Error("expected history");
   let pending: Promise<void> | undefined;
   expect(() => {
-    pending = history.unarchive("nobody");
+    pending = history.unarchive({ id: "nobody" });
   }).not.toThrow();
   await expect(pending).rejects.toThrow("host is not connected");
 });

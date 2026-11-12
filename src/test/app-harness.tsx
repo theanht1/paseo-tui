@@ -136,8 +136,14 @@ export class FakeHistory implements SessionHistory {
     this.queries.push(query);
     return { entries: this.entries, truncated: false, hostErrors: [] };
   }
-  async unarchive(agentId: string) {
-    this.unarchived.push(agentId);
+  restored: string[] = [];
+  restoreError: Error | null = null;
+  async restoreWorkspace({ id }: { id: string }) {
+    this.restored.push(id);
+    if (this.restoreError) throw this.restoreError;
+  }
+  async unarchive({ id }: { id: string }) {
+    this.unarchived.push(id);
     if (this.unarchiveError) throw this.unarchiveError;
   }
 }
@@ -383,6 +389,8 @@ function creatingWorkspaceActions(
     },
   };
 }
+/** Cmd-Shift-A (New agent), as xterm's modifyOtherKeys reports it. */
+export const NEW_TAB = "\u001b[27;10;97~";
 export const renders: (() => Promise<void>)[] = [];
 export async function settle() {
   for (let i = 0; i < 5; i++) {

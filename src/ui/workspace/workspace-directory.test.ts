@@ -151,5 +151,12 @@ it("removes archived workspaces immediately, even while an older fetch is pendin
   resume();
   await pending;
   expect(store.getSnapshot().workspaces).toEqual([]);
+  // Restored (an unarchived agent brings it back): a list fetched after the
+  // removal is the daemon's word, even without an upsert event.
+  await store.load();
+  expect(store.getSnapshot().workspaces.map((row) => row.id)).toEqual([
+    "branch",
+  ]);
+  expect(store.getSnapshot().terminals.map((row) => row.id)).toEqual(["shell"]);
   await store.close();
 });

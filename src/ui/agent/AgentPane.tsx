@@ -240,6 +240,7 @@ export function AgentPane({
         hinting={focused && mode.kind === "hint"}
         onHintDone={() => setMode({ kind: "normal", pending: "" })}
       />
+      <box height={1} flexShrink={0} />
       {permission && question ? (
         <QuestionPrompt
           key={permission.id}

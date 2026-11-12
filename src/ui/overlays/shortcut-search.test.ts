@@ -21,8 +21,8 @@ it("fuzzy matches keys, descriptions, and sections", () => {
     ),
   ).toBe(true);
   expect(
-    filterShortcuts(rows, "ctrl-n").some(
-      (row) => row.description === "New tab",
+    filterShortcuts(rows, "super-shift-a").some(
+      (row) => row.description === "New agent",
     ),
   ).toBe(true);
   expect(

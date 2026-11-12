@@ -69,8 +69,14 @@ export function canonicalKey(input: string): string | null {
     const name = NAMED[ctrl.toLowerCase()];
     return name ? `Ctrl-${name}` : null;
   }
+  const metaShifted = /^(?:meta|alt|m)-shift-(.+)$/i.exec(input)?.[1];
+  if (metaShifted && printable(metaShifted))
+    return `Meta-Shift-${metaShifted.toLowerCase()}`;
   const meta = /^(?:meta|alt|m)-(.+)$/i.exec(input)?.[1];
   if (meta && printable(meta)) return `Meta-${meta.toLowerCase()}`;
+  const shifted = /^(?:super|cmd|command)-shift-(.+)$/i.exec(input)?.[1];
+  if (shifted && printable(shifted))
+    return `Super-Shift-${shifted.toLowerCase()}`;
   const command = /^(?:super|cmd|command)-(.+)$/i.exec(input)?.[1];
   if (command && printable(command)) return `Super-${command.toLowerCase()}`;
   return null;

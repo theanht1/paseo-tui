@@ -828,6 +828,14 @@ export function App({
     const target = historyOpenTarget(agent, flat, workspaces);
     if (target.kind === "live") {
       open(target.agent);
+      const { workspaceId } = target.agent;
+      // Unarchived before its workspace was: bring the workspace back to the sidebar.
+      if (workspaceId && !workspaces.some((row) => row.id === workspaceId))
+        history?.restoreWorkspace(target.agent).catch((error: unknown) =>
+          setNotice({
+            text: `Could not restore workspace ${workspaceName ?? shortPath(agent.cwd)}: ${error instanceof Error ? error.message : String(error)}`,
+          }),
+        );
       return;
     }
     setArchivedViews((previous) => addArchivedView(previous, target.agent));
@@ -861,7 +869,7 @@ export function App({
     if (!history || unarchiving.get(agent.id)?.kind === "pending") return;
     setUnarchiveState(agent.id, { kind: "pending" });
     reopenAgentTab(agent.id);
-    history.unarchive(agent.id).catch((error: unknown) =>
+    history.unarchive(agent).catch((error: unknown) =>
       setUnarchiveState(agent.id, {
         kind: "failed",
         message: error instanceof Error ? error.message : String(error),

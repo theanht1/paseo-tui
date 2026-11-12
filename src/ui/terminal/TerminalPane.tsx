@@ -72,11 +72,10 @@ export function TerminalPane({
         flexGrow={1}
         flexShrink={1}
         minHeight={0}
-        onMouseDown={() => {
-          if (!focused) surface.current?.blur();
-        }}
+        acceptsInput={focused}
         onData={(data, source) => {
-          if (source === "response" || focused)
+          // The daemon answers terminal queries; replies from here would reach the shell twice.
+          if (source === "input" && focused)
             store.write(new TextDecoder().decode(data));
         }}
         onTerminalResize={store.resize}

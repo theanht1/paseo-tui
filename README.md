@@ -63,7 +63,7 @@ The optional `fileEditor` setting (default `vim`) is the command that opens a fi
 }
 ```
 
-- `keys` maps an action to a key or a list of keys, replacing its defaults; `[]` unbinds it. Actions are named by their type plus arguments joined with `:`, for example `help`, `palette.open`, `pane.split:right`, `pane.focus:left`, `pane.select:3`, `tab.select:0`, `workspace.cycle:-1`, `sidebar.move:1`, `tab.move:-1`, `scroll.half:1`, `list.edge:top`; an unknown name prints the full list. Keys use the help popup's format: `x`, `X`, `Ctrl-x`, `Meta-x` (or `Alt-x`), `Enter`, `Esc`, `Tab`, `Shift-Tab`, `Up`, `PgDn`, `F1`. A rebound action keeps its default modes, so prefix actions still follow the prefix and always-on actions (`tab.create`, `palette.open`) need a `Ctrl-` or `Meta-` key. Multi-key chords cannot be bound; `Ctrl-C`, `Z Q`, `g t` / `g T`, `Ctrl-w <dir>`, and `g` / `Z` / `Ctrl-w` in normal mode stay fixed. The help popup, status hints and Command Center show the effective keys.
+- `keys` maps an action to a key or a list of keys, replacing its defaults; `[]` unbinds it. Actions are named by their type plus arguments joined with `:`, for example `help`, `palette.open`, `pane.split:right`, `pane.focus:left`, `pane.select:3`, `tab.select:0`, `workspace.cycle:-1`, `sidebar.move:1`, `tab.move:-1`, `scroll.half:1`, `list.edge:top`; an unknown name prints the full list. Keys use the help popup's format: `x`, `X`, `Ctrl-x`, `Meta-x` (or `Alt-x`), `Cmd-x` / `Cmd-Shift-x` (or `Super-`), `Enter`, `Esc`, `Tab`, `Shift-Tab`, `Up`, `PgDn`, `F1`. A rebound action keeps its default modes, so prefix actions still follow the prefix and always-on actions (`tab.create`, `palette.open`) need a `Ctrl-`, `Meta-` or `Cmd-` key. Multi-key chords cannot be bound; `Ctrl-C`, `Z Q`, `g t` / `g T`, `Ctrl-w <dir>`, and `g` / `Z` / `Ctrl-w` in normal mode stay fixed. The help popup, status hints and Command Center show the effective keys.
 - `theme` overrides colors with hex values (`#rgb`, `#rrggbb`, `#rrggbbaa`): top-level fields (`fg`, `muted`, `faint`, `accent`, `user`, `userBg`, `assistant`, `tool`, `reasoning`, `error`, `warn`, `success`, `border`, `borderFocused`, `selectionBg`, `cursorBg`, `cursorFg`, `codeBg`, `tabStripBg`, `tabBg`, `tabActiveBg`, `tabActiveFg`, `copySelectionBg`, `copySelectionFg`, `copyCursorBg`, `copyCursorFg`, and the label chip colors `labelViolet`, `labelSky`, `labelEmerald`, `labelOrange`, `labelPink`, `labelIndigo`, `labelTeal`, `labelRed`, `labelAmber`, `labelBlue`), `status` (`running`, `idle`, `error`, `attention`, `question`), `syntax` (highlight styles such as `keyword`, `string`, `comment`) and up to three `heading` levels. `NO_COLOR` still wins.
 
 The optional `usage` setting picks which provider meters the status bar shows, in the order listed: `true` keeps a provider's default window, an array of window, balance or detail ids shows exactly those, and `false` hides it. Without `usage`, every reporting provider shows its default window. The Command Center's "Provider usage" view still lists everything and ends each row with `id <provider>.<id>`, plus `· hidden` when `usage` leaves it out of the status bar:
@@ -144,7 +144,8 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Insert, search, palette    | `Ctrl-C`                                   | Leave the input, keeping the draft                 |
 | Normal                     | `?`                                        | Help                                               |
 | Normal                     | `Tab`                                      | Switch sidebar/pane                                |
-| Command Center             | `New agent…`                               | Create in an existing workspace                    |
+| Any                        | `Cmd-Shift-A` (`Super-Shift-a`)            | New agent with the current agent's configuration   |
+| Command Center             | `New agent with provider…`                 | Pick provider, model and mode, then create         |
 | Command Center             | `Set mode…`                                | Pick an available mode                             |
 | Command Center             | `Set model…`                               | Pick a model (with catalog access)                 |
 | Command Center             | `Set thinking…`                            | Pick a thinking option                             |
@@ -297,7 +298,7 @@ These appear only when the daemon advertises their `server_info` features; updat
 
 ### Creating agents
 
-With catalog access, **New agent…** picks a provider, model and mode, followed by an optional title and first prompt. It uses the focused agent's workspace; from an empty pane it first asks for an existing workspace. Default models and modes appear first, and an empty title lets the daemon name the agent.
+With catalog access, **New agent with provider…** picks a provider, model and mode, followed by an optional title and first prompt. It uses the focused agent's workspace; from an empty pane it first asks for an existing workspace. Default models and modes appear first, and an empty title lets the daemon name the agent.
 
 Each host's provider list is loaded once when it connects and kept up to date by the daemon, so the Provider, Model and Mode steps open at once; until the first list arrives the Provider step shows `Loading providers…`. Disabled providers are hidden; an enabled provider that is not ready shows its error or status and cannot be picked. **Refresh providers** in the Command Center asks every connected host to detect its providers again (after installing or signing in to one).
 
@@ -315,7 +316,7 @@ When the focused agent reports token usage, the status bar shows `ctx 42% 84k/20
 
 **Schedules…** lists the daemon's schedules with name, cadence, target, next run and paused state. Pick one to **Inspect** it, view **Recent runs** (selecting a run opens its agent), **Pause…** / **Resume…**, **Run now…** or **Delete…**. Each action that changes a schedule waits for `y` before it runs, and its result appears in the status bar.
 
-**New schedule…** asks for a cadence (`5m`, `2h`, `1d`, or a five-field cron such as `0 9 * * 1-5`), then a target: the focused agent, another existing agent, or a new agent in a workspace (provider, model, mode and title, as in **New agent…**). It then asks for the prompt sent on each run and an optional name, and shows a summary to confirm. Intervals are sent as cron expressions, so an interval must divide evenly into an hour or a day (`7m` is rejected). Schedule requests are baseline daemon RPCs, so no feature flag gates them.
+**New schedule…** asks for a cadence (`5m`, `2h`, `1d`, or a five-field cron such as `0 9 * * 1-5`), then a target: the focused agent, another existing agent, or a new agent in a workspace (provider, model, mode and title, as in **New agent with provider…**). It then asks for the prompt sent on each run and an optional name, and shows a summary to confirm. Intervals are sent as cron expressions, so an interval must divide evenly into an hour or a day (`7m` is rejected). Schedule requests are baseline daemon RPCs, so no feature flag gates them.
 
 ### Tab strip
 

@@ -1,4 +1,8 @@
-import type { HistoryEntry, HistoryPage } from "../../connection/ports.js";
+import type {
+  HistoryEntry,
+  HistoryPage,
+  HistoryPort,
+} from "../../connection/ports.js";
 import { agentAge, agentName, shortPath } from "../agent/agent-display.js";
 import type { CommandItem, CommandStep } from "./registry.js";
 
@@ -7,7 +11,8 @@ export interface SessionHistory {
   /** False when no host has `agentHistorySearch`; `list` then ignores the query. */
   searchable: boolean;
   list(query: string): Promise<HistoryPage & { hostErrors: string[] }>;
-  unarchive(agentId: string): Promise<void>;
+  unarchive: HistoryPort["unarchive"];
+  restoreWorkspace: HistoryPort["restoreWorkspace"];
 }
 export interface SessionHistoryContext {
   history: Pick<SessionHistory, "searchable" | "list">;

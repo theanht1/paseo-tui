@@ -1,7 +1,13 @@
 import type { PaseoAgent } from "@getpaseo/client";
 import { expect, it } from "vitest";
 import type { CreateAgentInput } from "../state/ports.js";
-import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
+import {
+  agents,
+  NEW_TAB,
+  settle,
+  settleUntil,
+  setup,
+} from "../test/app-harness.js";
 import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
@@ -165,7 +171,10 @@ it("switches to a terminal tab, displays its output, and forwards insert input",
     await settle();
   }
   expect(writes.join("")).toBe("ls\r\u000e\u000b\u0003\u0003\u0002?W\u001b");
-  expect(app.lastFrame()).not.toContain("Command Center");
+  // Only the status hint may name it; Ctrl-K went to the shell, not the palette.
+  expect(app.lastFrame().replaceAll("Ctrl-K Command Center", "")).not.toContain(
+    "Command Center",
+  );
   expect(app.lastFrame()).not.toContain("Press Ctrl+C again");
   expect(app.lastFrame().trimEnd().split("\n").at(-1)).toContain("Ctrl-]");
   app.stdin.write("\u001d");
@@ -484,7 +493,7 @@ it("creates a workspace through project and model configuration, then creates an
   app.stdin.write("\r");
   await settle();
   for (const key of [
-    "\u000e",
+    NEW_TAB,
     "\r",
     "\r",
     "\r",
@@ -560,7 +569,7 @@ it("creates a new tab instantly from the current agent's config, activates it an
   );
   app.stdin.write("\r");
   await settle();
-  app.stdin.write("\u000e");
+  app.stdin.write(NEW_TAB);
   await settle();
   expect(inputs).toEqual([
     {
@@ -668,7 +677,7 @@ it("creates a terminal with keyboard and renames it through its mouse menu", asy
     },
     management,
   );
-  app.stdin.write("\u000e");
+  app.stdin.write(NEW_TAB);
   await settle();
   test.mockInput.pressArrow("down");
   test.mockInput.pressEnter();
@@ -719,12 +728,12 @@ it("closes management popups with Esc and keeps management keys editable in the 
   await settle();
   expect(ports.get("alpha")?.sent).toEqual(["WrR"]);
 });
-it("routes Ctrl-N from the shortcut popup to New tab and removes the shortcut overlay", async () => {
+it("routes Cmd-Shift-A from the shortcut popup to New agent and removes the shortcut overlay", async () => {
   const { app, test } = await setup(agents, 24, false, {}, "agents");
   app.stdin.write("?");
   await settle();
   expect(app.lastFrame()).toContain("Keyboard shortcuts");
-  app.stdin.write("\u000e");
+  app.stdin.write(NEW_TAB);
   await settle();
   expect(app.lastFrame()).toContain("New tab › Tab type");
   expect(
@@ -940,7 +949,7 @@ it("shares the persisted thinking selection across new-workspace and new-agent-t
     thinkingOptionId: "high",
     prompt: "q?Wrgt",
   });
-  for (const key of ["\u000e", "\r", "\r", "\r", "\r"]) {
+  for (const key of [NEW_TAB, "\r", "\r", "\r", "\r"]) {
     app.stdin.write(key);
     await settle();
   }
@@ -954,7 +963,7 @@ it("shares the persisted thinking selection across new-workspace and new-agent-t
   expect(created[1]).toMatchObject({ thinkingOptionId: "high" });
   expect(JSON.parse(config ?? "{}")).toEqual({ thinkingLevel: "high" });
 });
-it("opens New tab with Ctrl-N from the prompt and timeline search", async () => {
+it("opens New agent with Cmd-Shift-A from the prompt and timeline search", async () => {
   const { app, test } = await setup(agents, 24, false, {}, "agents");
   for (const keys of [
     ["\r", "i", "draft"],
@@ -964,7 +973,7 @@ it("opens New tab with Ctrl-N from the prompt and timeline search", async () => 
       app.stdin.write(key);
       await settle();
     }
-    app.stdin.write("\u000e");
+    app.stdin.write(NEW_TAB);
     await settle();
     expect(app.lastFrame()).toContain("New tab › Tab type");
     expect(app.lastFrame()).not.toContain("Keyboard shortcuts");
@@ -998,7 +1007,10 @@ it("confirms tab closure through ZQ and mouse buttons, and keeps canceled tabs o
     archiveWorkspace: async () => {},
   };
   const { app, test } = await setup(
-    agents,
+    agents.map((value) => ({
+      ...value,
+      lastUserMessageAt: "2026-11-03T00:00:00Z",
+    })),
     24,
     false,
     {},

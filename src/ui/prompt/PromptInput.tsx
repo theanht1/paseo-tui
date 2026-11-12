@@ -16,6 +16,12 @@ import {
   createCompletionStore,
 } from "./prompt-completion.js";
 import type { PromptDrafts } from "./prompt-drafts.js";
+import {
+  type RecallState,
+  recall,
+  START,
+  sentPrompts,
+} from "./prompt-history.js";
 
 const VISIBLE_ITEMS = 8;
 const MAX_INPUT_ROWS = 6;
@@ -53,6 +59,7 @@ export function PromptInput({
   const editor = useRef<TextareaRenderable>(null);
   const [restored] = useState(() => drafts.get(agentId));
   const inFlight = useRef(false);
+  const recalled = useRef<RecallState>(START);
   const [sending, setSending] = useState(false);
   const [editing, setEditing] = useState(false);
   const context = useContext(ThemeContext);
@@ -125,12 +132,39 @@ export function PromptInput({
     handledEdit.current = editRequest;
     void openEditorRef.current();
   }, [focused, editRequest]);
+  /** Up/Ctrl-P and Down/Ctrl-N step through sent prompts until the user edits the input. */
+  function recallPrompt(key: {
+    name: string;
+    ctrl: boolean;
+    meta: boolean;
+    shift: boolean;
+  }): boolean {
+    if (key.meta || key.shift) return false;
+    const direction =
+      (key.name === "up" && !key.ctrl) || (key.ctrl && key.name === "p")
+        ? "older"
+        : (key.name === "down" && !key.ctrl) || (key.ctrl && key.name === "n")
+          ? "newer"
+          : null;
+    const current = editor.current;
+    if (!direction || !current) return false;
+    const step = recall(
+      sentPrompts(store.getSnapshot().rows),
+      recalled.current,
+      current.plainText,
+      direction,
+    );
+    if (!step) return false;
+    recalled.current = step.state;
+    replace(step.text, step.text.length);
+    return true;
+  }
   useKeyOwner(focused && !sending, (key) => {
     if (key.ctrl && key.name === "g" && editPrompt) {
       void openEditor();
       return true;
     }
-    if (popup.kind !== "open" || !completion) return false;
+    if (popup.kind !== "open" || !completion) return recallPrompt(key);
     if (key.name === "down" || (key.ctrl && key.name === "n")) {
       completion.move(1);
       return true;

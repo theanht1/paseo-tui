@@ -284,7 +284,7 @@ export function builtinSource(context: BuiltinContext): CommandSource {
         items.push({
           id: "new-agent",
           group: "Agents",
-          title: "New agent…",
+          title: "New agent with provider…",
           keywords: ["create", "new"],
           run: () => createAgentStep(createAgent),
         });

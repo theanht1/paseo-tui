@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agents,
+  NEW_TAB,
   rowText,
   settle,
   settleUntil,
@@ -268,7 +269,7 @@ it("moves wizard step selections with Ctrl-N instead of reopening New tab", asyn
   const { app } = await setup(agents, 24, false, {}, "agents");
   app.stdin.write("\r");
   await settle();
-  app.stdin.write("\u000e");
+  app.stdin.write(NEW_TAB);
   await settle();
   expect(app.lastFrame()).toContain("New tab › Tab type");
   app.stdin.write("\u000e");
@@ -492,6 +493,20 @@ it("shows catalog failures and returns to the preserved root query", async () =>
   await settle();
   expect(app.lastFrame()).not.toContain("Catalog unavailable");
   expect(app.lastFrame()).toContain("set model");
+});
+
+it("shows the effective thinking level after the mode", async () => {
+  const { app } = await setup([
+    agent("alpha", {
+      ...controlAgent,
+      thinkingOptionId: null,
+      effectiveThinkingOptionId: "high",
+    }),
+    agent("beta", { ...controlAgent, id: "beta", thinkingOptionId: "low" }),
+  ]);
+  app.stdin.write("\r");
+  await settle();
+  expect(app.lastFrame()).toContain("codex · Ask · high · idle");
 });
 
 it("shows the mode label and provider notice until the next action", async () => {

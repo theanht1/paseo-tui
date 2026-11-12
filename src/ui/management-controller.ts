@@ -730,7 +730,7 @@ export function createManagementController(context: () => ManagementContext) {
         {
           id: "new-agent-tab",
           group: "Agents",
-          title: "New agent",
+          title: "New agent with provider…",
           run: () =>
             agentConfigurationStep(
               catalog,
@@ -789,6 +789,11 @@ export function createManagementController(context: () => ManagementContext) {
       (tab.kind === "agent" && tab.agent.archivedAt != null)
     ) {
       context().closed?.(tab);
+      return;
+    }
+    // An agent that was never sent a message has nothing to lose.
+    if (tab.kind === "agent" && tab.agent.lastUserMessageAt == null) {
+      closeNow(tab);
       return;
     }
     publish({ ...snapshot, overlay: { kind: "confirm-close", tab } });
@@ -1011,7 +1016,9 @@ export function createManagementController(context: () => ManagementContext) {
   }
   function confirmCloseTab() {
     if (snapshot.overlay.kind !== "confirm-close") return;
-    const { tab } = snapshot.overlay;
+    closeNow(snapshot.overlay.tab);
+  }
+  function closeNow(tab: WorkspaceTab) {
     run("Closing tab…", async () => {
       await actions().closeTab(tab);
       context().closed?.(tab);

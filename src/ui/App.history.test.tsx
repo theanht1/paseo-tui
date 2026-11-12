@@ -610,3 +610,94 @@ it("grows the prompt to show a long rewound message from its first word", async 
   expect(prompt).toContain("start-marker");
   expect(prompt).toContain("end-marker");
 });
+
+it("restores the archived workspace of a live session opened from History", async () => {
+  const stranded = agent("lost", {
+    title: "Lost one",
+    cwd: "/repo/gone",
+    workspaceId: "gone",
+    lastUserMessageAt: "2026-11-03T00:00:00Z",
+  });
+  const history = new FakeHistory([
+    { agent: stranded, projectName: "Repo", workspaceName: "fw-fix" },
+    { agent: at(agents, 2), projectName: "Repo", workspaceName: null },
+  ]);
+  const harness = await setup(
+    [...agents, stranded],
+    30,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { history },
+  );
+  const { app, test } = harness;
+  const all = history.entries;
+  harness.removeWorkspace("gone");
+  await settle();
+  async function openRow(id: string) {
+    history.entries = all.filter((entry) => entry.agent.id === id);
+    app.stdin.write("H");
+    await settleUntil(app.lastFrame, "History");
+    const row = `command:history:${id}`;
+    for (
+      let i = 0;
+      i < 100 && !test.renderer.root.findDescendantById(row);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await settle();
+    }
+    app.stdin.write("\r");
+    await settle();
+  }
+  await openRow("gamma");
+  await settleUntil(app.lastFrame, "hello gamma");
+  expect(history.restored).toEqual([]);
+  await openRow("lost");
+  await settleUntil(app.lastFrame, "hello lost");
+  expect(history.restored).toEqual(["lost"]);
+});
+
+it("says why a live session's workspace could not be restored", async () => {
+  const stranded = agent("lost", {
+    title: "Lost one",
+    cwd: "/repo/gone",
+    workspaceId: "gone",
+  });
+  const history = new FakeHistory([
+    { agent: stranded, projectName: "Repo", workspaceName: "fw-fix" },
+  ]);
+  history.restoreError = Error("The worktree directory no longer exists");
+  const harness = await setup(
+    [...agents, stranded],
+    30,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { history },
+  );
+  harness.removeWorkspace("gone");
+  await settle();
+  const { app, test } = harness;
+  app.stdin.write("H");
+  await settleUntil(app.lastFrame, "History");
+  for (
+    let i = 0;
+    i < 100 && !test.renderer.root.findDescendantById("command:history:lost");
+    i++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+  }
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "worktree directory no longer exists");
+  expect(app.lastFrame()).toContain(
+    "Could not restore workspace fw-fix: The worktree directory no longer exists",
+  );
+});

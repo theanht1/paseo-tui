@@ -70,7 +70,7 @@ it("prefills rename, runs the operation, refreshes data and exposes failures", a
   expect(refreshes).toBe(1);
   expect(controller.getSnapshot().overlay.kind).toBe("closed");
 });
-it("offers project selection, preselected project configuration, and workspace tab kinds", () => {
+it("offers project selection, preselected project configuration, and workspace tab kinds", async () => {
   const project = {
     projectId: "p",
     projectDisplayName: "Repo",
@@ -107,10 +107,17 @@ it("offers project selection, preselected project configuration, and workspace t
     step: { title: "Workspace" },
   });
   controller.createTab();
-  expect(controller.getSnapshot().overlay).toMatchObject({
+  const overlay = controller.getSnapshot().overlay;
+  expect(overlay).toMatchObject({
     kind: "wizard",
     step: { title: "Tab type" },
   });
+  if (overlay.kind !== "wizard" || overlay.step.kind !== "choice")
+    throw Error("Expected the tab type choice");
+  expect((await overlay.step.items()).map((item) => item.title)).toEqual([
+    "New agent with provider…",
+    "New terminal",
+  ]);
 });
 it("reports capability errors after a mutation and does not refresh or fabricate success", async () => {
   let refreshed = false;
@@ -153,8 +160,17 @@ it("reports capability errors after a mutation and does not refresh or fabricate
 });
 
 it("requires confirmation for the captured tab, cancels safely and reports failed closes", async () => {
-  const first = { kind: "agent" as const, key: "agent:a", agent: agent("a") };
-  const second = { kind: "agent" as const, key: "agent:b", agent: agent("b") };
+  const talked = { lastUserMessageAt: "2026-11-04T00:00:00Z" };
+  const first = {
+    kind: "agent" as const,
+    key: "agent:a",
+    agent: agent("a", talked),
+  };
+  const second = {
+    kind: "agent" as const,
+    key: "agent:b",
+    agent: agent("b", talked),
+  };
   let tab = first;
   const events: string[] = [];
   let denied = false;
@@ -219,6 +235,50 @@ it("requires confirmation for the captured tab, cancels safely and reports faile
     message: "Close denied",
   });
   expect(events).toEqual(["close:agent:a", "closed:agent:a", "refresh"]);
+});
+
+it("closes a blank agent's tab without asking, still closing it on the daemon", async () => {
+  const tab = { kind: "agent" as const, key: "agent:new", agent: agent("new") };
+  const events: string[] = [];
+  const controller = createManagementController(() => ({
+    projects: [],
+    agents: [],
+    workspaces: [],
+    workspace: null,
+    tab,
+    catalog: null,
+    actions: {
+      ...NO_PROJECT_ACTIONS,
+      baseBranches: async () => ({ branches: [], defaultBranch: null }),
+      openFile: async () => {
+        throw Error("Unexpected");
+      },
+      createWorkspace: async () => {
+        throw Error("Unexpected");
+      },
+      createAgent: async () => agent("a"),
+      createTerminal: async () => {
+        throw Error("Unexpected");
+      },
+      renameWorkspace: async () => {},
+      renameTab: async () => {},
+      archiveWorkspace: async () => {},
+      closeTab: async (target) => {
+        events.push(`close:${target.key}`);
+      },
+    },
+    refresh: async () => {
+      events.push("refresh");
+    },
+    opened() {},
+    closed(target) {
+      events.push(`closed:${target.key}`);
+    },
+  }));
+  controller.closeTab();
+  expect(controller.getSnapshot().overlay.kind).toBe("closed");
+  await controller.settled();
+  expect(events).toEqual(["close:agent:new", "closed:agent:new", "refresh"]);
 });
 
 it("closes an archived agent's tab at once without archiving it again", async () => {

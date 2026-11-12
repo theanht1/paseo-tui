@@ -208,7 +208,7 @@ describe("App", () => {
     app.stdin.write("?");
     await settle();
     expect(app.lastFrame()).toContain("Keyboard shortcuts");
-    expect(app.lastFrame()).toContain("Ctrl-X");
+    expect(app.lastFrame()).toContain("Ctrl-K  Command Center");
     app.stdin.write("j");
     app.stdin.write("/");
     await settle();

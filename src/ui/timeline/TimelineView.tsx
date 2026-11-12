@@ -332,6 +332,8 @@ export type TimelineAgent = Pick<
   | "model"
   | "availableModes"
   | "currentModeId"
+  | "thinkingOptionId"
+  | "effectiveThinkingOptionId"
   | "status"
   | "cwd"
   | "activeTurn"
@@ -734,6 +736,7 @@ export function TimelineView({
   const modeLabel = agent.availableModes.find(
     (mode) => mode.id === agent.currentModeId,
   )?.label;
+  const thinking = agent.effectiveThinkingOptionId ?? agent.thinkingOptionId;
   return (
     <box ref={root} flexDirection="column" flexGrow={1} minHeight={1}>
       <text
@@ -752,7 +755,8 @@ export function TimelineView({
         ) : null}{" "}
         {agent.provider}
         {agent.model ? `/${agent.model}` : ""}
-        {modeLabel ? ` · ${modeLabel}` : ""} · {agent.status} ·{" "}
+        {modeLabel ? ` · ${modeLabel}` : ""}
+        {thinking ? ` · ${thinking}` : ""} · {agent.status} ·{" "}
         {shortPath(agent.cwd)}
       </text>
       {snapshot.status === "loading" ? (

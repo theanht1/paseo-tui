@@ -396,10 +396,15 @@ export function createMultiHost(
         hostErrors: results.flatMap(({ error }) => (error ? [error] : [])),
       };
     },
-    async unarchive(agentId: string) {
-      const port = owner(agentId).live.session.history;
+    async unarchive(agent: Pick<PaseoAgent, "id" | "workspaceId">) {
+      const port = owner(agent.id).live.session.history;
       if (!port) throw Error("This agent's host has no history");
-      return port.unarchive(agentId);
+      return port.unarchive(agent);
+    },
+    async restoreWorkspace(agent: Pick<PaseoAgent, "id" | "workspaceId">) {
+      const port = owner(agent.id).live.session.history;
+      if (!port) throw Error("This agent's host has no history");
+      return port.restoreWorkspace(agent);
     },
   };
   const readPort = (host: Host) => {

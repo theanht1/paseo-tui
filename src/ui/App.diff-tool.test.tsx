@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { agents, settle, settleUntil, setup } from "../test/app-harness.js";
+import {
+  agents,
+  NEW_TAB,
+  settle,
+  settleUntil,
+  setup,
+} from "../test/app-harness.js";
 import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { AppProps } from "./App.js";
 
@@ -264,7 +270,7 @@ it("starts a new terminal tab in input mode", async () => {
 });
 it("starts a terminal from the New tab wizard in input mode", async () => {
   const { app, test } = await terminalSetup();
-  await press(app, ["\u000e"]);
+  await press(app, [NEW_TAB]);
   test.mockInput.pressArrow("down");
   test.mockInput.pressEnter();
   await settleUntil(app.lastFrame, "fresh prompt");

@@ -82,10 +82,10 @@ export const BINDINGS: readonly Binding[] = [
     description: "New workspace",
   },
   {
-    keys: "Ctrl-N",
+    keys: "Super-Shift-a / Meta-Shift-a",
     modes: ["normal", "insert", "prefix", "search", "palette"],
     action: { type: "tab.create" },
-    description: "New tab",
+    description: "New agent",
     global: true,
   },
   {

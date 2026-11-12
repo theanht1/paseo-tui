@@ -141,3 +141,27 @@ it("runs rebound keys and shows them in the shortcut help", async () => {
   expect(app.lastFrame()).toContain("Keyboard shortcuts");
   expect(app.lastFrame()).toContain(" | ");
 });
+
+it("separates sidebar workspaces with a rule and keeps a blank row above the prompt", async () => {
+  const { app } = await setup(agents, 30);
+  await press(app, ["\r"]);
+  const rows = app.lastFrame().split("\n");
+  const one = rows.findIndex((row) => row.includes("/repo/one"));
+  const two = rows.findIndex((row) => row.includes("/repo/two"));
+  expect(two - one).toBe(2);
+  expect(rows[one + 1]?.slice(1, 33)).toMatch(/^ *─+ *$/);
+  const prompt = rows.findIndex((row) => row.includes("Press i or a"));
+  expect(rows[prompt - 1]?.slice(36)).toMatch(/^│ +│ *$/);
+});
+
+it("separates sidebar sections with a full-width rule", async () => {
+  const harness = await setup(agents, 30);
+  harness.updateWorkspace("two", { pinnedAt: "2026-11-06T00:00:10Z" });
+  await settle();
+  const rows = harness.app.lastFrame().split("\n");
+  const project = rows.findIndex((row) => row.startsWith("│Repo"));
+  expect(rows.findIndex((row) => row.startsWith("│Pinned"))).toBeLessThan(
+    project,
+  );
+  expect(rows[project - 1]?.slice(1, 33)).toMatch(/^─{32}$/);
+});

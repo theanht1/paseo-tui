@@ -3,6 +3,7 @@ import type { createHostClient } from "@getpaseo/client/node";
 import type {
   ProviderSubagentDescriptorPayload,
   SessionOutboundMessage,
+  WorkspaceRecoveryState,
 } from "@getpaseo/protocol/messages";
 import type {
   AgentFeaturesPort,
@@ -742,6 +743,10 @@ export interface HistoryDaemon {
     searchTruncated?: boolean | undefined;
   }>;
   refreshAgent(agentId: string): Promise<unknown>;
+  inspectWorkspaceRecovery(
+    workspaceId: string,
+  ): Promise<WorkspaceRecoveryState>;
+  restoreWorkspace(workspaceId: string): Promise<void>;
   getLastServerInfoMessage(): {
     features?: { agentHistorySearch?: boolean };
   } | null;
@@ -768,10 +773,24 @@ export function createHistoryAdapter(daemon: HistoryDaemon): HistoryPort {
         truncated: result.pageInfo.hasMore || result.searchTruncated === true,
       };
     },
-    async unarchive(agentId) {
-      await daemon.refreshAgent(agentId);
+    restoreWorkspace,
+    async unarchive(agent) {
+      // The daemon unarchives only the agent; bring back its workspace first, or
+      // the agent has no sidebar row. One that cannot return keeps the agent archived.
+      await restoreWorkspace(agent);
+      await daemon.refreshAgent(agent.id);
     },
   };
+  async function restoreWorkspace({
+    workspaceId,
+  }: Pick<PaseoAgent, "workspaceId">) {
+    if (!workspaceId) return;
+    const recovery = await daemon.inspectWorkspaceRecovery(workspaceId);
+    if (recovery.kind === "recoverable")
+      await daemon.restoreWorkspace(workspaceId);
+    else if (recovery.reason !== "workspace_not_archived")
+      throw Error(recovery.message);
+  }
 }
 
 export type ScheduleDaemon = Pick<

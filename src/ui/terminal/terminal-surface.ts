@@ -1,7 +1,10 @@
 import {
+  type EmbeddedTerminalOptions,
   EmbeddedTerminalRenderable,
   KeyEvent,
+  type MouseEvent,
   type OptimizedBuffer,
+  type RenderContext,
   TextAttributes,
 } from "@opentui/core";
 
@@ -26,9 +29,33 @@ export function consumeShift(key: KeyEvent): KeyEvent {
   return new KeyEvent({ ...key, shift: false });
 }
 
+export interface TerminalSurfaceOptions extends EmbeddedTerminalOptions {
+  acceptsInput?: boolean;
+}
+
 export class TerminalSurfaceRenderable extends EmbeddedTerminalRenderable {
   private viewport = { cols: 80, rows: 24 };
   private replaying = false;
+  /**
+   * Off outside terminal input: a press then neither focuses the surface nor reaches
+   * the program, but still bubbles to the pane. Kept here rather than as an
+   * `onMouseDown` prop, which would replace the surface's own press forwarding.
+   */
+  acceptsInput: boolean;
+
+  constructor(ctx: RenderContext, options: TerminalSurfaceOptions) {
+    super(ctx, options);
+    this.acceptsInput = options.acceptsInput ?? false;
+  }
+
+  override processMouseEvent(event: MouseEvent): void {
+    if (this.acceptsInput || event.type !== "down") {
+      super.processMouseEvent(event);
+      return;
+    }
+    event.preventDefault();
+    this.parent?.processMouseEvent(event);
+  }
 
   override encodeKey(key: KeyEvent): Uint8Array {
     return super.encodeKey(consumeShift(key));
@@ -65,6 +92,10 @@ export class TerminalSurfaceRenderable extends EmbeddedTerminalRenderable {
   }
 
   endReplay(): void {
+    // The daemon's saved screen keeps mouse tracking (?1003h) but not SGR encoding
+    // (?1006h), so a running program (lazygit) would get X10 reports and read them as
+    // keys. Programs that track the mouse use SGR; a later mode change still applies.
+    this.write("\x1b[?1006h");
     this.replaying = false;
     super.onResize(this.viewport.cols, this.viewport.rows);
   }

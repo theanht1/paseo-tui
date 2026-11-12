@@ -68,7 +68,7 @@ describe("built-in commands", () => {
       .map((item) => item.title);
     for (const title of [
       "New workspace",
-      "New tab",
+      "New agent",
       "Rename workspace",
       "Rename tab",
       "Close tab",
@@ -107,7 +107,7 @@ describe("built-in commands", () => {
         : null;
       for (const binding of bound)
         expect(shortcut).toContain(
-          binding.modes.includes("prefix")
+          !binding.global && binding.modes.includes("prefix")
             ? `Ctrl-A ${binding.keys}`
             : ran?.type === "exit"
               ? `${binding.keys} ${binding.keys}`
@@ -500,7 +500,7 @@ describe("clear session command", () => {
 });
 
 describe("archived focused agent", () => {
-  function ids(archivedAt: string | null) {
+  function items(archivedAt: string | null) {
     const value = agent("old", {
       archivedAt,
       model: "best",
@@ -549,8 +549,16 @@ describe("archived focused agent", () => {
       act() {},
       unarchive() {},
     });
-    return source.items().map((item) => item.id);
+    return source.items();
   }
+  function ids(archivedAt: string | null) {
+    return items(archivedAt).map((item) => item.id);
+  }
+  it("names the provider-choosing agent command apart from the New agent shortcut", () => {
+    expect(items(null).find((item) => item.id === "new-agent")?.title).toBe(
+      "New agent with provider…",
+    );
+  });
   const mutating = [
     "set-mode",
     "set-model",

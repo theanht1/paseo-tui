@@ -1,7 +1,7 @@
 import type { PaseoProject } from "@getpaseo/client";
 import type { WorkspaceLabelDefinition } from "@getpaseo/protocol/workspace-labels";
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import { useContext, useEffect, useRef } from "react";
+import { Fragment, useContext, useEffect, useRef } from "react";
 import {
   backgroundProp,
   foregroundProp,
@@ -67,8 +67,16 @@ export function AgentList({
           No projects. Open a repository in Paseo.
         </text>
       ) : (
-        sections.map((section) => (
+        sections.map((section, sectionIndex) => (
           <box key={section.key} flexDirection="column" flexShrink={0}>
+            {sectionIndex > 0 ? (
+              <box
+                height={1}
+                flexShrink={0}
+                border={["top"]}
+                borderColor={foregroundProp(theme.muted)}
+              />
+            ) : null}
             {section.kind === "project" ? (
               <box height={1} flexDirection="row">
                 <text
@@ -105,112 +113,123 @@ export function AgentList({
                 <strong>{section.title}</strong> {section.workspaces.length}
               </text>
             )}
-            {section.workspaces.map((workspace) => {
+            {section.workspaces.map((workspace, index) => {
               const meta = workspaceMeta(workspace);
               const setup = setupTag(workspace);
               const count = pending.get(workspace.id) ?? 0;
               return (
-                <box
-                  key={workspace.id}
-                  id={`workspace:${workspace.id}`}
-                  height={meta || setup ? 2 : 1}
-                  flexDirection="column"
-                  backgroundColor={backgroundProp(
-                    workspace.id === selectedId
-                      ? theme.cursorBg
-                      : workspace.id === openId
-                        ? theme.selectionBg
-                        : "",
-                  )}
-                  onMouseDown={(event) => {
-                    event.stopPropagation();
-                    if (event.button === 2)
-                      onContext?.(workspace, event.x, event.y);
-                    else if (event.button === 0) onSelect(workspace);
-                  }}
-                >
-                  <box height={1} flexDirection="row">
-                    <text
-                      minWidth={0}
-                      flexGrow={1}
-                      wrapMode="none"
-                      attributes={workspace.id === selectedId ? 1 : 0}
-                      fg={foregroundProp(
-                        workspace.id === selectedId
-                          ? theme.cursorFg
-                          : offline?.has(workspace.id)
-                            ? theme.muted
-                            : theme.fg,
-                      )}
-                    >
-                      {" "}
-                      <StatusGlyph
-                        indicator={
-                          indicators.get(workspace.id) ?? { kind: "none" }
-                        }
-                        idle={workspace.id === openId ? "›" : " "}
-                      />
-                      {count > 1 ? count : ""}{" "}
-                      {workspace.title || workspace.name}
-                      {labels?.(workspace).map((label) => (
-                        <span
-                          key={label.name}
-                          fg={foregroundProp(
-                            workspace.id === selectedId
-                              ? theme.cursorFg
-                              : labelColor(theme, label.color),
-                          )}
-                        >
-                          {` ●${label.name}`}
-                        </span>
-                      ))}
-                    </text>
-                    {positions?.has(workspace.id) ? (
+                <Fragment key={workspace.id}>
+                  {index > 0 ? (
+                    <box
+                      height={1}
+                      flexShrink={0}
+                      marginLeft={1}
+                      marginRight={1}
+                      border={["top"]}
+                      borderColor={foregroundProp(theme.faint)}
+                    />
+                  ) : null}
+                  <box
+                    id={`workspace:${workspace.id}`}
+                    height={meta || setup ? 2 : 1}
+                    flexDirection="column"
+                    backgroundColor={backgroundProp(
+                      workspace.id === selectedId
+                        ? theme.cursorBg
+                        : workspace.id === openId
+                          ? theme.selectionBg
+                          : "",
+                    )}
+                    onMouseDown={(event) => {
+                      event.stopPropagation();
+                      if (event.button === 2)
+                        onContext?.(workspace, event.x, event.y);
+                      else if (event.button === 0) onSelect(workspace);
+                    }}
+                  >
+                    <box height={1} flexDirection="row">
                       <text
-                        flexShrink={0}
-                        fg={foregroundProp(theme.accent)}
-                        attributes={TextAttributes.BOLD}
-                      >
-                        {` ${positions.get(workspace.id)} `}
-                      </text>
-                    ) : hosts?.has(workspace.id) ||
-                      offline?.has(workspace.id) ? (
-                      <text
-                        id={`workspace-host:${workspace.id}`}
-                        flexShrink={0}
+                        minWidth={0}
+                        flexGrow={1}
                         wrapMode="none"
+                        attributes={workspace.id === selectedId ? 1 : 0}
                         fg={foregroundProp(
                           workspace.id === selectedId
                             ? theme.cursorFg
-                            : theme.muted,
+                            : offline?.has(workspace.id)
+                              ? theme.muted
+                              : theme.fg,
                         )}
                       >
-                        {` ${[
-                          hostTag(hosts?.get(workspace.id) ?? ""),
-                          offline?.has(workspace.id) ? "offline" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ")} `}
+                        {" "}
+                        <StatusGlyph
+                          indicator={
+                            indicators.get(workspace.id) ?? { kind: "none" }
+                          }
+                          idle={workspace.id === openId ? "›" : " "}
+                        />
+                        {count > 1 ? count : ""}{" "}
+                        {workspace.title || workspace.name}
+                        {labels?.(workspace).map((label) => (
+                          <span
+                            key={label.name}
+                            fg={foregroundProp(
+                              workspace.id === selectedId
+                                ? theme.cursorFg
+                                : labelColor(theme, label.color),
+                            )}
+                          >
+                            {` ●${label.name}`}
+                          </span>
+                        ))}
+                      </text>
+                      {positions?.has(workspace.id) ? (
+                        <text
+                          flexShrink={0}
+                          fg={foregroundProp(theme.accent)}
+                          attributes={TextAttributes.BOLD}
+                        >
+                          {` ${positions.get(workspace.id)} `}
+                        </text>
+                      ) : hosts?.has(workspace.id) ||
+                        offline?.has(workspace.id) ? (
+                        <text
+                          id={`workspace-host:${workspace.id}`}
+                          flexShrink={0}
+                          wrapMode="none"
+                          fg={foregroundProp(
+                            workspace.id === selectedId
+                              ? theme.cursorFg
+                              : theme.muted,
+                          )}
+                        >
+                          {` ${[
+                            hostTag(hosts?.get(workspace.id) ?? ""),
+                            offline?.has(workspace.id) ? "offline" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")} `}
+                        </text>
+                      ) : null}
+                    </box>
+                    {meta || setup ? (
+                      <text
+                        id={`workspace-meta:${workspace.id}`}
+                        wrapMode="none"
+                        fg={foregroundProp(theme.muted)}
+                      >
+                        {"   "}
+                        {meta}
+                        {meta && setup ? " · " : ""}
+                        {setup ? (
+                          <span fg={foregroundProp(theme.status[setup.tone])}>
+                            {setup.text}
+                          </span>
+                        ) : null}
                       </text>
                     ) : null}
                   </box>
-                  {meta || setup ? (
-                    <text
-                      id={`workspace-meta:${workspace.id}`}
-                      wrapMode="none"
-                      fg={foregroundProp(theme.muted)}
-                    >
-                      {"   "}
-                      {meta}
-                      {meta && setup ? " · " : ""}
-                      {setup ? (
-                        <span fg={foregroundProp(theme.status[setup.tone])}>
-                          {setup.text}
-                        </span>
-                      ) : null}
-                    </text>
-                  ) : null}
-                </box>
+                </Fragment>
               );
             })}
           </box>

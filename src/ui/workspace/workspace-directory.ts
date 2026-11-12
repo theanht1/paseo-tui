@@ -60,13 +60,19 @@ export function createWorkspaceDirectory(api: DirectoryApi) {
   let dirty = false;
   let owned: DirectoryList["subscription"];
   let stopSnapshot: (() => void) | undefined;
-  const removed = new Set<string>();
+  /**
+   * Workspaces archived during this run, with how many fetches had started then:
+   * only those fetches can still list them. A later fetch is the daemon's word,
+   * so a restored workspace comes back.
+   */
+  const removed = new Map<string, number>();
+  let fetches = 0;
   const stops = [
     api.projects.subscribe(refresh),
     api.workspaces.subscribe((update) => {
       if (closed) return;
       if (update.kind === "remove") {
-        removed.add(update.id);
+        removed.set(update.id, fetches);
         snapshot = {
           ...snapshot,
           workspaces: snapshot.workspaces.filter((row) => row.id !== update.id),
@@ -95,6 +101,8 @@ export function createWorkspaceDirectory(api: DirectoryApi) {
     else void load();
   }
   async function fetchDirectory() {
+    const fetch = ++fetches;
+    const stale = (id: string) => (removed.get(id) ?? 0) >= fetch;
     try {
       const [projects, terminals] = await Promise.all([
         api.projects.list(),
@@ -128,10 +136,8 @@ export function createWorkspaceDirectory(api: DirectoryApi) {
       if (closed) return;
       snapshot = {
         projects: projects.projects,
-        workspaces: rows.filter((row) => !removed.has(row.id)),
-        terminals: terminals.entries.filter(
-          (row) => !removed.has(row.workspaceId),
-        ),
+        workspaces: rows.filter((row) => !stale(row.id)),
+        terminals: terminals.entries.filter((row) => !stale(row.workspaceId)),
         error: null,
       };
     } catch (error) {

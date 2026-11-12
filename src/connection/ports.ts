@@ -41,7 +41,12 @@ export interface HistoryPort {
   /** False when the daemon lacks `agentHistorySearch`; `list` then ignores `query`. */
   searchable: boolean;
   list(query: string): Promise<HistoryPage>;
-  unarchive(agentId: string): Promise<void>;
+  /** Unarchives the agent, restoring its archived workspace first. */
+  unarchive(agent: Pick<PaseoAgent, "id" | "workspaceId">): Promise<void>;
+  /** Brings back the agent's archived workspace; rejects with why when it cannot. */
+  restoreWorkspace(
+    agent: Pick<PaseoAgent, "id" | "workspaceId">,
+  ): Promise<void>;
 }
 /** Workspace read state; `markUnread` is null without the daemon's `workspaceMarkUnread`. */
 export interface WorkspaceReadPort {

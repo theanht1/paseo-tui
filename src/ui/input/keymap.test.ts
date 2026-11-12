@@ -91,11 +91,13 @@ test("sidebar and pane use the same table with different actions", () => {
   });
   for (const b of BINDINGS)
     expect(helpRows("Ctrl-B")).toContainEqual({
-      section: b.modes.includes("prefix")
-        ? "Ctrl-B"
-        : b.modes.every((mode) => mode === "copy")
-          ? "copy mode"
-          : (b.context ?? "any"),
+      section: b.global
+        ? "any"
+        : b.modes.includes("prefix")
+          ? "Ctrl-B"
+          : b.modes.every((mode) => mode === "copy")
+            ? "copy mode"
+            : (b.context ?? "any"),
       keys: b.keys,
       description: b.description,
     });
@@ -168,7 +170,7 @@ test("gd opens the diff tool from either context and is in the Command Center", 
     keywords: ["diff", "open"],
   });
 });
-test("Ctrl-N opens a new tab from every mode, including text input modes", () => {
+test("Cmd-Shift-A opens a new tab from every mode, including text input modes", () => {
   for (const mode of [
     normal,
     { kind: "insert" },
@@ -176,9 +178,28 @@ test("Ctrl-N opens a new tab from every mode, including text input modes", () =>
     { kind: "prefix" },
     { kind: "palette" },
   ] as const) {
-    const result = dispatch(mode, "pane", key("n", true));
+    const result = dispatch(mode, "pane", {
+      ...key("a"),
+      super: true,
+      shift: true,
+    });
     expect(result.action).toEqual({ type: "tab.create" });
     expect(result.mode).toEqual(normal);
+    expect(
+      dispatch(mode, "pane", { ...key("a"), super: true }).action,
+    ).not.toEqual({ type: "tab.create" });
+    expect(dispatch(mode, "pane", key("n", true)).action).not.toEqual({
+      type: "tab.create",
+    });
+    // Alt-Shift-A survives tmux, which has no Cmd: ESC A, or the kitty form.
+    for (const name of ["A", "a"])
+      expect(
+        dispatch(mode, "pane", { ...key(name), meta: true, shift: true })
+          .action,
+      ).toEqual({ type: "tab.create" });
+    expect(
+      dispatch(mode, "pane", { ...key("a"), meta: true }).action,
+    ).not.toEqual({ type: "tab.create" });
   }
 });
 test("management shortcuts work in normal mode and remain editable in insert", () => {
@@ -212,6 +233,12 @@ test("documented prompt keys stay typeable in insert mode", () => {
     action: null,
   });
   expect(dispatch({ kind: "insert" }, "pane", key("/")).action).toBeNull();
+  // Global keys work in every mode, so they are not listed under the prefix.
+  expect(helpRows("Ctrl-B")).toContainEqual({
+    section: "any",
+    keys: "Super-Shift-a / Meta-Shift-a",
+    description: "New agent",
+  });
   expect(helpRows("Ctrl-B")).toContainEqual({
     section: "pane",
     keys: "Ctrl-G",
@@ -232,6 +259,10 @@ function strokes(keys: string): Stroke[] {
     PgDn: "pagedown",
   };
   return keys.split(" ").map((token) => {
+    if (token.startsWith("Meta-Shift-"))
+      return { ...key(token.slice(11)), meta: true, shift: true };
+    if (token.startsWith("Super-Shift-"))
+      return { ...key(token.slice(12)), super: true, shift: true };
     if (token.startsWith("Super-"))
       return { ...key(token.slice(6)), super: true };
     if (token.startsWith("Meta-"))
@@ -478,6 +509,13 @@ test("shortcutFor labels an action from the effective bindings", () => {
   );
   expect(shortcutFor({ type: "exit" }, BINDINGS, "Ctrl-B")).toBe(
     "Ctrl-C Ctrl-C",
+  );
+  // Global keys work in every mode, so they are shown without the prefix.
+  expect(shortcutFor({ type: "tab.create" }, BINDINGS, "Ctrl-B")).toBe(
+    "Super-Shift-a / Meta-Shift-a",
+  );
+  expect(shortcutFor({ type: "palette.open" }, BINDINGS, "Ctrl-B")).toBe(
+    "Ctrl-K / Ctrl-B :",
   );
   expect(
     shortcutFor({ type: "search.update", query: "" }, BINDINGS, "Ctrl-B"),

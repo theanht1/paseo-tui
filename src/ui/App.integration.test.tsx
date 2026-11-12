@@ -347,10 +347,9 @@ it("creates and manages a mock agent through Command Center", async () => {
   await app.key("\r");
   await app.waitFor("Renamed from UI");
   // Archiving an agent is closing its tab (Z Q); the Command Center archives workspaces.
+  // It was never sent a message, so it closes without asking.
   await app.key("Z");
   await app.key("Q");
-  await app.waitFor("Archive agent “Renamed from UI”?");
-  await app.key("y");
   await expect
     .poll(
       () =>
