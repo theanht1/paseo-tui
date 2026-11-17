@@ -1,6 +1,6 @@
 {
   "name": "paseo-tui",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Full-screen terminal client for Paseo: agents, live timelines, split panes, embedded terminals and a Command Center",
   "keywords": [
     "paseo",
