@@ -17,6 +17,7 @@ import type {
   HistoryEntry,
   RewindMode,
   TimelineCursor,
+  WorkspaceRecovery,
 } from "../connection/ports.js";
 import { createAgentsStore } from "../state/agents-store.js";
 import type {
@@ -138,6 +139,12 @@ export class FakeHistory implements SessionHistory {
   }
   restored: string[] = [];
   restoreError: Error | null = null;
+  inspected: string[] = [];
+  recovery: WorkspaceRecovery = { kind: "active" };
+  async inspectWorkspace({ id }: { id: string }) {
+    this.inspected.push(id);
+    return this.recovery;
+  }
   async restoreWorkspace({ id }: { id: string }) {
     this.restored.push(id);
     if (this.restoreError) throw this.restoreError;
@@ -601,13 +608,23 @@ export async function setup(
   };
   await settle();
   await test.renderOnce();
+  /** Drops the workspace from the sidebar, returning its row for {@link addWorkspace}. */
   function removeWorkspace(id: string) {
+    const removed = directorySnapshot.workspaces.find((row) => row.id === id);
     directorySnapshot = {
       ...directorySnapshot,
       workspaces: directorySnapshot.workspaces.filter((row) => row.id !== id),
       terminals: directorySnapshot.terminals.filter(
         (row) => row.workspaceId !== id,
       ),
+    };
+    for (const listener of directoryListeners) listener();
+    return removed;
+  }
+  function addWorkspace(row: WorkspaceRow) {
+    directorySnapshot = {
+      ...directorySnapshot,
+      workspaces: [...directorySnapshot.workspaces, row],
     };
     for (const listener of directoryListeners) listener();
   }
@@ -632,6 +649,7 @@ export async function setup(
     test,
     cleared,
     removeWorkspace,
+    addWorkspace,
     updateWorkspace,
     setTerminals,
     /** Ends the terminal's process, as vim `:q` does; the directory still lists it. */

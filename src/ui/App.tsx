@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import type { ConnectionState, PaseoAgent, PaseoApi } from "@getpaseo/client";
 import {
   useKeyboard,
@@ -32,6 +33,7 @@ import { AgentPane } from "./agent/AgentPane.js";
 import { shortPath } from "./agent/agent-display.js";
 import {
   type ArchivedViews,
+  type ArchivedWorkspace,
   addArchivedView,
   historyOpenTarget,
   mutatesAgent,
@@ -119,6 +121,7 @@ import {
 import type { Browser } from "./file-links/browser.js";
 import { type FileLinks, FileLinksContext } from "./file-links/context.js";
 import { DEFAULT_FILE_EDITOR } from "./file-links/editor-terminal.js";
+import { fileOpen } from "./file-links/file-open.js";
 import {
   type ChatLink,
   type FileLink,
@@ -270,7 +273,7 @@ export interface AppProps {
   clipboard?: ClipboardWriter;
   /** The local clipboard (pbcopy, wl-copy, xclip…); OSC 52 is still sent alongside. */
   systemClipboard?: SystemClipboard;
-  /** Opens chat URLs (F hints, clicks) in the local default browser. */
+  /** The local OS opener: chat URLs (F hints, clicks) and non-text files such as images and PDFs. */
   browser?: Browser;
   /** True when the agent runs on another machine, so its `localhost` is not this one. */
   isRemoteAgent?(agentId: string): boolean;
@@ -503,6 +506,12 @@ export function App({
   const [unarchiving, setUnarchiving] = useState<
     ReadonlyMap<string, UnarchiveState>
   >(new Map());
+  /** Archived views whose workspace is archived too, by agent id. */
+  const [sessionWorkspaces, setSessionWorkspaces] = useState<
+    ReadonlyMap<string, ArchivedWorkspace>
+  >(new Map());
+  /** Agents restored from the Workspace archived callout, opened once their workspace is back. */
+  const restoring = useRef(new Set<string>());
   const archivedList = useMemo(
     () => [...archivedViews.values()],
     [archivedViews],
@@ -516,6 +525,7 @@ export function App({
     // An unarchived agent's live listing takes over its view (same tab slot).
     setArchivedViews((previous) => pruneArchivedViews(previous, flat));
     setUnarchiving((previous) => pruneArchivedViews(previous, flat));
+    setSessionWorkspaces((previous) => pruneArchivedViews(previous, flat));
   }, [flat]);
   /** The Command Center's first step when a key opens it on one (History). */
   const [paletteStep, setPaletteStep] = useState<CommandStep | undefined>();
@@ -601,10 +611,18 @@ export function App({
     const timer = setTimeout(() => setNumbers(false), 1000);
     return () => clearTimeout(timer);
   }, [numbers]);
-  const activeWorkspaceId =
-    workspaces.find((workspace) => workspace.id === activeWorkspace)?.id ??
-    workspaces[0]?.id ??
-    null;
+  /** An archived workspace whose sessions are open view-only; it occupies no sidebar row. */
+  const detachedWorkspaceId =
+    activeWorkspace &&
+    !workspaces.some((workspace) => workspace.id === activeWorkspace) &&
+    archivedList.some((agent) => agent.workspaceId === activeWorkspace)
+      ? activeWorkspace
+      : null;
+  const activeWorkspaceId = detachedWorkspaceId
+    ? null
+    : (workspaces.find((workspace) => workspace.id === activeWorkspace)?.id ??
+      workspaces[0]?.id ??
+      null);
   useEffect(() => {
     onActiveWorkspace?.(activeWorkspaceId);
   }, [onActiveWorkspace, activeWorkspaceId]);
@@ -626,7 +644,7 @@ export function App({
     return workspaceId ? (offlineWorkspaces?.has(workspaceId) ?? false) : false;
   }
   const tabs = workspaceTabs(
-    activeWorkspaceId,
+    detachedWorkspaceId ?? activeWorkspaceId,
     flat,
     visibleTerminals,
     subagentTabs,
@@ -789,8 +807,7 @@ export function App({
   /** The workspace under the sidebar cursor, among the rows the filter shows. */
   const selectedWorkspace =
     sidebarOrder.find((workspace) => workspace.id === cursorWorkspace) ??
-    sidebarOrder[0] ??
-    null;
+    (detachedWorkspaceId ? null : (sidebarOrder[0] ?? null));
   const hinting = useStore(positionHints);
   const waiting = attentionQueue(liveAgents, acknowledged).map((agent) => ({
     agent,
@@ -845,10 +862,12 @@ export function App({
       return next;
     });
     if (target.workspace) openWorkspace(target.workspace);
-    else
-      setNotice({
-        text: `Workspace ${workspaceName ?? shortPath(agent.cwd)} is archived; showing the session here`,
-      });
+    else {
+      // Its own single pane, so no active workspace's panes come along.
+      if (detachedWorkspaceId !== target.agent.workspaceId)
+        setLayout(initialLayout());
+      inspectArchivedWorkspace(target.agent);
+    }
     // View-only: closing the Command Center must not land in insert mode.
     returnMode.current = { kind: "normal", pending: "" };
     open(target.agent);
@@ -862,6 +881,47 @@ export function App({
       return next;
     });
   }
+  function setArchivedWorkspace(
+    agentId: string,
+    workspace: ArchivedWorkspace | null,
+  ) {
+    setSessionWorkspaces((previous) => {
+      const next = new Map(previous);
+      if (workspace) next.set(agentId, workspace);
+      else next.delete(agentId);
+      return next;
+    });
+  }
+  /** Shows the Workspace archived callout for a session whose workspace is not in the sidebar. */
+  function inspectArchivedWorkspace(agent: PaseoAgent) {
+    if (!history) return;
+    setArchivedWorkspace(agent.id, { kind: "checking" });
+    history.inspectWorkspace(agent).then(
+      (recovery) =>
+        setArchivedWorkspace(
+          agent.id,
+          recovery.kind === "active" ? null : recovery,
+        ),
+      (error: unknown) =>
+        setArchivedWorkspace(agent.id, {
+          kind: "unavailable",
+          message: error instanceof Error ? error.message : String(error),
+        }),
+    );
+  }
+  useEffect(() => {
+    for (const agentId of restoring.current) {
+      const live = flat.find(
+        (agent) => agent.id === agentId && agent.archivedAt == null,
+      );
+      const workspace =
+        live && workspaces.find((row) => row.id === live.workspaceId);
+      if (!live || !workspace) continue;
+      restoring.current.delete(agentId);
+      openWorkspace(workspace);
+      open(live);
+    }
+  });
   function setUnarchiveState(agentId: string, state: UnarchiveState) {
     setUnarchiving((previous) => new Map(previous).set(agentId, state));
   }
@@ -869,6 +929,7 @@ export function App({
     if (!history || unarchiving.get(agent.id)?.kind === "pending") return;
     setUnarchiveState(agent.id, { kind: "pending" });
     reopenAgentTab(agent.id);
+    if (sessionWorkspaces.has(agent.id)) restoring.current.add(agent.id);
     history.unarchive(agent).catch((error: unknown) =>
       setUnarchiveState(agent.id, {
         kind: "failed",
@@ -1070,6 +1131,20 @@ export function App({
         setArchivedViews((previous) =>
           removeArchivedView(previous, tab.agent.id),
         );
+        const leaving =
+          detachedWorkspaceId &&
+          !archivedList.some(
+            (agent) =>
+              agent.id !== tab.agent.id &&
+              agent.workspaceId === detachedWorkspaceId,
+          );
+        if (leaving) {
+          const last = navigation.lastWorkspaceId();
+          const back =
+            workspaces.find((workspace) => workspace.id === last) ??
+            workspaces[0];
+          if (back) openWorkspace(back);
+        }
         setMode({ kind: "normal", pending: "" });
         setFocus({ pane: "timeline" });
         return;
@@ -1123,7 +1198,26 @@ export function App({
     const workspace =
       workspaces.find((workspace) => workspace.id === owner?.workspaceId) ??
       workspaces.find((workspace) => workspace.id === activeWorkspaceId);
-    if (workspace) manager.openFile(workspace, link, fileEditor);
+    if (!workspace) return;
+    const how = fileOpen(link.path, {
+      remote: isRemoteAgent(agentId),
+      home: homedir(),
+    });
+    if (how.kind === "editor") {
+      manager.openFile(workspace, link, fileEditor);
+      return;
+    }
+    if (how.kind === "unavailable") {
+      setNotice({ text: how.message });
+      return;
+    }
+    if (!browser) {
+      setNotice({ text: `No opener for ${how.path}` });
+      return;
+    }
+    void browser.open(how.path).then((error) => {
+      if (error) setNotice({ text: error });
+    });
   }
   function openLink(agentId: string, link: ChatLink) {
     if (link.kind === "file") {
@@ -2193,6 +2287,7 @@ export function App({
                               )
                             }
                             unarchive={unarchiving.get(agent.id)}
+                            archivedWorkspace={sessionWorkspaces.get(agent.id)}
                             onUnarchive={() => unarchive(agent)}
                             queue={queues.forAgent(agent)}
                             shortcut={shortcut}

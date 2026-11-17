@@ -1,4 +1,5 @@
 import type { PaseoAgent } from "@getpaseo/client";
+import type { WorkspaceRecovery } from "../../connection/ports.js";
 import type { Action } from "../input/keymap.js";
 
 /** Archived sessions opened from History, by agent id; shown view-only until unarchived. */
@@ -74,6 +75,48 @@ export function archivedCalloutText(state: UnarchiveState): string {
     case "failed":
       return `! ${state.message}`;
   }
+}
+/** An archived view's workspace when it is archived too: being checked, or what restoring it would do. */
+export type ArchivedWorkspace =
+  | { kind: "checking" }
+  | Exclude<WorkspaceRecovery, { kind: "active" }>;
+export interface CalloutCopy {
+  title: string;
+  lines: string[];
+  error: boolean;
+}
+/** The Workspace archived callout; `u` restores the workspace, then unarchives the agent. */
+export function workspaceCallout(
+  workspace: ArchivedWorkspace,
+  state: UnarchiveState,
+): CalloutCopy {
+  const title = "Workspace archived";
+  if (workspace.kind === "checking")
+    return {
+      title,
+      lines: ["Checking whether it can be restored…"],
+      error: false,
+    };
+  if (workspace.kind === "unavailable")
+    return { title, lines: [workspace.message], error: true };
+  const branch = workspace.branch
+    ? [`Its worktree will use branch ${workspace.branch}.`]
+    : [];
+  const status =
+    state.kind === "idle"
+      ? "u Restore"
+      : state.kind === "pending"
+        ? "Restoring…"
+        : `! ${state.message}`;
+  return {
+    title,
+    lines: [
+      `Restore ${workspace.name} to return to its agents.`,
+      ...branch,
+      status,
+    ],
+    error: state.kind === "failed",
+  };
 }
 /** Pane actions that would change the agent; an archived pane answers them with a notice. */
 const MUTATING_ACTIONS: ReadonlySet<Action["type"]> = new Set([

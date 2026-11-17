@@ -81,7 +81,10 @@ describe("file links", () => {
           async list(directory) {
             listed.push(directory);
             return directory === "/repo/one/src"
-              ? [{ name: "app.ts", kind: "file" as const }]
+              ? [
+                  { name: "app.ts", kind: "file" as const },
+                  { name: "shot.png", kind: "file" as const },
+                ]
               : [];
           },
         },
@@ -271,6 +274,41 @@ describe("file links", () => {
     await settle();
     expect(app.lastFrame()).toContain(
       "no browser opener found: install xdg-utils",
+    );
+  });
+
+  async function openHint(app: Awaited<ReturnType<typeof setup>>["app"]) {
+    app.stdin.write("F");
+    await settle();
+    app.stdin.write("a");
+    await settle();
+  }
+  it("opens a non-text file with the OS opener instead of the terminal editor", async () => {
+    const { urls, browser } = fakeBrowser();
+    const { app, opened } = await fileSetup(
+      "Look at `src/shot.png` now, done",
+      {
+        browser,
+      },
+    );
+    await openHint(app);
+    expect(urls).toEqual(["/repo/one/src/shot.png"]);
+    expect(opened).toEqual([]);
+  });
+  it("explains that a remote agent's non-text file can't be opened here", async () => {
+    const { urls, browser } = fakeBrowser();
+    const { app, opened } = await fileSetup(
+      "Look at `src/shot.png` now, done",
+      {
+        browser,
+        isRemoteAgent: () => true,
+      },
+    );
+    await openHint(app);
+    expect(urls).toEqual([]);
+    expect(opened).toEqual([]);
+    expect(app.lastFrame()).toContain(
+      "shot.png is not a text file and lives on another machine",
     );
   });
 

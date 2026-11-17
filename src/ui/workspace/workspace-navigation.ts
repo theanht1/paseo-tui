@@ -113,10 +113,13 @@ export function createWorkspaceNavigation(
       if (!ids.has(id)) removedIds.add(id);
     }
     for (const id of ids) removedIds.delete(id);
+    // A workspace not listed yet, or an archived one whose sessions are open view-only, stays open.
+    const current = snapshot.workspaceId;
     if (
-      snapshot.workspaceId &&
-      !ids.has(snapshot.workspaceId) &&
-      !isWorkspaceRemoved(snapshot.workspaceId)
+      current &&
+      !ids.has(current) &&
+      (!isWorkspaceRemoved(current) ||
+        archived.some((agent) => agent.workspaceId === current))
     ) {
       previousIds = [...ids];
       return snapshot;

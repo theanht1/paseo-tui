@@ -167,7 +167,7 @@ The UI starts in normal mode. `i` or `a` in a timeline enters insert mode; `Esc`
 | Normal                     | `H`                                        | Session history                                    |
 | Normal pane                | `t`                                        | Jump to a prompt in this session                   |
 | Normal pane                | `F`                                        | Open a file (editor tab) or link (browser) by hint |
-| Normal pane                | `u`                                        | Unarchive agent                                    |
+| Normal pane                | `u`                                        | Unarchive agent, restoring its archived workspace  |
 | Normal pane                | `C`                                        | Clear session (confirm; agents with `/clear`)      |
 | Normal or insert           | `Alt-1`–`Alt-9`                            | Open workspace by sidebar position                 |
 | Sidebar                    | `j` / `↓`                                  | Next agent                                         |
@@ -219,7 +219,7 @@ While the agent works, `Enter` adds the message to a queue shown above the promp
 
 `t` (or **Jump to prompt…** in the Command Center) lists every prompt of the session, newest first, from the daemon's prompt index; picking one pages older history in when needed and selects and expands that message. It needs a daemon with `agentTimelinePromptIndex`.
 
-`F` labels the file paths and `http(s)` links on screen. A file opens in a `fileEditor` tab (default vim) on the daemon host; a link opens in the default browser of the machine running the TUI (`open`, `xdg-open` or `rundll32`, started without a shell), so a `localhost` link from an agent on a remote host refers to this machine. Clicking a link and `g f` in copy mode do the same.
+`F` labels the file paths and `http(s)` links on screen. A text file opens in a `fileEditor` tab (default vim) on the daemon host. Images, video, audio, PDFs, office documents and fonts open with the OS opener of the machine running the TUI instead; for an agent on a remote host the TUI says so, since the file isn't on this machine. A link opens in the default browser of the machine running the TUI (`open`, `xdg-open` or `rundll32`, started without a shell), so a `localhost` link from an agent on a remote host refers to this machine. Clicking a link and `g f` in copy mode do the same.
 
 `g d` (or **Open changes (lazygit)** in the Command Center) runs the diff tool in a terminal tab in the selected workspace's directory, or focuses its tab if one is already open there. Quitting the tool closes the tab and returns to the tab you came from. Pick another tool with `--diff-tool "tig status"` or `PASEO_TUI_DIFF_TOOL`; the command runs through `sh -c` on the daemon host.
 

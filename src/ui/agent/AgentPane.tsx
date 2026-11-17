@@ -48,7 +48,7 @@ import { useStore } from "../use-store.js";
 import { ArchivedCallout } from "./ArchivedCallout.js";
 import { agentName } from "./agent-display.js";
 import { nextMode } from "./agent-modes.js";
-import type { UnarchiveState } from "./archived-views.js";
+import type { ArchivedWorkspace, UnarchiveState } from "./archived-views.js";
 import { stopText } from "./working-indicator.js";
 
 function textarea(node: BaseRenderable): TextareaRenderable | undefined {
@@ -80,6 +80,7 @@ export function AgentPane({
   onOpenSubagents = () => {},
   onCopy,
   unarchive = IDLE,
+  archivedWorkspace,
   onUnarchive = () => {},
   stopShortcut = "Ctrl-X",
   queue,
@@ -108,6 +109,8 @@ export function AgentPane({
   onCopy(effect: Exclude<CopyEffect, { kind: "none" }>): void;
   /** An archived agent's unarchive progress; its callout replaces the prompt. */
   unarchive?: UnarchiveState;
+  /** Set while the archived agent's workspace is archived too. */
+  archivedWorkspace?: ArchivedWorkspace | undefined;
   onUnarchive?(): void;
   /** The stop key's label, for the retry hint. */
   stopShortcut?: string;
@@ -271,7 +274,11 @@ export function AgentPane({
         />
       ) : null}
       {archived ? (
-        <ArchivedCallout state={unarchive} onUnarchive={onUnarchive} />
+        <ArchivedCallout
+          state={unarchive}
+          workspace={archivedWorkspace}
+          onUnarchive={onUnarchive}
+        />
       ) : (
         <PromptInput
           store={store}

@@ -147,3 +147,43 @@ test("restores a live agent's archived workspace without touching the agent", as
   });
   expect(fake.calls).toEqual(["inspect w", "restore w"]);
 });
+
+test("inspects an archived workspace as recoverable with its name and branch", async () => {
+  const fake = new FakeDaemon(false);
+  fake.recovery = (workspaceId) => ({
+    kind: "recoverable",
+    workspaceId,
+    workspaceName: "Triage FLE-1",
+    action: "unarchive",
+    branch: "anh/fle-1",
+  });
+  expect(
+    await createHistoryAdapter(fake).inspectWorkspace({
+      id: "a9",
+      workspaceId: "w",
+    }),
+  ).toEqual({ kind: "recoverable", name: "Triage FLE-1", branch: "anh/fle-1" });
+});
+
+test("inspects a workspace that cannot come back, or is not archived", async () => {
+  const fake = new FakeDaemon(false);
+  const adapter = createHistoryAdapter(fake);
+  expect(
+    await adapter.inspectWorkspace({ id: "a9", workspaceId: "w" }),
+  ).toEqual({ kind: "active" });
+  expect(await adapter.inspectWorkspace({ id: "a9" })).toEqual({
+    kind: "active",
+  });
+  fake.recovery = (workspaceId) => ({
+    kind: "unavailable",
+    workspaceId,
+    reason: "workspace_directory_missing",
+    message: "The worktree directory no longer exists",
+  });
+  expect(
+    await adapter.inspectWorkspace({ id: "a9", workspaceId: "w" }),
+  ).toEqual({
+    kind: "unavailable",
+    message: "The worktree directory no longer exists",
+  });
+});

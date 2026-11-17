@@ -13,6 +13,7 @@ export interface SessionHistory {
   list(query: string): Promise<HistoryPage & { hostErrors: string[] }>;
   unarchive: HistoryPort["unarchive"];
   restoreWorkspace: HistoryPort["restoreWorkspace"];
+  inspectWorkspace: HistoryPort["inspectWorkspace"];
 }
 export interface SessionHistoryContext {
   history: Pick<SessionHistory, "searchable" | "list">;

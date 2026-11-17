@@ -37,12 +37,21 @@ export interface HistoryPage {
   truncated: boolean;
 }
 /** Past sessions, archived ones included, newest first. */
+/** Whether an agent's workspace is archived and can come back; `active` when it is not archived (or has no workspace). */
+export type WorkspaceRecovery =
+  | { kind: "active" }
+  | { kind: "recoverable"; name: string; branch: string | null }
+  | { kind: "unavailable"; message: string };
 export interface HistoryPort {
   /** False when the daemon lacks `agentHistorySearch`; `list` then ignores `query`. */
   searchable: boolean;
   list(query: string): Promise<HistoryPage>;
   /** Unarchives the agent, restoring its archived workspace first. */
   unarchive(agent: Pick<PaseoAgent, "id" | "workspaceId">): Promise<void>;
+  /** What restoring the agent's workspace would do, for the Workspace archived callout. */
+  inspectWorkspace(
+    agent: Pick<PaseoAgent, "id" | "workspaceId">,
+  ): Promise<WorkspaceRecovery>;
   /** Brings back the agent's archived workspace; rejects with why when it cannot. */
   restoreWorkspace(
     agent: Pick<PaseoAgent, "id" | "workspaceId">,

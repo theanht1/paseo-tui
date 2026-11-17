@@ -32,6 +32,7 @@ import type {
   WorkspaceLabelPort,
   WorkspacePinPort,
   WorkspaceReadPort,
+  WorkspaceRecovery,
 } from "./ports.js";
 
 type Daemon = Pick<
@@ -773,6 +774,7 @@ export function createHistoryAdapter(daemon: HistoryDaemon): HistoryPort {
         truncated: result.pageInfo.hasMore || result.searchTruncated === true,
       };
     },
+    inspectWorkspace,
     restoreWorkspace,
     async unarchive(agent) {
       // The daemon unarchives only the agent; bring back its workspace first, or
@@ -781,15 +783,29 @@ export function createHistoryAdapter(daemon: HistoryDaemon): HistoryPort {
       await daemon.refreshAgent(agent.id);
     },
   };
+  async function inspectWorkspace({
+    workspaceId,
+  }: Pick<PaseoAgent, "workspaceId">): Promise<WorkspaceRecovery> {
+    if (!workspaceId) return { kind: "active" };
+    const recovery = await daemon.inspectWorkspaceRecovery(workspaceId);
+    if (recovery.kind === "recoverable")
+      return {
+        kind: "recoverable",
+        name: recovery.workspaceName,
+        branch: recovery.branch,
+      };
+    return recovery.reason === "workspace_not_archived"
+      ? { kind: "active" }
+      : { kind: "unavailable", message: recovery.message };
+  }
   async function restoreWorkspace({
     workspaceId,
   }: Pick<PaseoAgent, "workspaceId">) {
     if (!workspaceId) return;
-    const recovery = await daemon.inspectWorkspaceRecovery(workspaceId);
+    const recovery = await inspectWorkspace({ workspaceId });
     if (recovery.kind === "recoverable")
       await daemon.restoreWorkspace(workspaceId);
-    else if (recovery.reason !== "workspace_not_archived")
-      throw Error(recovery.message);
+    else if (recovery.kind === "unavailable") throw Error(recovery.message);
   }
 }
 

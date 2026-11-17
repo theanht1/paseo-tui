@@ -6,11 +6,24 @@ import { defaultBaseBranch } from "./base-branch.js";
 import type { WorkspaceRow } from "./workspaces.js";
 
 export type TransferDestination =
+  /** The source workspace itself: only the agents are recreated; git is left alone. */
+  | { kind: "current" }
   /** On the source's host. `branchName` names the branch when the source is on the default branch; null auto-names it. */
   | { kind: "new-worktree"; project: PaseoProject; branchName: string | null }
   | { kind: "existing"; workspace: WorkspaceRow }
-  /** Only committed, pushed work can reach another host. */
-  | { kind: "other-host-worktree"; project: PaseoProject };
+  /** Only committed work reaches another host: a branch is pushed, the default branch is branched off there. */
+  | {
+      kind: "other-host-worktree";
+      project: PaseoProject;
+      branchName: string | null;
+    };
+/** Provider settings every moved agent gets instead of its own. */
+export interface AgentSettings {
+  provider: string;
+  model: string;
+  modeId: string | null;
+  thinkingOptionId?: string;
+}
 export type WorktreeSpec =
   | { kind: "checkout"; branch: string }
   | { kind: "branch-off"; base: string; branch: string | null };
@@ -21,6 +34,8 @@ export interface TransferRequest {
   agents: readonly PaseoAgent[];
   /** Every agent in the source workspace; a running one would see its files change. */
   workspaceAgents: readonly PaseoAgent[];
+  /** Null keeps each agent's own provider, model, mode and thinking. */
+  settings: AgentSettings | null;
 }
 export interface TransferDeps {
   sourceGit: CheckoutPort;
@@ -66,9 +81,10 @@ function requireBranch(branch: string | null) {
 
 async function moveAcrossHosts(
   request: TransferRequest,
-  project: PaseoProject,
+  destination: Extract<TransferDestination, { kind: "other-host-worktree" }>,
   deps: TransferDeps,
 ): Promise<Placed> {
+  const { project } = destination;
   const cwd = request.source.workspaceDirectory;
   const status = await deps.sourceGit.status(cwd);
   if (status.dirty)
@@ -77,8 +93,15 @@ async function moveAcrossHosts(
     );
   const branch = requireBranch(status.branch);
   const base = requireBase(status.baseRef);
-  if (branch === base)
-    throw Error(`Create a branch first: ${base} can't move to another host`);
+  if (branch === base) {
+    deps.progress("Creating worktree…");
+    const workspace = await deps.createWorktree(project, {
+      kind: "branch-off",
+      base,
+      branch: destination.branchName,
+    });
+    return { workspace, notices: [] };
+  }
   deps.progress(`Pushing ${branch}…`);
   await deps.sourceGit.push(cwd);
   deps.progress("Creating worktree…");
@@ -91,7 +114,10 @@ async function moveAcrossHosts(
 
 async function moveOnHost(
   request: TransferRequest,
-  destination: Exclude<TransferDestination, { kind: "other-host-worktree" }>,
+  destination: Exclude<
+    TransferDestination,
+    { kind: "other-host-worktree" } | { kind: "current" }
+  >,
   deps: TransferDeps,
 ): Promise<Placed> {
   const { sourceGit, targetGit } = deps;
@@ -182,10 +208,25 @@ async function moveOnHost(
   return { workspace, notices };
 }
 
+function sameWorkspacePrompt(agent: PaseoAgent) {
+  const from = [agent.provider, agent.model].filter(Boolean).join(" · ");
+  return `This conversation was transferred from another agent (${agentName(agent)}, ${from}) to you. The attachment holds the chat so far. Continue the work from where it left off. Reply briefly that you're ready and wait for the next instruction.`;
+}
 function handoffPrompt(from: string, to: string) {
   return `This conversation was transferred from ${from} to this workspace (${to}). The attachment holds the chat so far, and the branch and uncommitted changes came with it. Work here from now on. Reply briefly that you're ready and wait for the next instruction.`;
 }
 
+function ownSettings(agent: PaseoAgent): AgentSettings | null {
+  if (!agent.model) return null;
+  return {
+    provider: agent.provider,
+    model: agent.model,
+    modeId: agent.currentModeId,
+    ...(agent.thinkingOptionId
+      ? { thinkingOptionId: agent.thinkingOptionId }
+      : {}),
+  };
+}
 async function moveAgents(
   request: TransferRequest,
   workspace: WorkspaceRow,
@@ -195,7 +236,8 @@ async function moveAgents(
   const notices: string[] = [];
   for (const agent of request.agents) {
     const name = agentName(agent);
-    if (!agent.model) {
+    const settings = request.settings ?? ownSettings(agent);
+    if (!settings) {
       notices.push(
         `${name} stayed behind: it has no model to recreate it with`,
       );
@@ -206,19 +248,17 @@ async function moveAgents(
       const attachment = await deps.forkChat(agent);
       agents.push(
         await deps.createAgent(workspace, {
-          provider: agent.provider,
-          model: agent.model,
-          modeId: agent.currentModeId,
-          ...(agent.thinkingOptionId
-            ? { thinkingOptionId: agent.thinkingOptionId }
-            : {}),
+          ...settings,
           attachments: [attachment],
           cwd: workspace.workspaceDirectory,
           title: agent.title,
-          prompt: handoffPrompt(
-            request.source.workspaceDirectory,
-            workspace.workspaceDirectory,
-          ),
+          prompt:
+            request.destination.kind === "current"
+              ? sameWorkspacePrompt(agent)
+              : handoffPrompt(
+                  request.source.workspaceDirectory,
+                  workspace.workspaceDirectory,
+                ),
         }),
       );
     } catch (error) {
@@ -228,18 +268,27 @@ async function moveAgents(
   return { agents, notices };
 }
 
-/** Moves a workspace's branch and uncommitted work elsewhere and recreates the chosen agents there; the originals stay. */
+/**
+ * Moves a workspace's branch and uncommitted work elsewhere (or nowhere, for the
+ * current workspace) and recreates the chosen agents there with their chat; the
+ * originals stay.
+ */
 export async function transferWorkspace(
   request: TransferRequest,
   deps: TransferDeps,
 ): Promise<TransferResult> {
-  if (request.workspaceAgents.some((agent) => agent.status === "running"))
-    throw Error("Stop the running agents in this workspace first");
   const { destination } = request;
-  const placed =
-    destination.kind === "other-host-worktree"
-      ? await moveAcrossHosts(request, destination.project, deps)
-      : await moveOnHost(request, destination, deps);
+  if (
+    destination.kind !== "current" &&
+    request.workspaceAgents.some((agent) => agent.status === "running")
+  )
+    throw Error("Stop the running agents in this workspace first");
+  const placed: Placed =
+    destination.kind === "current"
+      ? { workspace: request.source, notices: [] }
+      : destination.kind === "other-host-worktree"
+        ? await moveAcrossHosts(request, destination, deps)
+        : await moveOnHost(request, destination, deps);
   const moved = await moveAgents(request, placed.workspace, deps);
   return {
     workspace: placed.workspace,

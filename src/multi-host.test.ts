@@ -160,6 +160,10 @@ function host(
       async restoreWorkspace(agent) {
         calls.push(`${id}.restoreWorkspace(${agent.id})`);
       },
+      async inspectWorkspace(agent) {
+        calls.push(`${id}.inspectWorkspace(${agent.id})`);
+        return { kind: "active" as const };
+      },
     },
     workspaceRead: {
       async markRead(ids) {

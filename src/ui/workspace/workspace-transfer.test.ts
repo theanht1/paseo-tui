@@ -97,6 +97,7 @@ function setup(git = new FakeGit(), targetGit: FakeGit = git) {
         destination: { kind: "new-worktree", project, branchName: null },
         agents: [alpha],
         workspaceAgents: [alpha],
+        settings: null,
         ...overrides,
       },
       deps,
@@ -212,7 +213,11 @@ describe("transferring to an existing checkout", () => {
 });
 
 describe("transferring to another host", () => {
-  const destination = { kind: "other-host-worktree", project } as const;
+  const destination = {
+    kind: "other-host-worktree",
+    project,
+    branchName: null,
+  } as const;
   it("pushes the branch and checks it out there, leaving the original on its branch", async () => {
     const remote = new FakeGit();
     remote.branches.clear();
@@ -229,10 +234,23 @@ describe("transferring to another host", () => {
     await expect(run({ destination })).rejects.toThrow(/commit/i);
     expect(git.pushed).toEqual([]);
   });
-  it("refuses main itself", async () => {
+  it("branches off main there without pushing when the workspace is on main", async () => {
+    const remote = new FakeGit();
+    remote.branches.clear();
+    const { git, specs, run } = setup(new FakeGit(), remote);
+    git.branches.set(MAIN, "main");
+    await run({ destination: { ...destination, branchName: "fresh" } });
+    expect(git.pushed).toEqual([]);
+    expect(specs).toEqual([
+      { kind: "branch-off", base: "main", branch: "fresh" },
+    ]);
+    expect(git.branches.get(MAIN)).toBe("main");
+  });
+  it("still refuses uncommitted changes on main", async () => {
     const { git, run } = setup();
     git.branches.set(MAIN, "main");
-    await expect(run({ destination })).rejects.toThrow(/branch/i);
+    git.changes.set(MAIN, "edits");
+    await expect(run({ destination })).rejects.toThrow(/commit/i);
   });
 });
 
@@ -275,5 +293,61 @@ describe("moving agents", () => {
     });
     expect(created).toHaveLength(1);
     expect(result.notices.join()).toContain("Alpha");
+  });
+});
+
+describe("transferring to the same workspace", () => {
+  const destination = { kind: "current" } as const;
+  it("recreates the agents here with their chat, moving nothing, even while one runs", async () => {
+    const running = { ...alpha, status: "running" as const };
+    const { git, created, specs, progress, run } = setup();
+    git.changes.set(MAIN, "edits");
+    const result = await run({
+      destination,
+      agents: [running],
+      workspaceAgents: [running],
+    });
+    expect(result.workspace).toBe(source);
+    expect(specs).toEqual([]);
+    expect(git.branches.get(MAIN)).toBe("feat");
+    expect(git.changes.get(MAIN)).toBe("edits");
+    expect(git.stashes.size).toBe(0);
+    expect(progress).toEqual(["Moving Alpha…"]);
+    expect(created[0]?.workspace).toBe(source);
+    expect(created[0]?.input).toMatchObject({
+      cwd: MAIN,
+      title: "Alpha",
+      attachments: [{ text: "chat alpha" }],
+    });
+    expect(created[0]?.input.prompt).toContain(
+      "transferred from another agent",
+    );
+  });
+});
+
+describe("changing agent settings", () => {
+  const settings = {
+    provider: "claude",
+    model: "sonnet",
+    modeId: "auto",
+    thinkingOptionId: "high",
+  };
+  it("gives every moved agent the chosen provider, model, mode and thinking", async () => {
+    const modelless = agent("gamma", {
+      title: "Gamma",
+      cwd: MAIN,
+      model: null,
+    });
+    const { created, run } = setup();
+    const result = await run({
+      settings,
+      agents: [alpha, modelless],
+      workspaceAgents: [alpha, modelless],
+    });
+    expect(result.notices).toEqual([]);
+    expect(created.map(({ input }) => input)).toEqual([
+      expect.objectContaining({ ...settings, title: "Alpha" }),
+      expect.objectContaining({ ...settings, title: "Gamma" }),
+    ]);
   });
 });

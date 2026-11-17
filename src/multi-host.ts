@@ -401,6 +401,11 @@ export function createMultiHost(
       if (!port) throw Error("This agent's host has no history");
       return port.unarchive(agent);
     },
+    async inspectWorkspace(agent: Pick<PaseoAgent, "id" | "workspaceId">) {
+      const port = owner(agent.id).live.session.history;
+      if (!port) throw Error("This agent's host has no history");
+      return port.inspectWorkspace(agent);
+    },
     async restoreWorkspace(agent: Pick<PaseoAgent, "id" | "workspaceId">) {
       const port = owner(agent.id).live.session.history;
       if (!port) throw Error("This agent's host has no history");

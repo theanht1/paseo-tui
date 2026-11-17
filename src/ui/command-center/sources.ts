@@ -169,9 +169,20 @@ function manageCommands(manage: ManageCommands): CommandItem[] {
       ? [
           item(
             "transfer-workspace",
-            "Transfer workspace…",
-            "Move the branch, changes and agents to a worktree or host",
-            ["transfer", "move", "worktree", "host", "handoff"],
+            "Transfer agents…",
+            "Move agents with their chat here, to a worktree or a host; change provider or model",
+            [
+              "transfer",
+              "move",
+              "workspace",
+              "worktree",
+              "host",
+              "handoff",
+              "agent",
+              "provider",
+              "model",
+              "switch",
+            ],
             () => manage.transferWorkspace(workspace),
           ),
           item(

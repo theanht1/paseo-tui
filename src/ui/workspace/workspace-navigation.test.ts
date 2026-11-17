@@ -259,3 +259,23 @@ it("counts a tab opened in another workspace and ignores moves within one", asyn
   nav.selectTab(at(workspaceTabs("main", agents, []), 1));
   expect(nav.lastWorkspaceId()).toBe("branch");
 });
+
+it("stays on a workspace archived this run while one of its sessions is open view-only", async () => {
+  const { createWorkspaceNavigation } = await import(
+    "./workspace-navigation.js"
+  );
+  const nav = createWorkspaceNavigation();
+  const live = [agent("a", { workspaceId: "main" })];
+  const old = agent("old", { workspaceId: "branch", archivedAt: "2026-11-04" });
+  nav.reconcile([main, branch], live, []);
+  nav.reconcile([main], live, []);
+  nav.selectTab({ kind: "agent", key: "agent:old", agent: old });
+  expect(nav.reconcile([main], live, [], [], [old])).toMatchObject({
+    workspaceId: "branch",
+    tab: { key: "agent:old" },
+  });
+  expect(nav.reconcile([main], live, [])).toMatchObject({
+    workspaceId: "main",
+    tab: { key: "agent:a" },
+  });
+});

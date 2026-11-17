@@ -71,6 +71,7 @@ async function transfer(
       destination: destination(project),
       agents: [],
       workspaceAgents: [],
+      settings: null,
     },
     {
       sourceGit: port,
@@ -151,6 +152,7 @@ describe("workspace transfer on a real repository", () => {
         destination: { kind: "new-worktree", project, branchName: null },
         agents: [current],
         workspaceAgents: [current],
+        settings: null,
       },
       {
         sourceGit: port,

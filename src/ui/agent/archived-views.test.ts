@@ -10,6 +10,7 @@ import {
   type UnarchiveState,
   viewOnlyCommands,
   withArchivedViews,
+  workspaceCallout,
 } from "./archived-views.js";
 
 const live = agent("live", { workspaceId: "one" });
@@ -110,4 +111,53 @@ it("prunes unarchive progress for an agent that is live again", () => {
   expect(
     pruneArchivedViews(progress, [{ ...old, archivedAt: null }]).size,
   ).toBe(0);
+});
+
+it("callout copy for an archived workspace while checking, restorable and not", () => {
+  const recoverable = {
+    kind: "recoverable" as const,
+    name: "Triage FLE-1",
+    branch: "anh/fle-1",
+  };
+  expect(workspaceCallout({ kind: "checking" }, { kind: "idle" })).toEqual({
+    title: "Workspace archived",
+    lines: ["Checking whether it can be restored…"],
+    error: false,
+  });
+  expect(workspaceCallout(recoverable, { kind: "idle" })).toEqual({
+    title: "Workspace archived",
+    lines: [
+      "Restore Triage FLE-1 to return to its agents.",
+      "Its worktree will use branch anh/fle-1.",
+      "u Restore",
+    ],
+    error: false,
+  });
+  expect(
+    workspaceCallout({ ...recoverable, branch: null }, { kind: "pending" }),
+  ).toEqual({
+    title: "Workspace archived",
+    lines: ["Restore Triage FLE-1 to return to its agents.", "Restoring…"],
+    error: false,
+  });
+  expect(
+    workspaceCallout(recoverable, { kind: "failed", message: "boom" }).lines,
+  ).toEqual([
+    "Restore Triage FLE-1 to return to its agents.",
+    "Its worktree will use branch anh/fle-1.",
+    "! boom",
+  ]);
+  expect(
+    workspaceCallout(
+      {
+        kind: "unavailable",
+        message: "The worktree directory no longer exists",
+      },
+      { kind: "idle" },
+    ),
+  ).toEqual({
+    title: "Workspace archived",
+    lines: ["The worktree directory no longer exists"],
+    error: true,
+  });
 });

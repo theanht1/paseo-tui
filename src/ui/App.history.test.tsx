@@ -171,13 +171,137 @@ it("opens a session whose workspace is gone in the focused pane", async () => {
   const history = new FakeHistory([
     { agent: lost, projectName: null, workspaceName: "fix-login" },
   ]);
+  history.recovery = {
+    kind: "unavailable",
+    message: "The worktree directory no longer exists",
+  };
   const { app } = await openHistory(history, "lost");
   await settleUntil(app.lastFrame, "hello lost");
-  expect(app.lastFrame()).toContain(
-    "Workspace fix-login is archived; showing the session here",
+  await settleUntil(app.lastFrame, "The worktree directory no longer exists");
+  expect(app.lastFrame()).toContain("Workspace archived");
+  expect(app.lastFrame()).not.toContain("u Restore");
+  expect(history.inspected).toEqual(["lost"]);
+});
+
+it("opens an archived workspace's session apart from the active workspaces", async () => {
+  const lost = { ...archivedAgent, id: "lost", workspaceId: "gone" };
+  const history = new FakeHistory([
+    { agent: lost, projectName: null, workspaceName: "fix-login" },
+  ]);
+  history.recovery = { kind: "recoverable", name: "fix-login", branch: null };
+  const active: (string | null)[] = [];
+  const { app, test } = await openHistory(history, "lost", {
+    onActiveWorkspace: (id) => active.push(id),
+  });
+  await settleUntil(app.lastFrame, "u Restore");
+  expect(active.at(-1)).toBeNull();
+  expect(rowText(test, "pane-tabs:0")).toContain("Old one");
+  expect(rowText(test, "pane-tabs:0")).not.toContain("Alpha agent");
+  expect(rowText(test, "pane-tabs:0")).not.toContain("Beta agent");
+  for (const id of ["one", "two"])
+    expect(rowText(test, `workspace:${id}`)).not.toContain("›");
+  for (const key of ["Z", "Q", "y"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  await settle();
+  expect(active.at(-1)).toBe("one");
+  expect(rowText(test, "pane-tabs:0")).toContain("Alpha agent");
+  expect(rowText(test, "workspace:one")).toContain("›");
+});
+
+it("opens an archived workspace's session in its own single pane", async () => {
+  const lost = { ...archivedAgent, id: "lost", workspaceId: "gone" };
+  const history = new FakeHistory([
+    { agent: lost, projectName: null, workspaceName: "fix-login" },
+  ]);
+  const { app, test } = await setup(
+    agents,
+    30,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { history },
   );
-  expect(app.lastFrame()).toContain("hello lost");
-  expect(app.lastFrame()).toContain("This agent is archived");
+  for (const key of ["\r", "\u0002", "%"]) {
+    app.stdin.write(key);
+    await settle();
+  }
+  expect(test.renderer.root.findDescendantById("pane:1")).toBeTruthy();
+  app.stdin.write("H");
+  await settleUntil(app.lastFrame, "Search sessions");
+  for (
+    let i = 0;
+    i < 100 && !test.renderer.root.findDescendantById("command:history:lost");
+    i++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+  }
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "hello lost");
+  expect(test.renderer.root.findDescendantById("pane:1")).toBeFalsy();
+});
+
+it("restores a session's archived workspace and opens the agent in it", async () => {
+  const stale = { ...archivedAgent, id: "stale", workspaceId: "two" };
+  const history = new FakeHistory([
+    { agent: stale, projectName: null, workspaceName: null },
+  ]);
+  history.recovery = {
+    kind: "recoverable",
+    name: "Triage FLE-1",
+    branch: "anh/fle-1",
+  };
+  const active: (string | null)[] = [];
+  const harness = await setup(
+    agents,
+    30,
+    false,
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { history, onActiveWorkspace: (id) => active.push(id) },
+  );
+  const row = harness.removeWorkspace("two");
+  if (!row) throw Error("missing workspace two");
+  await settle();
+  const { app, test, agentsPort } = harness;
+  app.stdin.write("H");
+  for (
+    let i = 0;
+    i < 100 && !test.renderer.root.findDescendantById("command:history:stale");
+    i++
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+  }
+  app.stdin.write("\r");
+  await settleUntil(app.lastFrame, "u Restore");
+  expect(app.lastFrame()).toContain("Workspace archived");
+  expect(app.lastFrame()).toContain(
+    "Restore Triage FLE-1 to return to its agents.",
+  );
+  expect(app.lastFrame()).toContain("Its worktree will use branch anh/fle-1.");
+  expect(app.lastFrame()).not.toContain("showing the session here");
+  app.stdin.write("u");
+  await settleUntil(app.lastFrame, "Restoring…");
+  expect(history.unarchived).toEqual(["stale"]);
+  harness.addWorkspace(row);
+  agentsPort.handler?.({
+    kind: "upsert",
+    agent: { ...stale, archivedAt: null },
+  });
+  await settle();
+  await settle();
+  expect(active.at(-1)).toBe("two");
+  expect(test.renderer.root.findDescendantById("archived-callout")).toBeFalsy();
+  expect(app.lastFrame()).toContain("hello stale");
 });
 
 it("unarchive failure keeps the view-only callout", async () => {
@@ -336,14 +460,11 @@ it("opens a session whose workspace was archived during this run", async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     await settle();
   }
+  history.recovery = { kind: "recoverable", name: "two", branch: null };
   app.stdin.write("\r");
   await settleUntil(app.lastFrame, "hello stale");
-  expect(app.lastFrame()).toContain(
-    "Workspace /repo/one is archived; showing the session here",
-  );
-  await settle();
-  expect(app.lastFrame()).toContain("hello stale");
-  expect(app.lastFrame()).toContain("This agent is archived");
+  await settleUntil(app.lastFrame, "u Restore");
+  expect(app.lastFrame()).toContain("Restore two to return to its agents.");
 });
 
 it("Shift-Tab and Ctrl-X leave an archived session unchanged", async () => {

@@ -51,6 +51,8 @@ export function agentConfigurationStep(
 }
 export interface ConfigurationOptions {
   titlePlaceholder?: string;
+  /** Ends after Thinking, finishing with no title or prompt. */
+  settingsOnly?: boolean;
 }
 /** Provider › Model › Mode › Thinking › Title › prompt; `finish` may continue with another step. */
 export function agentConfigurationFlow(
@@ -145,7 +147,7 @@ export function agentConfigurationFlow(
     provider: string,
     model: CatalogModel,
     modeId: string | null,
-  ): CommandStep {
+  ): CommandStep | undefined {
     const thinking = model.thinking;
     if (!thinking) return titleStep(cwd, provider, model.id, modeId);
     return {
@@ -182,7 +184,17 @@ export function agentConfigurationFlow(
     model: string,
     modeId: string | null,
     thinkingOptionId?: string,
-  ): CommandStep {
+  ): CommandStep | undefined {
+    if (options.settingsOnly)
+      return finish({
+        provider,
+        model,
+        modeId,
+        ...(thinkingOptionId !== undefined ? { thinkingOptionId } : {}),
+        cwd,
+        title: null,
+        prompt: null,
+      });
     return {
       kind: "input",
       title: "Title",

@@ -268,7 +268,7 @@ it("leaves archiving an agent to Close tab, and archives the open workspace inst
     manage,
   }).items();
   const titles = [
-    "Transfer workspace…",
+    "Transfer agents…",
     "Archive workspace…",
     "Add project…",
     "Projects…",

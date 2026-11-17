@@ -5,6 +5,7 @@ import type { AgentsPort, CreateAgentInput } from "../state/ports.js";
 import { agentName, shortPath } from "./agent/agent-display.js";
 import type { ThinkingPreference } from "./agent/thinking-preference.js";
 import {
+  agentConfigurationFlow,
   agentConfigurationStep,
   type ConfigurationDeps,
 } from "./command-center/create-agent.js";
@@ -25,6 +26,7 @@ import {
   workspaceEditorTerminal,
 } from "./workspace/workspace-editor.js";
 import {
+  type AgentSettings,
   transferWorkspace as runTransfer,
   type TransferDestination,
 } from "./workspace/workspace-transfer.js";
@@ -99,6 +101,11 @@ interface Target {
   catalog: ConfigurationDeps;
   created(workspace: WorkspaceRow, agent: PaseoAgent | null): Promise<void>;
   added(project: PaseoProject): Promise<void>;
+}
+/** What the agents step has chosen: which agents move, and the settings they get (null: their own). */
+interface TransferChoice {
+  agentIds: ReadonlySet<string>;
+  settings: AgentSettings | null;
 }
 function toggled(selected: ReadonlySet<string>, id: string) {
   const next = new Set(selected);
@@ -806,9 +813,9 @@ export function createManagementController(context: () => ManagementContext) {
     source: WorkspaceRow,
     destination: TransferDestination,
     target: Target,
-    agentIds: ReadonlySet<string>,
+    choice: TransferChoice,
   ) {
-    run("Transferring workspace…", async () => {
+    run("Transferring agents…", async () => {
       const from = actions();
       const to = target.actions();
       const workspaceAgents = transferableAgents(source);
@@ -816,8 +823,11 @@ export function createManagementController(context: () => ManagementContext) {
         {
           source,
           destination,
-          agents: workspaceAgents.filter((agent) => agentIds.has(agent.id)),
+          agents: workspaceAgents.filter((agent) =>
+            choice.agentIds.has(agent.id),
+          ),
           workspaceAgents,
+          settings: choice.settings,
         },
         {
           sourceGit: from.checkout(source),
@@ -844,12 +854,63 @@ export function createManagementController(context: () => ManagementContext) {
   function transferableAgents(source: WorkspaceRow) {
     return context().agents.filter((agent) => agent.workspaceId === source.id);
   }
+  /** Keep each agent's provider and model, or pick new ones for every moved agent. */
+  function transferSettingsStep(
+    source: WorkspaceRow,
+    destination: TransferDestination,
+    target: Target,
+    agentIds: ReadonlySet<string>,
+  ): CommandStep {
+    const agents = (settings: AgentSettings | null) =>
+      transferAgentsStep(source, destination, target, { agentIds, settings });
+    return {
+      kind: "choice",
+      title: "Provider & model",
+      items: () => [
+        {
+          id: "transfer:keep",
+          group: "Workspaces",
+          title: "Keep each agent's own",
+          subtitle: "Same provider, model, mode and thinking as now",
+          run: () => agents(null),
+        },
+        {
+          id: "transfer:change",
+          group: "Workspaces",
+          title: "Change provider & model…",
+          subtitle:
+            "Pick the provider, model, mode and thinking of the new agents",
+          run: () =>
+            agentConfigurationFlow(
+              target.catalog,
+              source.workspaceDirectory,
+              ({ provider, model, modeId, thinkingOptionId }) =>
+                agents({
+                  provider,
+                  model,
+                  modeId,
+                  ...(thinkingOptionId !== undefined
+                    ? { thinkingOptionId }
+                    : {}),
+                }),
+              undefined,
+              { settingsOnly: true },
+            ),
+        },
+      ],
+    };
+  }
+  /** Go, then a checkbox per agent. */
   function transferAgentsStep(
     source: WorkspaceRow,
     destination: TransferDestination,
     target: Target,
-    selected: ReadonlySet<string>,
+    choice: TransferChoice,
   ): CommandStep {
+    const { agentIds, settings } = choice;
+    const as = settings
+      ? `As ${[settings.provider, settings.model, settings.thinkingOptionId].filter(Boolean).join(" · ")} · `
+      : "";
     return {
       kind: "choice",
       title: "Agents to transfer",
@@ -857,24 +918,22 @@ export function createManagementController(context: () => ManagementContext) {
         {
           id: "transfer:go",
           group: "Workspaces",
-          title: `Transfer ${selected.size} agent${selected.size === 1 ? "" : "s"}`,
-          subtitle: "Originals stay where they are",
+          title: `Transfer ${agentIds.size} agent${agentIds.size === 1 ? "" : "s"}`,
+          subtitle: `${as}${as ? "originals" : "Originals"} stay where they are`,
           run(): undefined {
-            startTransfer(source, destination, target, selected);
+            startTransfer(source, destination, target, choice);
           },
         },
         ...transferableAgents(source).map((agent) => ({
           id: `transfer:agent:${agent.id}`,
           group: "Workspaces" as const,
-          title: `[${selected.has(agent.id) ? "x" : " "}] ${agentName(agent)}`,
+          title: `[${agentIds.has(agent.id) ? "x" : " "}] ${agentName(agent)}`,
           subtitle: agent.provider,
           run: () =>
-            transferAgentsStep(
-              source,
-              destination,
-              target,
-              toggled(selected, agent.id),
-            ),
+            transferAgentsStep(source, destination, target, {
+              ...choice,
+              agentIds: toggled(agentIds, agent.id),
+            }),
         })),
       ],
     };
@@ -895,7 +954,7 @@ export function createManagementController(context: () => ManagementContext) {
           : [],
     );
     const agents = (destination: TransferDestination) =>
-      transferAgentsStep(source, destination, target, start);
+      transferSettingsStep(source, destination, target, start);
     return {
       kind: "choice",
       title: "Transfer to",
@@ -905,57 +964,62 @@ export function createManagementController(context: () => ManagementContext) {
           .checkout(source)
           .status(source.workspaceDirectory);
         const onDefault = state.branch === defaultBaseBranch([], state.baseRef);
+        const worktree = (branchName: string | null): TransferDestination =>
+          sameHost
+            ? { kind: "new-worktree", project, branchName }
+            : { kind: "other-host-worktree", project, branchName };
         const newWorktree: CommandItem = {
           id: "transfer:new-worktree",
           group: "Workspaces",
           title: "New worktree",
           subtitle: sameHost
             ? `Takes ${state.branch ?? "this checkout"} and its uncommitted changes`
-            : `Pushes ${state.branch ?? "this checkout"}; commit changes first`,
+            : onDefault
+              ? `Branches off ${state.branch} there, nothing pushed; commit changes first`
+              : `Pushes ${state.branch ?? "this checkout"}; commit changes first`,
           run: (): CommandStep =>
-            !sameHost
-              ? agents({ kind: "other-host-worktree", project })
-              : onDefault
-                ? {
-                    kind: "input",
-                    title: "Branch name",
-                    placeholder:
-                      "New branch name (optional, Enter to auto-name)",
-                    submit: (name) =>
-                      agents({
-                        kind: "new-worktree",
-                        project,
-                        branchName: name.trim() || null,
-                      }),
-                  }
-                : agents({ kind: "new-worktree", project, branchName: null }),
+            onDefault
+              ? {
+                  kind: "input",
+                  title: "Branch name",
+                  placeholder: "New branch name (optional, Enter to auto-name)",
+                  submit: (name) => agents(worktree(name.trim() || null)),
+                }
+              : agents(worktree(null)),
         };
+        if (!sameHost) return [newWorktree];
         const home = from.hostId(source);
         return [
+          {
+            id: "transfer:current",
+            group: "Workspaces",
+            title: "This workspace",
+            subtitle:
+              "New agents here carry the chat over; files and branch stay as they are",
+            run: () => agents({ kind: "current" }),
+          },
           newWorktree,
-          ...(sameHost
-            ? context()
-                .workspaces.filter(
-                  (workspace) =>
-                    workspace.projectId === source.projectId &&
-                    workspace.id !== source.id &&
-                    from.hostId(workspace) === home,
-                )
-                .map(
-                  (workspace): CommandItem => ({
-                    id: `transfer:workspace:${workspace.id}`,
-                    group: "Workspaces",
-                    title: workspace.title || workspace.name,
-                    subtitle: shortPath(workspace.workspaceDirectory),
-                    run: () => agents({ kind: "existing", workspace }),
-                  }),
-                )
-            : []),
+          ...context()
+            .workspaces.filter(
+              (workspace) =>
+                workspace.projectId === source.projectId &&
+                workspace.id !== source.id &&
+                from.hostId(workspace) === home,
+            )
+            .map(
+              (workspace): CommandItem => ({
+                id: `transfer:workspace:${workspace.id}`,
+                group: "Workspaces",
+                title: workspace.title || workspace.name,
+                subtitle: shortPath(workspace.workspaceDirectory),
+                run: () => agents({ kind: "existing", workspace }),
+              }),
+            ),
         ];
       },
     };
   }
-  /** Transfer › Host (when on several) › Destination › Agents. */
+  /** Transfer agents › Host (when on several) › Destination › Provider & model › Agents. */
   function transferWorkspace(source: WorkspaceRow) {
     if (snapshot.operation.kind === "running") return;
     const project = context().projects.find(
@@ -969,7 +1033,7 @@ export function createManagementController(context: () => ManagementContext) {
     const found = placements?.(project.projectId) ?? [];
     if (!hosts || found.length === 0) {
       wizard(
-        "Transfer workspace",
+        "Transfer agents",
         transferDestinationStep(source, here, project, true),
       );
       return;
@@ -986,10 +1050,10 @@ export function createManagementController(context: () => ManagementContext) {
     }
     const only = found.length === 1 ? found[0] : undefined;
     if (only) {
-      wizard("Transfer workspace", on(only.hostId, only.project));
+      wizard("Transfer agents", on(only.hostId, only.project));
       return;
     }
-    wizard("Transfer workspace", {
+    wizard("Transfer agents", {
       kind: "choice",
       title: "Host",
       items: () =>
