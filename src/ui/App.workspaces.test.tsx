@@ -298,6 +298,51 @@ it("dims the sidebar title and accents the agent title when pane focus moves", a
     ),
   ).toBe(true);
 });
+it("Ctrl-w h from the leftmost pane focuses the sidebar and Ctrl-w l returns", async () => {
+  const { app, test } = await setup();
+  function sidebarDimmed() {
+    return test
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .some(
+        (span) =>
+          span.text.includes("Projects") &&
+          span.fg.toInts().slice(0, 3).join(",") === "112,112,112",
+      );
+  }
+  app.stdin.write("\r");
+  await settle();
+  expect(sidebarDimmed()).toBe(true);
+  app.stdin.write("\x17h");
+  await settle();
+  expect(sidebarDimmed()).toBe(false);
+  app.stdin.write("\x17l");
+  await settle();
+  expect(sidebarDimmed()).toBe(true);
+});
+it("Ctrl-w Ctrl-w cycles a single pane with the sidebar", async () => {
+  const { app, test } = await setup();
+  function sidebarDimmed() {
+    return test
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .some(
+        (span) =>
+          span.text.includes("Projects") &&
+          span.fg.toInts().slice(0, 3).join(",") === "112,112,112",
+      );
+  }
+  app.stdin.write("\r");
+  await settle();
+  expect(sidebarDimmed()).toBe(true);
+  for (const expected of [false, true]) {
+    for (const key of ["\x17", "\x17"]) {
+      app.stdin.write(key);
+      await settle();
+    }
+    expect(sidebarDimmed()).toBe(expected);
+  }
+});
 it("spins in the status bar while an operation runs", async () => {
   let finish = () => {};
   const renamed = new Promise<void>((resolve) => {

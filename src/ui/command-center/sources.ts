@@ -280,11 +280,14 @@ export function builtinSource(context: BuiltinContext): CommandSource {
         }
       }
       for (const workspace of context.workspaces) {
+        const branch = workspace.gitRuntime?.currentBranch;
         items.push({
           id: `workspace:${workspace.id}`,
           group: "Workspaces",
           title: workspace.title || workspace.name,
           subtitle: workspace.workspaceDirectory ?? workspace.projectRootPath,
+          // A keyword match ranks below title and directory matches.
+          ...(branch ? { keywords: [branch] } : {}),
           run(): undefined {
             context.workspace(workspace);
           },

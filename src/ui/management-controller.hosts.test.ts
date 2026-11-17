@@ -8,6 +8,7 @@ import {
   createManagementController,
   type ManagementContext,
 } from "./management-controller.js";
+import type { NewWorkspaceChoice } from "./workspace/new-workspace-memory.js";
 import type {
   WorkspaceActions,
   WorkspacePlacement,
@@ -290,6 +291,44 @@ it("asks for the project first, then its host when the project is on several", a
   expect(refreshes()).toBe(1);
   expect(opened).toEqual([["build-ws", "agent:build-agent"]]);
   expect(controller.getSnapshot().operation).toEqual({ kind: "idle" });
+});
+
+it("remembers the merged project and host, and offers that host first next time", async () => {
+  let last: NewWorkspaceChoice | null = null;
+  const memory = {
+    last: () => last,
+    set(choice: NewWorkspaceChoice) {
+      last = choice;
+    },
+    flush: async () => {},
+  };
+  const { controller, wizard } = setup({ newWorkspaceMemory: memory });
+  controller.createWorkspace();
+  await walk(wizard().step, ["app", "Build", "Local", ...AGENT]);
+  await controller.settled();
+  expect(last).toEqual({
+    projectId: "app",
+    hostId: "build",
+    provider: "codex",
+    model: "best",
+    thinkingOptionId: null,
+  });
+  controller.createWorkspace();
+  const projects = wizard().step;
+  if (projects.kind !== "choice") throw Error("Expected projects");
+  expect((await projects.items()).map((item) => item.subtitle)).toEqual([
+    "/repo/app · last used",
+    "/repo",
+    "Find a directory on the host",
+  ]);
+  const host = await walk(projects, ["app"]);
+  if (host?.kind !== "choice") throw Error("Expected hosts");
+  expect(
+    (await host.items()).map((item) => [item.title, item.subtitle]),
+  ).toEqual([
+    ["Build", "/srv/app · connected · last used"],
+    ["local", "/home/app · connected"],
+  ]);
 });
 
 it("re-lists the Provider step from the catalog of the host it creates on", async () => {

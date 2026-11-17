@@ -53,6 +53,19 @@ export interface ConfigurationOptions {
   titlePlaceholder?: string;
   /** Ends after Thinking, finishing with no title or prompt. */
   settingsOnly?: boolean;
+  /**
+   * Listed first (so selected) and marked "last used": the provider, and, for that
+   * provider only, its model and thinking level.
+   */
+  last?: LastConfiguration | null;
+}
+export interface LastConfiguration {
+  provider: string;
+  model: string;
+  thinkingOptionId: string | null;
+}
+function first<T>(items: readonly T[], isLast: (item: T) => boolean): T[] {
+  return items.toSorted((a, b) => Number(isLast(b)) - Number(isLast(a)));
 }
 /** Provider › Model › Mode › Thinking › Title › prompt; `finish` may continue with another step. */
 export function agentConfigurationFlow(
@@ -74,32 +87,47 @@ export function agentConfigurationFlow(
         ? { subscribe: deps.onProvidersChange.bind(deps) }
         : {}),
       items: async () =>
-        (await deps.providers()).map((provider) => ({
+        first(
+          await deps.providers(),
+          (provider) => provider.id === options.last?.provider,
+        ).map((provider) => ({
           id: `provider:${provider.id}`,
           group: "Agents",
           title: provider.label,
-          subtitle: provider.error ?? "",
+          subtitle:
+            provider.error ??
+            (provider.id === options.last?.provider ? "last used" : ""),
           run: () => (provider.available ? modelStep(cwd, provider) : step),
         })),
     };
     return step;
   }
+  /** The last configuration, only when it was for this provider. */
+  function lastFor(provider: string) {
+    return options.last?.provider === provider ? options.last : null;
+  }
   function modelStep(cwd: string, provider: CatalogProvider): CommandStep {
+    const lastModel = lastFor(provider.id)?.model;
     return {
       kind: "choice",
       title: "Model",
       items: async () =>
-        (await deps.models(provider.id))
-          .toSorted((a, b) => Number(b.isDefault) - Number(a.isDefault))
-          .map((model) => ({
-            id: `model:${model.id}`,
-            group: "Agents",
-            title: model.label,
-            subtitle: [model.description, model.isDefault ? "default" : null]
-              .filter(Boolean)
-              .join(" · "),
-            run: () => modeStep(cwd, provider, model),
-          })),
+        first(
+          first(await deps.models(provider.id), (model) => model.isDefault),
+          (model) => model.id === lastModel,
+        ).map((model) => ({
+          id: `model:${model.id}`,
+          group: "Agents",
+          title: model.label,
+          subtitle: [
+            model.description,
+            model.isDefault ? "default" : null,
+            model.id === lastModel ? "last used" : null,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          run: () => modeStep(cwd, provider, model),
+        })),
     };
   }
   function modeStep(
@@ -155,18 +183,19 @@ export function agentConfigurationFlow(
       title: "Thinking",
       items: () => {
         if (thinking.kind === "unsupported") throw Error(thinking.message);
-        const preferred = deps.thinkingPreference?.get() ?? "medium";
-        return [...thinking.options]
-          .sort(
-            (a, b) => Number(b.id === preferred) - Number(a.id === preferred),
-          )
-          .map((option) => ({
+        const lastId = lastFor(provider)?.thinkingOptionId;
+        const last = thinking.options.some((option) => option.id === lastId)
+          ? lastId
+          : null;
+        const preferred = last ?? deps.thinkingPreference?.get() ?? "medium";
+        return first(thinking.options, (option) => option.id === preferred).map(
+          (option) => ({
             id: `thinking:${option.id}`,
             group: "Agents",
             title: option.label,
             subtitle: [
               option.description,
-              option.id === preferred ? "default" : null,
+              option.id === preferred ? (last ? "last used" : "default") : null,
             ]
               .filter(Boolean)
               .join(" · "),
@@ -174,7 +203,8 @@ export function agentConfigurationFlow(
               deps.thinkingPreference?.set(option.id);
               return titleStep(cwd, provider, model.id, modeId, option.id);
             },
-          }));
+          }),
+        );
       },
     };
   }

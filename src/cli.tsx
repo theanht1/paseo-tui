@@ -61,6 +61,10 @@ import {
 } from "./ui/render/theme.js";
 import { useStore } from "./ui/use-store.js";
 import { resolveDiffTool } from "./ui/workspace/diff-tool.js";
+import {
+  loadNewWorkspaceMemory,
+  newWorkspacePath,
+} from "./ui/workspace/new-workspace-memory.js";
 import { DEFAULT_EDITOR } from "./ui/workspace/workspace-editor.js";
 
 const clientPackagePath = join(
@@ -189,6 +193,9 @@ async function main() {
   const labelFilter = await loadLabelFilterMemory(
     filePreferenceStorage(labelFilterPath(process.env, homedir())),
   );
+  const newWorkspaceMemory = await loadNewWorkspaceMemory(
+    filePreferenceStorage(newWorkspacePath(process.env, homedir())),
+  );
   const diffTool = resolveDiffTool(values["diff-tool"], process.env);
   const target = resolveTarget(
     { host: values.host, home: values.home },
@@ -275,6 +282,7 @@ async function main() {
               order={order}
               labels={merged.labels}
               labelFilter={labelFilter}
+              newWorkspaceMemory={newWorkspaceMemory}
               completions={merged.completions}
               directories={merged.directories}
               systemClipboard={systemClipboard(
@@ -327,8 +335,9 @@ async function main() {
     syntaxStyle.destroy();
     process.off("uncaughtException", uncaught);
     merged.timelines.close();
-    await shutdown([thinkingPreference, layouts, order, labelFilter], () =>
-      hosts.close(),
+    await shutdown(
+      [thinkingPreference, layouts, order, labelFilter, newWorkspaceMemory],
+      () => hosts.close(),
     );
   }
 }

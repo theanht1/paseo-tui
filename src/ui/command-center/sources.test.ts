@@ -11,7 +11,7 @@ import {
   type Layout,
   panes,
 } from "../layout/split-tree.js";
-import type { CommandStep } from "./registry.js";
+import { type CommandStep, rankCommands } from "./registry.js";
 import { builtinSource } from "./sources.js";
 
 function setup(status: "running" | "idle" = "idle") {
@@ -333,6 +333,42 @@ it("offers daemon workspaces with no agents in Command Center", () => {
   expect(row?.title).toBe("Empty worktree");
   row?.run();
   expect(opened).toEqual(["empty"]);
+});
+
+it("finds workspaces by branch name, below workspaces whose title matches", () => {
+  function row(id: string, name: string, branch: string) {
+    return {
+      id,
+      projectId: "repo",
+      projectRootPath: "/repo",
+      activityAt: null,
+      statusEnteredAt: null,
+      workspaceDirectory: `/trees/${id}`,
+      name,
+      gitRuntime: { currentBranch: branch },
+    };
+  }
+  const source = builtinSource({
+    groups: [],
+    waiting: [],
+    workspaces: [
+      row("by-branch", "Checkout flow", "fix-login"),
+      row("by-title", "Fix login", "main"),
+      row("other", "Docs", "docs"),
+    ],
+    focusedAgent: undefined,
+    focusedStore: null,
+    prefixLabel: "Ctrl-B",
+    open() {},
+    changeLayout() {},
+    workspace() {},
+    act() {},
+  });
+  expect(
+    rankCommands(source.items(), "fix login")
+      .map(({ item }) => item.id)
+      .filter((id) => id.startsWith("workspace:")),
+  ).toEqual(["workspace:by-title", "workspace:by-branch"]);
 });
 
 it("offers Refresh providers under Actions only when the hosts can refresh them", () => {

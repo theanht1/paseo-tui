@@ -192,6 +192,39 @@ export function focusDirection(
   return { ...layout, focusedId: best ?? layout.focusedId, zoomedId: null };
 }
 
+/** Where directional focus lands: the sidebar sits left of the leftmost pane. */
+export type FocusMove =
+  | { target: "sidebar" }
+  | { target: "pane"; layout: Layout };
+export function moveFocus(
+  from: "sidebar" | "pane",
+  layout: Layout,
+  dir: "left" | "right" | "up" | "down",
+  rects: ReadonlyMap<string, Rect>,
+): FocusMove {
+  if (from === "sidebar")
+    return dir === "right" ? { target: "pane", layout } : { target: "sidebar" };
+  const next = focusDirection(layout, dir, rects);
+  return dir === "left" && next.focusedId === layout.focusedId
+    ? { target: "sidebar" }
+    : { target: "pane", layout: next };
+}
+
+/** Next pane in order; with the sidebar shown, it follows the last pane, like a Vim side window. */
+export function cycleFocus(
+  from: "sidebar" | "pane",
+  layout: Layout,
+  sidebar: boolean,
+): FocusMove {
+  if (from === "sidebar")
+    return { target: "pane", layout: focusIndex(layout, 0) };
+  const all = panes(layout);
+  const last = all[all.length - 1]?.id === layout.focusedId;
+  return sidebar && last
+    ? { target: "sidebar" }
+    : { target: "pane", layout: focusNext(layout) };
+}
+
 export function clearAgent(layout: Layout, agentId: string): Layout {
   let root = layout.root;
   for (const pane of panes(layout)) {

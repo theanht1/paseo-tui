@@ -63,7 +63,7 @@ The optional `fileEditor` setting (default `vim`) is the command that opens a fi
 }
 ```
 
-- `keys` maps an action to a key or a list of keys, replacing its defaults; `[]` unbinds it. Actions are named by their type plus arguments joined with `:`, for example `help`, `palette.open`, `pane.split:right`, `pane.focus:left`, `pane.select:3`, `tab.select:0`, `workspace.cycle:-1`, `sidebar.move:1`, `tab.move:-1`, `scroll.half:1`, `list.edge:top`; an unknown name prints the full list. Keys use the help popup's format: `x`, `X`, `Ctrl-x`, `Meta-x` (or `Alt-x`), `Cmd-x` / `Cmd-Shift-x` (or `Super-`), `Enter`, `Esc`, `Tab`, `Shift-Tab`, `Up`, `PgDn`, `F1`. A rebound action keeps its default modes, so prefix actions still follow the prefix and always-on actions (`tab.create`, `palette.open`) need a `Ctrl-`, `Meta-` or `Cmd-` key. Multi-key chords cannot be bound; `Ctrl-C`, `Z Q`, `g t` / `g T`, `Ctrl-w <dir>`, and `g` / `Z` / `Ctrl-w` in normal mode stay fixed. The help popup, status hints and Command Center show the effective keys.
+- `keys` maps an action to a key or a list of keys, replacing its defaults; `[]` unbinds it. Actions are named by their type plus arguments joined with `:`, for example `help`, `palette.open`, `pane.split:right`, `pane.focus:left`, `pane.select:3`, `tab.select:0`, `workspace.cycle:-1`, `sidebar.move:1`, `tab.move:-1`, `scroll.half:1`, `list.edge:top`; an unknown name prints the full list. Keys use the help popup's format: `x`, `X`, `Ctrl-x`, `Meta-x` (or `Alt-x`), `Cmd-x` / `Cmd-Shift-x` (or `Super-`), `Enter`, `Esc`, `Tab`, `Shift-Tab`, `Up`, `PgDn`, `F1`. A rebound action keeps its default modes, so prefix actions still follow the prefix and always-on actions (`tab.create`, `palette.open`) need a `Ctrl-`, `Meta-` or `Cmd-` key. Multi-key chords cannot be bound; `Ctrl-C`, `Z Q`, `g t` / `g T`, `Ctrl-w <dir>`, `Ctrl-w w` / `Ctrl-w Ctrl-w`, and `g` / `Z` / `Ctrl-w` in normal mode stay fixed. The help popup, status hints and Command Center show the effective keys.
 - `theme` overrides colors with hex values (`#rgb`, `#rrggbb`, `#rrggbbaa`): top-level fields (`fg`, `muted`, `faint`, `accent`, `user`, `userBg`, `assistant`, `tool`, `reasoning`, `error`, `warn`, `success`, `border`, `borderFocused`, `selectionBg`, `cursorBg`, `cursorFg`, `codeBg`, `tabStripBg`, `tabBg`, `tabActiveBg`, `tabActiveFg`, `copySelectionBg`, `copySelectionFg`, `copyCursorBg`, `copyCursorFg`, and the label chip colors `labelViolet`, `labelSky`, `labelEmerald`, `labelOrange`, `labelPink`, `labelIndigo`, `labelTeal`, `labelRed`, `labelAmber`, `labelBlue`), `status` (`running`, `idle`, `error`, `attention`, `question`), `syntax` (highlight styles such as `keyword`, `string`, `comment`) and up to three `heading` levels. `NO_COLOR` still wins.
 
 The optional `usage` setting picks which provider meters the status bar shows, in the order listed: `true` keeps a provider's default window, an array of window, balance or detail ids shows exactly those, and `false` hides it. Without `usage`, every reporting provider shows its default window. The Command Center's "Provider usage" view still lists everything and ends each row with `id <provider>.<id>`, plus `· hidden` when `usage` leaves it out of the status bar:
@@ -95,7 +95,7 @@ One window can show several Paseo daemons. `--host` (or the local daemon) is the
 - Hosts reconnect on their own: a dropped connection is retried by the Paseo client; a host that failed to connect at startup, or whose client gave up, is retried after 5 s, 10 s, 30 s, then every 60 s.
 - Saved hosts live in `$XDG_CONFIG_HOME/paseo-tui/hosts.json` (else `~/.config/paseo-tui/hosts.json`). Passwords are stored there in plain text, in a file readable only by you (mode `0600`). A `?password=` typed into an address is moved out of the address so it is never shown or logged.
 - **Add project…** picks a host and finds a directory on it. **Remove project…** archives the project's workspaces and deletes their worktrees, after you confirm.
-- **New workspace…** picks a project, then a host when the project is on several, then Local or Worktree (a new git worktree from a base branch).
+- **New workspace…** picks a project, then a host when the project is on several, then Local or Worktree (a new git worktree from a base branch). The project, host, provider, and (for the same provider) model and thinking level of the last workspace created are listed first and marked "last used"; they are saved in `$XDG_STATE_HOME/paseo-tui/new-workspace.json` (else `~/.local/state/paseo-tui/new-workspace.json`).
 
 ## Development
 
@@ -251,20 +251,20 @@ Tool details include shell output (last 200 lines), file content (first 400 line
 
 `Ctrl-B` is the default pane prefix in both normal and insert mode; inside tmux, use `--prefix C-a`. Prefix mode expires after 1500 ms, and an unbound key consumes it. Repeat the prefix in insert mode to insert its literal control character.
 
-| Context      | Key                           | Action                                          |
-| ------------ | ----------------------------- | ----------------------------------------------- |
-| Prefix       | `%` / `"`                     | Split right / down, copying the focused agent   |
-| Prefix       | `h` / `j` / `k` / `l`, arrows | Focus left / down / up / right                  |
-| Prefix       | `o`                           | Next pane                                       |
-| Prefix       | `x`                           | Close view; closing the last pane empties it    |
-| Prefix       | `z`                           | Zoom / unzoom                                   |
-| Prefix       | `q`                           | Show pane numbers for one second; digit selects |
-| Prefix       | `0`–`9`                       | Select pane by zero-based index                 |
-| Prefix       | `?`                           | Help                                            |
-| Normal       | `Ctrl-w h/j/k/l` / `Ctrl-w w` | Focus direction / next pane                     |
-| Pane, normal | `/`                           | Search the timeline, including unloaded history |
-| Search       | `Enter` / `Esc`               | Commit / cancel query                           |
-| Pane, normal | `n` / `N`                     | Next / previous match, wrapping                 |
+| Context      | Key                                              | Action                                                                   |
+| ------------ | ------------------------------------------------ | ------------------------------------------------------------------------ |
+| Prefix       | `%` / `"`                                        | Split right / down, copying the focused agent                            |
+| Prefix       | `h` / `j` / `k` / `l`, arrows                    | Focus left / down / up / right; left of the leftmost pane is the sidebar |
+| Prefix       | `o`                                              | Next pane; the sidebar (when shown) follows the last pane                |
+| Prefix       | `x`                                              | Close view; closing the last pane empties it                             |
+| Prefix       | `z`                                              | Zoom / unzoom                                                            |
+| Prefix       | `q`                                              | Show pane numbers for one second; digit selects                          |
+| Prefix       | `0`–`9`                                          | Select pane by zero-based index                                          |
+| Prefix       | `?`                                              | Help                                                                     |
+| Normal       | `Ctrl-w h/j/k/l` / `Ctrl-w w` or `Ctrl-w Ctrl-w` | Focus direction / next pane, then the sidebar                            |
+| Pane, normal | `/`                                              | Search the timeline, including unloaded history                          |
+| Search       | `Enter` / `Esc`                                  | Commit / cancel query                                                    |
+| Pane, normal | `n` / `N`                                        | Next / previous match, wrapping                                          |
 
 Opening an agent assigns it to the focused pane. Click any pane to focus it. Panes showing the same agent share one live timeline subscription, while selection, search and expanded details stay separate. Splits, closing and focus changes clear zoom. Layouts are saved per workspace (see [Configuration](#configuration)).
 
@@ -278,7 +278,7 @@ Prefix `[` enters tmux-style copy mode over the pane's whole history, as in tmux
 
 Press `Ctrl-K` in any mode, or `:` in normal mode (also after the prefix), to search agents, workspaces, pane actions, view actions and keyboard help.
 
-- Search accepts multiple tokens and fuzzy subsequences.
+- Search accepts multiple tokens and fuzzy subsequences. Workspaces also match their git branch, ranked below title matches.
 - Use arrows or `Ctrl-N` / `Ctrl-P` to select (`PgUp` / `PgDn` jump a page; `Home` / `End` move the query caret), then `Enter` to run; clicking a result also runs it.
 - `Esc` goes back a step, or closes at the root; a click outside closes the palette.
 - Opening it from insert mode restores insert mode on close.

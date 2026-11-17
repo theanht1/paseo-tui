@@ -196,6 +196,74 @@ it("selects medium thinking by default, persists a supported choice, and sends t
   expect(restarted.get()).toBe("high");
 });
 
+describe("last used configuration", () => {
+  async function steps(last: {
+    provider: string;
+    model: string;
+    thinkingOptionId: string | null;
+  }) {
+    const { deps } = fixture();
+    deps.models = async () => [
+      { id: "other", label: "Other", description: null, isDefault: false },
+      {
+        id: "best",
+        label: "Best",
+        description: null,
+        isDefault: true,
+        thinking: {
+          kind: "options",
+          options: [
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+        },
+      },
+    ];
+    const providers = await choices(
+      agentConfigurationStep(deps, "/repo", () => {}, { last }),
+    );
+    const codex = providers.find((item) => item.title === "Codex");
+    if (!codex) throw Error("No Codex");
+    const models = await choices(codex.run());
+    const best = models.find((item) => item.title === "Best");
+    if (!best) throw Error("No Best");
+    const modes = await choices(best.run());
+    const thinking = await choices(at(modes, 0).run());
+    return { providers, models, thinking };
+  }
+  it("puts the last provider, model and thinking level first", async () => {
+    const { providers, models, thinking } = await steps({
+      provider: "codex",
+      model: "best",
+      thinkingOptionId: "high",
+    });
+    expect(providers.map((item) => [item.title, item.subtitle])).toEqual([
+      ["Codex", "last used"],
+      ["Offline", "Sign in"],
+    ]);
+    expect(models.map((item) => [item.title, item.subtitle])).toEqual([
+      ["Best", "default · last used"],
+      ["Other", ""],
+    ]);
+    expect(thinking.map((item) => [item.title, item.subtitle])).toEqual([
+      ["High", "last used"],
+      ["Medium", ""],
+    ]);
+  });
+  it("keeps the defaults for another provider", async () => {
+    const { models, thinking } = await steps({
+      provider: "claude",
+      model: "other",
+      thinkingOptionId: "high",
+    });
+    expect(models.map((item) => item.title)).toEqual(["Best", "Other"]);
+    expect(thinking.map((item) => [item.title, item.subtitle])).toEqual([
+      ["Medium", "default"],
+      ["High", ""],
+    ]);
+  });
+});
+
 describe("title step placeholder", () => {
   async function titlePlaceholder(
     options?: Parameters<typeof agentConfigurationStep>[3],

@@ -239,11 +239,9 @@ export function dispatch(
       action: null,
     };
   }
-  if (mode.kind === "normal" && key.toLowerCase() === "ctrl-w")
-    return { mode: { kind: "normal", pending: "Ctrl-w" }, action: null };
   if (mode.kind === "normal" && mode.pending === "Ctrl-w") {
     const action =
-      key === "w"
+      key === "w" || key.toLowerCase() === "ctrl-w"
         ? ({ type: "pane.next" } as const)
         : (bindings.find(
             (b) =>
@@ -253,6 +251,8 @@ export function dispatch(
           )?.action ?? null);
     return { mode: normal, action };
   }
+  if (mode.kind === "normal" && key.toLowerCase() === "ctrl-w")
+    return { mode: { kind: "normal", pending: "Ctrl-w" }, action: null };
   if (mode.kind === "normal" && key === "Z")
     return { mode: { kind: "normal", pending: "Z" }, action: null };
   if (mode.kind === "normal" && mode.pending === "Z" && key === "Q")

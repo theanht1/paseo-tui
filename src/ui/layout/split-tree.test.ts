@@ -4,9 +4,11 @@ import {
   clearAgent,
   close,
   computeRects,
+  cycleFocus,
   focusDirection,
   focusIndex,
   initialLayout,
+  moveFocus,
   panes,
   split,
   toggleZoom,
@@ -68,4 +70,49 @@ test("clearAgent clears every matching pane and preserves others", () => {
   expect(panes(cleared).map((p) => p.agentId)).toEqual([null, null, "b"]);
   expect(panes(layout).map((p) => p.agentId)).toEqual(["a", "a", "b"]);
   expect(cleared.focusedId).toBe(layout.focusedId);
+});
+test("left past the leftmost pane reaches the sidebar; right from it returns", () => {
+  const l = focusIndex(split(initialLayout(), "right"), 1);
+  const rects = computeRects(l, area);
+  expect(moveFocus("pane", l, "left", rects)).toEqual({
+    target: "pane",
+    layout: { ...l, focusedId: "0" },
+  });
+  const leftmost = focusIndex(l, 0);
+  expect(moveFocus("pane", leftmost, "left", rects)).toEqual({
+    target: "sidebar",
+  });
+  expect(moveFocus("pane", leftmost, "up", rects)).toEqual({
+    target: "pane",
+    layout: leftmost,
+  });
+  expect(moveFocus("sidebar", leftmost, "right", rects)).toEqual({
+    target: "pane",
+    layout: leftmost,
+  });
+  for (const dir of ["left", "up", "down"] as const)
+    expect(moveFocus("sidebar", leftmost, dir, rects)).toEqual({
+      target: "sidebar",
+    });
+});
+test("cycling visits every pane, then the sidebar, then the first pane again", () => {
+  const two = split(initialLayout(), "right");
+  const first = focusIndex(two, 0);
+  const last = focusIndex(two, 1);
+  expect(cycleFocus("pane", first, true)).toEqual({
+    target: "pane",
+    layout: last,
+  });
+  expect(cycleFocus("pane", last, true)).toEqual({ target: "sidebar" });
+  expect(cycleFocus("sidebar", last, true)).toEqual({
+    target: "pane",
+    layout: first,
+  });
+  expect(cycleFocus("pane", initialLayout(), true)).toEqual({
+    target: "sidebar",
+  });
+  expect(cycleFocus("pane", last, false)).toEqual({
+    target: "pane",
+    layout: first,
+  });
 });

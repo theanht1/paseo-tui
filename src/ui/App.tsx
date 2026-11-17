@@ -163,10 +163,10 @@ import {
   clearAgent,
   close,
   computeRects,
-  focusDirection,
+  cycleFocus,
   focusIndex,
-  focusNext,
   initialLayout,
+  moveFocus,
   type PaneNode,
   panes,
   split,
@@ -216,6 +216,7 @@ import {
 } from "./timeline/TimelineView.js";
 import { type ExternalStore, useStore } from "./use-store.js";
 import { DEFAULT_DIFF_TOOL } from "./workspace/diff-tool.js";
+import type { NewWorkspaceMemory } from "./workspace/new-workspace-memory.js";
 import { WorkspaceTabs } from "./workspace/WorkspaceTabs.js";
 import type { WorkspaceActions } from "./workspace/workspace-actions.js";
 import type { DirectorySnapshot } from "./workspace/workspace-directory.js";
@@ -300,6 +301,7 @@ export interface AppProps {
   labels?: WorkspaceLabels;
   /** The sidebar's label filter, kept across restarts. */
   labelFilter?: LabelFilterMemory;
+  newWorkspaceMemory?: NewWorkspaceMemory;
   /** Provider usage meters; absent when the daemon reports no usage. */
   usage?: UsageStore;
   usageConfig?: UsageConfig;
@@ -354,6 +356,7 @@ export function App({
   order,
   labels = NO_LABELS,
   labelFilter,
+  newWorkspaceMemory,
   usage,
   usageConfig,
   schedules,
@@ -1120,6 +1123,7 @@ export function App({
         }
       : {}),
     notify: (text) => setNotice({ text }),
+    ...(newWorkspaceMemory ? { newWorkspaceMemory } : {}),
     refresh: async () => {
       await refresh?.();
     },
@@ -1576,14 +1580,35 @@ export function App({
         setLayout(close);
         setFocus({ pane: "timeline" });
         break;
-      case "pane.next":
-        setLayout(focusNext);
-        setFocus({ pane: "timeline" });
+      case "pane.next": {
+        const move = cycleFocus(
+          focus.pane === "list" ? "sidebar" : "pane",
+          layout,
+          sidebarVisible,
+        );
+        if (move.target === "sidebar") setFocus({ pane: "list" });
+        else {
+          setLayout(move.layout);
+          setFocus({ pane: "timeline" });
+        }
         break;
-      case "pane.focus":
-        setLayout((l) => focusDirection(l, action.direction, rects));
-        setFocus({ pane: "timeline" });
+      }
+      case "pane.focus": {
+        const move = moveFocus(
+          focus.pane === "list" ? "sidebar" : "pane",
+          layout,
+          action.direction,
+          rects,
+        );
+        if (move.target === "sidebar") {
+          setSidebarVisible(true);
+          setFocus({ pane: "list" });
+        } else {
+          setLayout(move.layout);
+          setFocus({ pane: "timeline" });
+        }
         break;
+      }
       case "pane.select":
         setLayout((l) => focusIndex(l, action.index));
         setNumbers(false);

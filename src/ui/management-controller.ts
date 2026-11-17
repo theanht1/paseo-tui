@@ -16,6 +16,7 @@ import { type HostScope, type HostsPort, hostSubtitle } from "./hosts/hosts.js";
 import type { ProjectPlacement } from "./hosts/merge.js";
 import { defaultBaseBranch } from "./workspace/base-branch.js";
 import { diffToolTab, diffToolTerminal } from "./workspace/diff-tool.js";
+import type { NewWorkspaceMemory } from "./workspace/new-workspace-memory.js";
 import { newTabInput } from "./workspace/tab-template.js";
 import type {
   WorkspaceActions,
@@ -80,6 +81,8 @@ export interface ManagementContext {
   placements?(projectId: string): readonly ProjectPlacement[];
   /** A short confirmation in the status bar. */
   notify?(text: string): void;
+  /** The last New workspace's project and provider, offered first next time. */
+  newWorkspaceMemory?: NewWorkspaceMemory;
 }
 /** A first agent already configured, e.g. a fork; `start` runs when the workspace is created. */
 export interface AgentSeed {
@@ -92,6 +95,11 @@ export interface AgentSeed {
     prompt: string | null;
     attachments: readonly ForkAttachment[];
   }>;
+}
+/** The project as listed in the Project step, and the host chosen for it; kept as the last New workspace. */
+interface Origin {
+  projectId: string;
+  hostId: string | null;
 }
 /** A host to create on: the window's own management (`host` null) or one host's. */
 interface Target {
@@ -268,27 +276,46 @@ export function createManagementController(context: () => ManagementContext) {
   ): CommandStep | undefined {
     const { hosts, placements } = context();
     const found = placements?.(project.projectId) ?? [];
-    if (!hosts || found.length === 0) return workspaceStep(here, project, seed);
+    if (!hosts || found.length === 0)
+      return workspaceStep(here, project, seed, {
+        projectId: project.projectId,
+        hostId: null,
+      });
     function on(hostId: string, own: PaseoProject) {
       if (!hosts) throw Error("Hosts are unavailable");
-      return workspaceStep(scoped(hosts.scope(hostId)), own, seed);
+      return workspaceStep(scoped(hosts.scope(hostId)), own, seed, {
+        projectId: project.projectId,
+        hostId,
+      });
     }
     const only = found.length === 1 ? found[0] : undefined;
     if (only) return on(only.hostId, only.project);
+    const lastHost = context().newWorkspaceMemory?.last()?.hostId;
     return {
       kind: "choice",
       title: "Host",
       items: () =>
-        found.map(({ hostId, project: own }) => {
-          const host = hosts.list().find((option) => option.id === hostId);
-          return {
-            id: `host:${hostId}`,
-            group: "Workspaces" as const,
-            title: host?.label ?? hostId,
-            subtitle: `${own.projectRootPath} · ${host?.status ?? "offline"}`,
-            run: () => on(hostId, own),
-          };
-        }),
+        found
+          .toSorted(
+            (a, b) =>
+              Number(b.hostId === lastHost) - Number(a.hostId === lastHost),
+          )
+          .map(({ hostId, project: own }) => {
+            const host = hosts.list().find((option) => option.id === hostId);
+            return {
+              id: `host:${hostId}`,
+              group: "Workspaces" as const,
+              title: host?.label ?? hostId,
+              subtitle: [
+                own.projectRootPath,
+                host?.status ?? "offline",
+                hostId === lastHost ? "last used" : null,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+              run: () => on(hostId, own),
+            };
+          }),
     };
   }
   async function seededInput(
@@ -315,7 +342,9 @@ export function createManagementController(context: () => ManagementContext) {
     project: PaseoProject,
     placement: WorkspacePlacement,
     seed: AgentSeed | null,
+    origin: Origin,
   ): CommandStep | undefined {
+    const last = context().newWorkspaceMemory?.last() ?? null;
     function create(input: () => Promise<CreateAgentInput>) {
       run(
         target.host
@@ -323,9 +352,16 @@ export function createManagementController(context: () => ManagementContext) {
           : "Creating workspace…",
         async () => {
           await context().thinkingPreference?.flush();
+          const agentInput = await input();
           const result = await target
             .actions()
-            .createWorkspace(project, await input(), placement);
+            .createWorkspace(project, agentInput, placement);
+          context().newWorkspaceMemory?.set({
+            ...origin,
+            provider: agentInput.provider,
+            model: agentInput.model,
+            thinkingOptionId: agentInput.thinkingOptionId ?? null,
+          });
           await target.created(result.workspace, result.agent);
         },
       );
@@ -338,13 +374,17 @@ export function createManagementController(context: () => ManagementContext) {
       target.catalog,
       project.projectRootPath,
       (input) => create(async () => input),
-      { titlePlaceholder: "Workspace and tab title (optional)" },
+      {
+        titlePlaceholder: "Workspace and tab title (optional)",
+        last,
+      },
     );
   }
   function worktreeStep(
     target: Target,
     project: PaseoProject,
     seed: AgentSeed | null,
+    origin: Origin,
   ): CommandStep {
     return {
       kind: "choice",
@@ -372,6 +412,7 @@ export function createManagementController(context: () => ManagementContext) {
                   branchName: name.trim() || null,
                 },
                 seed,
+                origin,
               ),
           }),
         }));
@@ -383,9 +424,10 @@ export function createManagementController(context: () => ManagementContext) {
     target: Target,
     project: PaseoProject,
     seed: AgentSeed | null,
+    origin: Origin,
   ): CommandStep | undefined {
     if (project.projectKind !== "git")
-      return configure(target, project, { kind: "local" }, seed);
+      return configure(target, project, { kind: "local" }, seed, origin);
     return {
       kind: "choice",
       title: "Workspace",
@@ -395,14 +437,15 @@ export function createManagementController(context: () => ManagementContext) {
           group: "Workspaces",
           title: "Local",
           subtitle: `Main checkout · ${project.projectRootPath}`,
-          run: () => configure(target, project, { kind: "local" }, seed),
+          run: () =>
+            configure(target, project, { kind: "local" }, seed, origin),
         },
         {
           id: "placement:worktree",
           group: "Workspaces",
           title: "Worktree",
           subtitle: "New git worktree from a base branch",
-          run: () => worktreeStep(target, project, seed),
+          run: () => worktreeStep(target, project, seed, origin),
         },
       ],
     };
@@ -421,16 +464,27 @@ export function createManagementController(context: () => ManagementContext) {
     return {
       kind: "choice",
       title: "Project",
-      items: () => [
-        ...context().projects.map((project) => ({
-          id: `project:${project.projectId}`,
-          group: "Workspaces" as const,
-          title: projectName(project),
-          subtitle: project.projectRootPath,
-          run: () => placementStep(project, seed),
-        })),
-        addProjectItem(),
-      ],
+      items: () => {
+        const last = context().newWorkspaceMemory?.last()?.projectId;
+        return [
+          ...context()
+            .projects.toSorted(
+              (a, b) =>
+                Number(b.projectId === last) - Number(a.projectId === last),
+            )
+            .map((project) => ({
+              id: `project:${project.projectId}`,
+              group: "Workspaces" as const,
+              title: projectName(project),
+              subtitle:
+                project.projectId === last
+                  ? `${project.projectRootPath} · last used`
+                  : project.projectRootPath,
+              run: () => placementStep(project, seed),
+            })),
+          addProjectItem(),
+        ];
+      },
     };
   }
   /** New workspace › Project › Host (when on several) › Local/Worktree › first agent. */

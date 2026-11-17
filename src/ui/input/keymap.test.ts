@@ -610,3 +610,12 @@ test("a focused prompt keeps plain keys and its own Ctrl keys", () => {
   for (const name of ["b", "c", "d", "f", "n", "p", "u"])
     expect(promptChordAction(key(name, true))).toBeNull();
 });
+test("Ctrl-w Ctrl-w cycles to the next pane like Ctrl-w w", () => {
+  const pending = dispatch(normal, "pane", key("w", true));
+  expect(pending.mode).toEqual({ kind: "normal", pending: "Ctrl-w" });
+  for (const second of [key("w", true), key("w")])
+    expect(dispatch(pending.mode, "pane", second)).toEqual({
+      mode: normal,
+      action: { type: "pane.next" },
+    });
+});

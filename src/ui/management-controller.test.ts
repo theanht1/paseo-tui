@@ -5,7 +5,11 @@ import {
   NO_TRANSFER_API,
 } from "../test/fixtures.js";
 import type { CommandStep } from "./command-center/registry.js";
-import { createManagementController } from "./management-controller.js";
+import {
+  createManagementController,
+  type ManagementContext,
+} from "./management-controller.js";
+import type { NewWorkspaceChoice } from "./workspace/new-workspace-memory.js";
 import {
   createWorkspaceActions,
   type ManagementApi,
@@ -480,7 +484,10 @@ async function walk(step: CommandStep, picks: readonly string[]) {
   }
   return current;
 }
-function placementSetup(real?: WorkspaceActions) {
+function placementSetup(
+  real?: WorkspaceActions,
+  extra: Partial<ManagementContext> = {},
+) {
   const project = {
     projectId: "p",
     projectDisplayName: "Repo",
@@ -520,6 +527,13 @@ function placementSetup(real?: WorkspaceActions) {
         {
           id: "codex",
           label: "Codex",
+          available: true,
+          error: null,
+          defaultModeId: null,
+        },
+        {
+          id: "claude",
+          label: "Claude",
           available: true,
           error: null,
           defaultModeId: null,
@@ -568,6 +582,7 @@ function placementSetup(real?: WorkspaceActions) {
     opened(result) {
       opened.push([result.workspace?.id, result.tab?.key]);
     },
+    ...extra,
   }));
   function start() {
     controller.createWorkspace(project);
@@ -925,4 +940,66 @@ it("fork into a new workspace names the workspace after the fork", async () => {
   expect(created).toMatchObject([
     { title: "Fork of Alpha", agent: { title: "Fork of Alpha" } },
   ]);
+});
+
+it("puts the last new workspace's project and provider first and remembers the next one", async () => {
+  let last: NewWorkspaceChoice | null = {
+    projectId: "p",
+    hostId: null,
+    provider: "claude",
+    model: "best",
+    thinkingOptionId: null,
+  };
+  const memory = {
+    last: () => last,
+    set(choice: NewWorkspaceChoice) {
+      last = choice;
+    },
+    flush: async () => {},
+  };
+  const other = {
+    projectId: "o",
+    projectDisplayName: "Other",
+    projectRootPath: "/other",
+    projectKind: "directory" as const,
+  };
+  const { controller } = placementSetup(undefined, {
+    projects: [
+      other,
+      {
+        projectId: "p",
+        projectDisplayName: "Repo",
+        projectRootPath: "/repo",
+        projectKind: "git",
+      },
+    ],
+    newWorkspaceMemory: memory,
+  });
+  controller.createWorkspace();
+  const state = controller.getSnapshot();
+  if (state.overlay.kind !== "wizard" || state.overlay.step.kind !== "choice")
+    throw Error("Expected the project choice");
+  const projects = await state.overlay.step.items();
+  expect(projects.map((item) => [item.title, item.subtitle])).toEqual([
+    ["Repo", "/repo · last used"],
+    ["Other", "/other"],
+    ["Add project…", "Find a directory on the host"],
+  ]);
+  const providers = await walk(state.overlay.step, ["Other"]);
+  if (providers?.kind !== "choice") throw Error("Expected providers");
+  expect(
+    (await providers.items()).map((item) => [item.title, item.subtitle]),
+  ).toEqual([
+    ["Claude", "last used"],
+    ["Codex", ""],
+  ]);
+  await walk(providers, ["Codex", "Best", "Provider default", "", ""]);
+  await controller.settled();
+  expect(last).toEqual({
+    projectId: "o",
+    hostId: null,
+    provider: "codex",
+    model: "best",
+    thinkingOptionId: null,
+  });
 });
