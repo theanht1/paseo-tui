@@ -12,6 +12,7 @@ import {
   createHistoryAdapter,
   createHostInfoAdapter,
   createManagementAdapter,
+  createPluginAdapter,
   createProjectAdapter,
   createProviderCatalogAdapter,
   createScheduleAdapter,
@@ -31,6 +32,7 @@ import type {
   HistoryPort,
   HostConnectionState,
   HostInfoPort,
+  PluginPort,
   ProjectPort,
   ProviderCatalogPort,
   WorkspaceLabelPort,
@@ -60,6 +62,8 @@ export interface Connection {
   providers: ProviderCatalogPort;
   /** Null when the daemon lacks `workspaceLabels`. */
   labels: WorkspaceLabelPort | null;
+  /** Null when the daemon lacks `plugins` or `pluginManagement`. */
+  plugins: PluginPort | null;
   host: HostInfoPort;
   label: string;
   onConnectionState(cb: (state: HostConnectionState) => void): () => void;
@@ -149,6 +153,7 @@ export async function connect(
     projects: createProjectAdapter(daemon),
     providers: createProviderCatalogAdapter(daemon),
     labels: createWorkspaceLabelAdapter(daemon),
+    plugins: createPluginAdapter(daemon),
     host: createHostInfoAdapter(daemon),
     onConnectionState: (cb) => daemon.subscribeConnectionStatus(cb),
     close: () => closeDaemon(daemon),

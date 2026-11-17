@@ -22,6 +22,7 @@ import {
 } from "./state/label-catalog.js";
 import type { AgentsPort } from "./state/ports.js";
 import type { ProviderSubagentStore } from "./state/provider-subagents.js";
+import type { ServerPluginsSnapshot } from "./state/server-plugins.js";
 import {
   createTimelineRegistry,
   type TimelineRegistry,
@@ -29,6 +30,7 @@ import {
 import type { TimelineStore } from "./state/timeline-store.js";
 import type { UsageSnapshot, UsageStore } from "./state/usage-store.js";
 import { mergeHosts } from "./ui/hosts/merge.js";
+import type { PluginHostEntry } from "./ui/plugins/plugin-host.js";
 import type { ExternalStore } from "./ui/use-store.js";
 import type { WorkspaceActions } from "./ui/workspace/workspace-actions.js";
 import type { DirectorySnapshot } from "./ui/workspace/workspace-directory.js";
@@ -53,6 +55,11 @@ export interface HostSession {
   completions: CompletionPort;
   directories: DirectoryPort;
   subagents?: ProviderSubagentStore | undefined;
+  /** Absent when the daemon lacks `plugins` or `pluginManagement`. */
+  plugins?:
+    | (ExternalStore<ServerPluginsSnapshot> &
+        NonNullable<PluginHostEntry["server"]>)
+    | undefined;
   usage?: UsageStore | undefined;
   history?: HistoryPort | undefined;
   workspaceRead?: WorkspaceReadPort | undefined;
@@ -93,6 +100,11 @@ const NO_USAGE: ExternalStore<UsageSnapshot> = {
 const NO_DESCRIPTORS: ExternalStore<
   ReturnType<ProviderSubagentStore["getSnapshot"]>
 > = { subscribe: () => () => {}, getSnapshot: () => [] };
+const NO_PLUGINS_SNAPSHOT: ServerPluginsSnapshot = { kind: "offline" };
+const NO_PLUGINS: ExternalStore<ServerPluginsSnapshot> = {
+  subscribe: () => () => {},
+  getSnapshot: () => NO_PLUGINS_SNAPSHOT,
+};
 
 function byRecency(left: WorkspaceGroup, right: WorkspaceGroup) {
   return (
@@ -285,6 +297,17 @@ export function createMultiHost(
     sources: hosts,
     store: (host: Host) => host.live.session.subagents ?? NO_DESCRIPTORS,
     merge: (values) => values.flatMap(({ value }) => value),
+  });
+  const plugins = combineStores({
+    sources: hosts,
+    store: (host: Host) => host.live.session.plugins ?? NO_PLUGINS,
+    merge: (values): readonly PluginHostEntry[] =>
+      values.map(({ source, value }) => ({
+        id: source.id,
+        label: source.label,
+        server: source.live.session.plugins ?? null,
+        state: value,
+      })),
   });
 
   function find(id: string): Host | null {
@@ -612,6 +635,10 @@ export function createMultiHost(
     catalog,
     terminalStream,
     subagents,
+    /** Every connected host, as TUI plugins see it. */
+    plugins,
+    /** The host id of a workspace, agent or terminal; null when unknown. */
+    hostOf: (id: string) => find(id)?.id ?? null,
     terminals: {
       ref: (id: string) => known(id).live.session.terminals.ref(id),
     } satisfies HostSession["terminals"],

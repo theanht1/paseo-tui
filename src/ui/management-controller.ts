@@ -783,9 +783,10 @@ export function createManagementController(context: () => ManagementContext) {
   }
   function closeTab(tab: WorkspaceTab | null = context().tab) {
     if (!tab || snapshot.operation.kind === "running") return;
-    // A subagent tab or an archived session's view-only tab closes client-side only.
+    // A subagent or plugin tab, or an archived session's view-only tab, closes client-side only.
     if (
       tab.kind === "subagent" ||
+      tab.kind === "plugin" ||
       (tab.kind === "agent" && tab.agent.archivedAt != null)
     ) {
       context().closed?.(tab);

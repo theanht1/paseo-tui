@@ -12,6 +12,7 @@ import type {
   DraftCommandConfig,
   HistoryPort,
   HostInfoPort,
+  PluginPort,
   ProjectPort,
   ProviderCatalogPort,
   ProviderSnapshotEntry,
@@ -648,6 +649,70 @@ export function createSubagentAdapter(
       );
       if (result.error) throw Error(result.error);
       return result;
+    },
+  };
+}
+
+export interface PluginDaemon {
+  getLastServerInfoMessage(): {
+    serverId: string;
+    features?: { plugins?: boolean; pluginManagement?: boolean };
+  } | null;
+  listPlugins(): Promise<{ id: string; enabled: boolean; status: string }[]>;
+  invokePluginRpc(
+    pluginId: string,
+    method: string,
+    input: unknown,
+  ): Promise<unknown>;
+  observeEvents(events: ["status.plugin_catalog_changed"]): {
+    subscribe(observer: {
+      snapshot(): void;
+      update(message: { type: string; payload?: unknown }): void;
+    }): () => void;
+    release(): Promise<void>;
+  };
+}
+function isCatalogChange(message: { type: string; payload?: unknown }) {
+  return (
+    message.type === "status" &&
+    typeof message.payload === "object" &&
+    message.payload !== null &&
+    "status" in message.payload &&
+    message.payload.status === "plugin_catalog_changed"
+  );
+}
+/** Server plugins need `plugins` (RPC) and `pluginManagement` (the list). */
+export function createPluginAdapter(daemon: PluginDaemon): PluginPort | null {
+  const info = daemon.getLastServerInfoMessage();
+  if (
+    info?.features?.plugins !== true ||
+    info.features.pluginManagement !== true
+  )
+    return null;
+  return {
+    serverId: info.serverId,
+    async list() {
+      return (await daemon.listPlugins()).map((plugin) => ({
+        id: plugin.id,
+        running: plugin.enabled && plugin.status === "running",
+      }));
+    },
+    rpc: (pluginId, method, input) =>
+      daemon.invokePluginRpc(pluginId, method, input),
+    observe(handler) {
+      const subscription = daemon.observeEvents([
+        "status.plugin_catalog_changed",
+      ]);
+      const unsubscribe = subscription.subscribe({
+        snapshot() {},
+        update(message) {
+          if (isCatalogChange(message)) handler();
+        },
+      });
+      return async () => {
+        unsubscribe();
+        await subscription.release().catch(() => {});
+      };
     },
   };
 }

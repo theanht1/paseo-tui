@@ -8,7 +8,7 @@ import {
 } from "../layout/split-tree.js";
 import { NO_ORDER, type StoredOrder } from "./ordering.js";
 import {
-  type SubagentTab,
+  type ClientTab,
   tabWorkspaceId,
   type WorkspaceRow,
   type WorkspaceTab,
@@ -62,7 +62,7 @@ export function createWorkspaceNavigation(
     workspace: WorkspaceRow,
     agents: readonly PaseoAgent[],
     terminals: readonly PaseoTerminal[],
-    subagents: readonly SubagentTab[] = [],
+    client: readonly ClientTab[] = [],
     /** Archived sessions open as view-only tabs. */
     archived: readonly PaseoAgent[] = [],
   ): WorkspaceTab | null {
@@ -70,7 +70,7 @@ export function createWorkspaceNavigation(
       workspace.id,
       agents,
       terminals,
-      subagents,
+      client,
       archived,
       order(),
     );
@@ -104,7 +104,7 @@ export function createWorkspaceNavigation(
     workspaces: readonly WorkspaceRow[],
     agents: readonly PaseoAgent[],
     terminals: readonly PaseoTerminal[],
-    subagents: readonly SubagentTab[] = [],
+    client: readonly ClientTab[] = [],
     /** Archived sessions open as view-only tabs. */
     archived: readonly PaseoAgent[] = [],
   ): NavigationSnapshot {
@@ -133,7 +133,7 @@ export function createWorkspaceNavigation(
       workspaceId,
       agents,
       terminals,
-      subagents,
+      client,
       archived,
       order(),
     );
@@ -166,7 +166,9 @@ export function createWorkspaceNavigation(
           ? previousTab.terminal === tab.terminal
           : previousTab?.kind === "subagent" && tab?.kind === "subagent"
             ? previousTab.descriptor === tab.descriptor
-            : previousTab === tab;
+            : previousTab?.kind === "plugin" && tab?.kind === "plugin"
+              ? previousTab.key === tab.key && previousTab.title === tab.title
+              : previousTab === tab;
     if (
       workspaceId !== snapshot.workspaceId ||
       cursorId !== snapshot.cursorId ||

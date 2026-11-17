@@ -4,7 +4,14 @@ import {
   useRenderer,
   useTerminalDimensions,
 } from "@opentui/react";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   CompletionPort,
   DirectoryPort,
@@ -180,6 +187,24 @@ import {
 import { ManagementOverlayView } from "./overlays/ManagementOverlayView.js";
 import { ShortcutPopup } from "./overlays/ShortcutPopup.js";
 import type { Focus } from "./permission/permission-focus.js";
+import type { TuiPluginNoticeLevel } from "./plugins/api.js";
+import { PluginView } from "./plugins/PluginView.js";
+import type {
+  PluginHost,
+  PluginHostSnapshot,
+  PluginHostUi,
+} from "./plugins/plugin-host.js";
+import { pluginBindings } from "./plugins/plugin-keys.js";
+import {
+  actionOnHost,
+  type OpenPluginView,
+  pluginCommands,
+  pluginNoticeLine,
+  pluginViewKey,
+  pluginViewTabs,
+  prunePluginViews,
+  registeredView,
+} from "./plugins/plugin-tabs.js";
 import { cachedCommands } from "./prompt/command-cache.js";
 import { createPromptDrafts } from "./prompt/prompt-drafts.js";
 import {
@@ -289,6 +314,14 @@ export interface AppProps {
   fileEditor?: string;
   /** The effective key table (defaults plus config `keys`). */
   bindings?: readonly Binding[];
+  /** Loaded TUI plugins: their views, actions and configured keys. */
+  plugins?: {
+    host: Pick<PluginHost, "subscribe" | "getSnapshot" | "connect" | "run">;
+    /** The `keys` entries named `plugin.<pluginId>.<actionId>`. */
+    keys: ReadonlyMap<string, readonly string[]>;
+    /** The host a workspace lives on. */
+    hostOf(workspaceId: string): string | null;
+  };
   /** Per-workspace split layouts and tabs, kept across restarts. */
   layouts?: LayoutMemory;
   /** The user's project, workspace and tab order, kept across restarts. */
@@ -346,7 +379,8 @@ export function App({
   diffTool = DEFAULT_DIFF_TOOL,
   editor = DEFAULT_EDITOR,
   fileEditor = DEFAULT_FILE_EDITOR,
-  bindings = BINDINGS,
+  bindings: baseBindings = BINDINGS,
+  plugins,
   layouts,
   order,
   labels = NO_LABELS,
@@ -364,11 +398,13 @@ export function App({
   const renderer = useRenderer();
   const router = useMemo(() => createKeyRouter(), []);
   const clipboardWriter: ClipboardWriter = clipboard ?? renderer;
-  const [notice, setNotice] = useState<{ text: string } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; hold?: number } | null>(
+    null,
+  );
   const [drafts] = useState(createPromptDrafts);
   useEffect(() => {
     if (!notice) return;
-    const timer = setTimeout(() => setNotice(null), 2500);
+    const timer = setTimeout(() => setNotice(null), notice.hold ?? 2500);
     return () => clearTimeout(timer);
   }, [notice]);
   function copy(text: string) {
@@ -378,6 +414,42 @@ export function App({
       },
     );
   }
+  const pluginState = useStore(plugins?.host ?? NO_PLUGINS);
+  const pluginHostOf = plugins?.hostOf ?? NO_HOST;
+  const pluginKeys = plugins?.keys;
+  const keyed = useMemo(
+    () =>
+      pluginBindings(
+        baseBindings,
+        pluginState.actions,
+        pluginKeys ?? new Map(),
+        // A host still starting a plugin has not registered all its actions yet.
+        new Set(
+          pluginState.actions
+            .filter((entry) => pluginState.settled.has(entry.hostId))
+            .map((entry) => entry.pluginId),
+        ),
+      ),
+    [baseBindings, pluginState, pluginKeys],
+  );
+  const bindings = keyed.bindings;
+  /** Plugin messages arriving together share the status line. */
+  const pluginNotices = useRef<{ text: string; level: TuiPluginNoticeLevel }[]>(
+    [],
+  );
+  const pluginNotice = useCallback(
+    (text: string, level: TuiPluginNoticeLevel = "info") => {
+      if (pluginNotices.current.push({ text, level }) > 1) return;
+      queueMicrotask(() =>
+        setNotice(pluginNoticeLine(pluginNotices.current.splice(0))),
+      );
+    },
+    [],
+  );
+  const keyErrors = keyed.errors.join(" · ");
+  useEffect(() => {
+    if (keyErrors) pluginNotice(keyErrors, "error");
+  }, [keyErrors, pluginNotice]);
   const health = useStore(hostHealth);
   const previousHealth = useRef(health);
   useEffect(() => {
@@ -474,6 +546,10 @@ export function App({
     navigationState.tab?.kind === "terminal"
       ? navigationState.tab.terminal.id
       : null;
+  const pluginTab =
+    navigationState.tab?.kind === "plugin" ? navigationState.tab : null;
+  /** A terminal or plugin view fills the pane area; no agent pane is on screen. */
+  const standalone = terminalId !== null || pluginTab !== null;
   const terminalHandle = useMemo(
     () => (terminalId && terminals ? terminals.ref(terminalId) : null),
     [terminalId, terminals],
@@ -499,6 +575,39 @@ export function App({
   >(new Map());
   /** Provider subagent chats opened as tabs; client-side, closing archives nothing. */
   const [subagentTabs, setSubagentTabs] = useState<readonly SubagentTab[]>([]);
+  /** Plugin views opened as tabs; they show while their plugin is active on the workspace's host. */
+  const [openViews, setOpenViews] = useState<readonly OpenPluginView[]>(() =>
+    [...(layouts?.views() ?? [])].flatMap(([workspaceId, views]) =>
+      views.map(({ plugin, view }) => ({
+        workspaceId,
+        pluginId: plugin,
+        viewId: view,
+      })),
+    ),
+  );
+  useEffect(() => {
+    setOpenViews((previous) =>
+      prunePluginViews(previous, pluginState, pluginHostOf),
+    );
+  }, [pluginState, pluginHostOf]);
+  const clientTabs = useMemo(
+    () => [
+      ...subagentTabs,
+      ...pluginViewTabs(openViews, pluginState.views, pluginHostOf),
+    ],
+    [subagentTabs, openViews, pluginState.views, pluginHostOf],
+  );
+  /** Views shown at least once stay mounted behind other tabs, keeping their state. */
+  const [shownViews, setShownViews] = useState<ReadonlySet<string>>(new Set());
+  const pluginTabKey = pluginTab?.key ?? null;
+  useEffect(() => {
+    if (pluginTabKey !== null)
+      setShownViews((previous) =>
+        previous.has(pluginTabKey)
+          ? previous
+          : new Set([...previous, pluginTabKey]),
+      );
+  }, [pluginTabKey]);
   const [archivedViews, setArchivedViews] = useState<ArchivedViews>(new Map());
   const [unarchiving, setUnarchiving] = useState<
     ReadonlyMap<string, UnarchiveState>
@@ -629,7 +738,7 @@ export function App({
     activeWorkspaceId,
     flat,
     visibleTerminals,
-    subagentTabs,
+    clientTabs,
     archivedList,
     storedOrder,
   );
@@ -652,13 +761,14 @@ export function App({
       workspaces,
       flat,
       visibleTerminals,
-      subagentTabs,
+      clientTabs,
       archivedList,
     );
+    // Input leaves with an exited editor terminal or a plugin view that went away.
     if (
       before &&
       next.tab?.key !== before.key &&
-      editorTabs.current.delete(before.key)
+      (editorTabs.current.delete(before.key) || before.kind === "plugin")
     ) {
       setMode({ kind: "normal", pending: "" });
       setFocus({ pane: "timeline" });
@@ -681,7 +791,7 @@ export function App({
     archivedList,
     archivedViews,
     visibleTerminals,
-    subagentTabs,
+    clientTabs,
     current?.agentId,
   ]);
   /** The workspace whose layout is on screen; switching swaps in its remembered layout. */
@@ -691,7 +801,15 @@ export function App({
   useEffect(() => {
     if (!layouts) return;
     if (layoutOwner.current === openWorkspaceId) {
-      if (openWorkspaceId) layouts.record(openWorkspaceId, layout, openTabKey);
+      if (openWorkspaceId)
+        layouts.record(
+          openWorkspaceId,
+          layout,
+          openTabKey,
+          openViews
+            .filter((open) => open.workspaceId === openWorkspaceId)
+            .map((open) => ({ plugin: open.pluginId, view: open.viewId })),
+        );
       return;
     }
     layoutOwner.current = openWorkspaceId;
@@ -704,7 +822,15 @@ export function App({
     if (!restored) return;
     setProviderViews(new Map());
     setLayout(restored);
-  }, [layouts, navigation, openWorkspaceId, openTabKey, layout, flat]);
+  }, [
+    layouts,
+    navigation,
+    openWorkspaceId,
+    openTabKey,
+    layout,
+    flat,
+    openViews,
+  ]);
   const timeline = current
     ? (stores.get(`${current.id}:${current.agentId}`) ?? null)
     : null;
@@ -716,7 +842,7 @@ export function App({
   );
   const acknowledged = useStore(attention);
   const viewedAgent =
-    terminalId || focus.pane === "list"
+    standalone || focus.pane === "list"
       ? undefined
       : flat.find((agent) => agent.id === current?.agentId);
   useEffect(() => {
@@ -876,7 +1002,9 @@ export function App({
       ? `subagent:${view.parentAgentId}:${view.subagentId}`
       : `agent:${pane.agentId}`;
   }
-  const tabKey = terminalId ? `terminal:${terminalId}` : paneTabKey(current);
+  const tabKey = terminalId
+    ? `terminal:${terminalId}`
+    : (pluginTab?.key ?? paneTabKey(current));
   function openTab(tab: WorkspaceTab) {
     if (tab.kind === "agent") open(tab.agent);
     else if (tab.kind === "subagent") {
@@ -900,7 +1028,7 @@ export function App({
       workspace,
       flat,
       visibleTerminals,
-      subagentTabs,
+      clientTabs,
       archivedList,
     );
     if (tab) openTab(tab);
@@ -1026,7 +1154,7 @@ export function App({
           agent.workspaceId,
           flat,
           visibleTerminals,
-          subagentTabs,
+          clientTabs,
           archivedList,
           storedOrder,
         )
@@ -1075,6 +1203,14 @@ export function App({
         );
         if (tabKey === tab.key && parent) open(parent);
         setMode({ kind: "normal", pending: "" });
+        return;
+      }
+      if (tab.kind === "plugin") {
+        setOpenViews((previous) =>
+          previous.filter((open) => pluginViewKey(open) !== tab.key),
+        );
+        setMode({ kind: "normal", pending: "" });
+        setFocus({ pane: "timeline" });
         return;
       }
       setClosedTabs((previous) => new Set([...previous, tab.key]));
@@ -1207,13 +1343,13 @@ export function App({
         setMode({ kind: "normal", pending: "" });
         break;
       case "copy.start":
-        if (terminalId || !timeline) {
+        if (standalone || !timeline) {
           returnMode.current = { kind: "normal", pending: "" };
           setMode({ kind: "normal", pending: "" });
         } else controls.current.get(layout.focusedId)?.act(action);
         break;
       case "prompt.edit":
-        if (terminalId || !timeline || !promptEditor) break;
+        if (standalone || !timeline || !promptEditor) break;
         returnMode.current = { kind: "insert" };
         if (mode.kind !== "palette") setMode({ kind: "insert" });
         setFocus({ pane: "prompt" });
@@ -1224,7 +1360,7 @@ export function App({
         setMode({ kind: "normal", pending: "" });
         break;
       case "hint.start":
-        if (terminalId || !timeline) {
+        if (standalone || !timeline) {
           returnMode.current = { kind: "normal", pending: "" };
           setMode({ kind: "normal", pending: "" });
         } else controls.current.get(layout.focusedId)?.act(action);
@@ -1232,6 +1368,16 @@ export function App({
       case "quit":
         interrupt();
         break;
+      case "plugin": {
+        const entry = actionOnHost(
+          pluginState.actions,
+          action.plugin,
+          action.action,
+          activeWorkspaceId ? pluginHostOf(activeWorkspaceId) : null,
+        );
+        if (entry) void plugins?.host.run(entry);
+        break;
+      }
       case "tab.cycle": {
         const tab = cycleTab(tabs, tabKey, action.delta);
         if (tab) openTab(tab);
@@ -1331,7 +1477,7 @@ export function App({
       case "attention.next": {
         const agent = nextAttention(
           waiting.map((entry) => entry.agent),
-          terminalId ? null : (current?.agentId ?? null),
+          standalone ? null : (current?.agentId ?? null),
         );
         if (agent) open(agent);
         break;
@@ -1367,7 +1513,7 @@ export function App({
         );
         break;
       case "insert":
-        if (timeline || terminalId) setFocus({ pane: "prompt" });
+        if (timeline || standalone) setFocus({ pane: "prompt" });
         break;
       case "history.open":
         if (!history || mode.kind === "palette") break;
@@ -1381,7 +1527,7 @@ export function App({
         if (focusedArchived) unarchive(focusedArchived);
         break;
       case "prompts.open": {
-        if (mode.kind === "palette" || terminalId || !timeline || !focusedAgent)
+        if (mode.kind === "palette" || standalone || !timeline || !focusedAgent)
           break;
         const focusedPane = all.find((pane) => pane.id === layout.focusedId);
         if (focusedPane && providerView(focusedPane)) {
@@ -1405,7 +1551,7 @@ export function App({
         break;
       }
       case "agent.clear": {
-        if (mode.kind === "palette" || terminalId || !timeline) break;
+        if (mode.kind === "palette" || standalone || !timeline) break;
         const focusedPane = all.find((pane) => pane.id === layout.focusedId);
         if (focusedPane && providerView(focusedPane)) {
           setNotice({ text: "Open the parent agent to clear its session" });
@@ -1438,7 +1584,7 @@ export function App({
         break;
       }
       case "queue.edit":
-        if (terminalId || !timeline) break;
+        if (standalone || !timeline) break;
         // The queued text lands in the prompt, so editing continues there.
         if (mode.kind === "palette") returnMode.current = { kind: "insert" };
         else setMode({ kind: "insert" });
@@ -1537,7 +1683,7 @@ export function App({
           },
         }
       : undefined;
-  const focusedAgent = terminalId
+  const focusedAgent = standalone
     ? undefined
     : viewable.find((a) => a.id === current?.agentId);
   const focusedArchived =
@@ -1773,9 +1919,9 @@ export function App({
       waiting,
       workspaces,
       focusedAgent,
-      focusedStore: terminalId ? null : timeline,
+      focusedStore: standalone ? null : timeline,
       queued:
-        focusedAgent && !terminalId
+        focusedAgent && !standalone
           ? queues.forAgent(focusedAgent).getSnapshot().items.length
           : 0,
       models: catalog?.models,
@@ -1838,6 +1984,80 @@ export function App({
       }),
     [registry],
   );
+  const pluginActions = useRef(pluginState.actions);
+  pluginActions.current = pluginState.actions;
+  const pluginRunner = plugins?.host;
+  useEffect(
+    () =>
+      pluginRunner &&
+      registry.register({
+        id: "plugins",
+        items: () =>
+          pluginCommands(
+            pluginActions.current,
+            (entry) => void pluginRunner.run(entry),
+          ),
+      }),
+    [registry, pluginRunner],
+  );
+  /** The plugin view tab to select and hand the keyboard once it is listed. */
+  const [wantedView, setWantedView] = useState<string | null>(null);
+  useEffect(() => {
+    const tab = clientTabs.find((candidate) => candidate.key === wantedView);
+    if (!tab) return;
+    setWantedView(null);
+    setHelp(false);
+    navigation.selectTab(tab);
+    setFocus({ pane: "prompt" });
+    setMode({ kind: "insert" });
+  }, [wantedView, clientTabs, navigation]);
+  const pluginUi: PluginHostUi = {
+    openView({ hostId, pluginId, viewId }) {
+      const workspaceId = [
+        activeWorkspaceId,
+        ...workspaces.map((workspace) => workspace.id),
+      ].find((id) => id != null && pluginHostOf(id) === hostId);
+      if (!workspaceId) {
+        pluginNotice("Open a workspace on that host to show the view");
+        return;
+      }
+      const open = { workspaceId, pluginId, viewId };
+      const key = pluginViewKey(open);
+      setOpenViews((previous) =>
+        previous.some((candidate) => pluginViewKey(candidate) === key)
+          ? previous
+          : [...previous, open],
+      );
+      setWantedView(key);
+    },
+    focusWorkspace(workspaceId) {
+      const workspace = workspaces.find(
+        (candidate) => candidate.id === workspaceId,
+      );
+      if (workspace) openWorkspace(workspace);
+      else pluginNotice(`Workspace ${workspaceId} is not listed`);
+    },
+    notify: pluginNotice,
+  };
+  const pluginUiRef = useRef(pluginUi);
+  pluginUiRef.current = pluginUi;
+  useEffect(
+    () =>
+      pluginRunner?.connect({
+        openView: (target) => pluginUiRef.current.openView(target),
+        focusWorkspace: (id) => pluginUiRef.current.focusWorkspace(id),
+        notify: (text, level) => pluginUiRef.current.notify(text, level),
+      }),
+    [pluginRunner],
+  );
+  const mountedViews = openViews.flatMap((open) => {
+    const key = pluginViewKey(open);
+    const entry =
+      key === pluginTabKey || shownViews.has(key)
+        ? registeredView(open, pluginState.views, pluginHostOf)
+        : null;
+    return entry ? [{ key, view: entry.view }] : [];
+  });
   /** Help or a management overlay holds input; panes stay rendered but inactive. */
   const blocked = help || managementState.overlay.kind !== "closed";
   const terminalInput =
@@ -1845,9 +2065,15 @@ export function App({
     focus.pane === "prompt" &&
     mode.kind === "insert" &&
     !blocked;
+  /** The plugin view has the keyboard; like a terminal, it keeps every key but Ctrl-]. */
+  const viewInput =
+    pluginTab !== null &&
+    focus.pane === "prompt" &&
+    mode.kind === "insert" &&
+    !blocked;
   const overlayOpen = blocked || mode.kind === "palette";
   useKeyboard((event) => {
-    if (terminalInput) {
+    if (terminalInput || viewInput) {
       if (event.ctrl && event.name === "]") {
         event.preventDefault();
         event.stopPropagation();
@@ -1915,6 +2141,7 @@ export function App({
     setMode,
     act,
     !terminalInput &&
+      !viewInput &&
       !help &&
       subagentPopup === null &&
       managementState.overlay.kind === "closed" &&
@@ -1995,7 +2222,7 @@ export function App({
               />
             ) : null}
             <box width={area.width} height={area.height} flexDirection="column">
-              {terminalId ? (
+              {standalone ? (
                 <WorkspaceTabs
                   id="pane-tabs:terminal"
                   width={area.width}
@@ -2010,9 +2237,18 @@ export function App({
                   }
                 />
               ) : null}
-              {terminalHandle &&
-              terminalStream &&
-              hostOffline(activeWorkspaceId) ? (
+              {mountedViews.map(({ key, view }) => (
+                <PluginView
+                  key={key}
+                  view={view}
+                  visible={key === pluginTabKey}
+                  focused={viewInput && key === pluginTabKey}
+                  theme={theme}
+                />
+              ))}
+              {pluginTab ? null : terminalHandle &&
+                terminalStream &&
+                hostOffline(activeWorkspaceId) ? (
                 <text fg={foregroundProp(theme.muted)}>{HOST_OFFLINE}</text>
               ) : terminalHandle && terminalStream ? (
                 <TerminalPane
@@ -2036,7 +2272,7 @@ export function App({
                   }
                 />
               ) : null}
-              {terminalId
+              {standalone
                 ? null
                 : all.map((pane, index) => {
                     const rect =
@@ -2273,9 +2509,10 @@ export function App({
             contextWindow={contextWindow(
               usageSinceClear(focusedAgent?.lastUsage, focusedClearedUsage),
             )}
-            timeline={terminalId ? null : timeline}
+            timeline={standalone ? null : timeline}
             mode={mode}
             terminalInput={terminalInput}
+            viewInput={viewInput}
             context={focus.pane === "list" ? "sidebar" : "pane"}
             searchStatus={searchStatuses.get(layout.focusedId) ?? ""}
             bindings={bindings}
@@ -2286,6 +2523,16 @@ export function App({
   );
 }
 const DEFAULT_PREFIX = parsePrefix("C-b");
+const NO_PLUGINS: ExternalStore<PluginHostSnapshot> = {
+  subscribe: () => () => {},
+  getSnapshot: () => NO_PLUGIN_STATE,
+};
+const NO_PLUGIN_STATE: PluginHostSnapshot = {
+  views: [],
+  actions: [],
+  settled: new Set(),
+};
+const NO_HOST = () => null;
 const LOCALHOST = /^(localhost|127(\.\d+){3}|\[::1\]|0\.0\.0\.0)$/i;
 const NO_LABEL_VIEW: WorkspaceLabelsSnapshot = {
   host: () => ({ kind: "unsupported" }),

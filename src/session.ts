@@ -5,6 +5,7 @@ import { createLabelCatalog } from "./state/label-catalog.js";
 import { createAgentPort, createAgentsPort } from "./state/ports.js";
 import { createProviderCatalog } from "./state/provider-catalog.js";
 import { createProviderSubagentStore } from "./state/provider-subagents.js";
+import { createServerPluginStore } from "./state/server-plugins.js";
 import { createTimelineRegistry } from "./state/timeline-registry.js";
 import { createTimelineStore } from "./state/timeline-store.js";
 import { createUsageStore } from "./state/usage-store.js";
@@ -44,11 +45,18 @@ export function createSession(connection: Connection) {
   const labels = connection.labels
     ? createLabelCatalog(connection.labels)
     : undefined;
+  const plugins = connection.plugins
+    ? createServerPluginStore(connection.plugins)
+    : undefined;
   const status = watchConnection(connection, () => {
     void agents.resync();
     void directory.resync();
     void providers.load();
     void labels?.load();
+    void plugins?.load();
+  });
+  status.subscribe(() => {
+    if (status.getSnapshot().status !== "connected") plugins?.offline();
   });
   /** A timeline store for one of this host's agents. */
   function openTimeline(agent: PaseoAgent) {
@@ -84,6 +92,7 @@ export function createSession(connection: Connection) {
     timelines,
     openTimeline,
     subagents,
+    plugins,
     usage,
     history: connection.history,
     workspaceRead: connection.workspaceRead,
@@ -101,6 +110,7 @@ export function createSession(connection: Connection) {
         directory.close(),
         providers.close(),
         labels?.close(),
+        plugins?.close(),
       ]);
     },
   };

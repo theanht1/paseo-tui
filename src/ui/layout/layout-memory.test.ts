@@ -152,3 +152,37 @@ test("ignores malformed state files and entries", async () => {
     expect(empty.tabs()).toEqual(new Map());
   }
 });
+
+test("remembers a workspace's open plugin views across restarts", async () => {
+  const file = storage();
+  const timer = scheduler();
+  const memory = await loadLayoutMemory(file, timer);
+  const views = [{ plugin: "board", view: "main" }];
+  memory.record("one", twoPanes(), "plugin:one:board:main", views);
+  memory.record("two", twoPanes(), null);
+  expect(memory.views()).toEqual(new Map([["one", views]]));
+  timer.run();
+  await memory.flush();
+  const restarted = await loadLayoutMemory(storage(file.writes.at(-1)), timer);
+  expect(restarted.views()).toEqual(new Map([["one", views]]));
+  expect(restarted.tabs().get("one")).toBe("plugin:one:board:main");
+  // Closing the view forgets it.
+  restarted.record("one", twoPanes(), null);
+  expect(restarted.views()).toEqual(new Map());
+});
+
+test("ignores malformed saved plugin views", async () => {
+  const file = storage();
+  const first = await loadLayoutMemory(file, scheduler());
+  first.record("one", twoPanes(), null, [{ plugin: "board", view: "main" }]);
+  await first.flush();
+  const saved: unknown = JSON.parse(file.writes.at(-1) ?? "");
+  const text = JSON.stringify(saved).replace(
+    '[{"plugin":"board","view":"main"}]',
+    '[{"plugin":"board","view":"main"},{"plugin":7},"x"]',
+  );
+  const restarted = await loadLayoutMemory(storage(text), scheduler());
+  expect(restarted.views()).toEqual(
+    new Map([["one", [{ plugin: "board", view: "main" }]]]),
+  );
+});

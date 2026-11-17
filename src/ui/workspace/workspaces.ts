@@ -42,10 +42,21 @@ export interface SubagentTab {
   workspaceId: string;
   descriptor: ProviderSubagent;
 }
+/** A TUI plugin's view opened as a tab (client-side only). */
+export interface PluginViewTab {
+  kind: "plugin";
+  key: string;
+  workspaceId: string;
+  pluginId: string;
+  viewId: string;
+  title: string;
+}
+/** Tabs the daemon does not list: this client opens and closes them. */
+export type ClientTab = SubagentTab | PluginViewTab;
 export type WorkspaceTab =
   | { kind: "agent"; key: string; agent: PaseoAgent }
   | { kind: "terminal"; key: string; terminal: PaseoTerminal }
-  | SubagentTab;
+  | ClientTab;
 export function subagentTab(
   workspaceId: string,
   descriptor: ProviderSubagent,
@@ -67,7 +78,9 @@ export function tabName(tab: WorkspaceTab): string {
     ? agentName(tab.agent)
     : tab.kind === "terminal"
       ? tab.terminal.name
-      : subagentTabName(tab.descriptor);
+      : tab.kind === "plugin"
+        ? tab.title
+        : subagentTabName(tab.descriptor);
 }
 export function tabWorkspaceId(tab: WorkspaceTab): string | null {
   return tab.kind === "agent"
@@ -103,7 +116,7 @@ export function workspaceTabs(
   workspaceId: string | null,
   agents: readonly PaseoAgent[],
   terminals: readonly PaseoTerminal[],
-  subagents: readonly SubagentTab[] = [],
+  client: readonly ClientTab[] = [],
   archived: readonly PaseoAgent[] = [],
   order: StoredOrder = NO_ORDER,
 ): WorkspaceTab[] {
@@ -137,7 +150,7 @@ export function workspaceTabs(
           terminal,
         }),
       ),
-    ...subagents.filter((tab) => tab.workspaceId === workspaceId),
+    ...client.filter((tab) => tab.workspaceId === workspaceId),
   ];
   return arrange(
     natural,

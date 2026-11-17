@@ -228,6 +228,8 @@ export function createWorkspaceActions(
       if (tab.kind === "agent") await api.renameAgent(tab.agent.id, name);
       else if (tab.kind === "subagent")
         throw Error("Subagent tabs are named after their subagent");
+      else if (tab.kind === "plugin")
+        throw Error("Plugin tabs are named by their plugin");
       else {
         requireCapability(
           capabilities.terminal,
@@ -238,7 +240,7 @@ export function createWorkspaceActions(
     },
     async closeTab(tab: WorkspaceTab) {
       if (tab.kind === "agent") await api.archiveAgent(tab.agent.id);
-      else if (tab.kind === "subagent") return;
+      else if (tab.kind === "subagent" || tab.kind === "plugin") return;
       else {
         requireCapability(
           capabilities.terminal,

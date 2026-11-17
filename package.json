@@ -25,6 +25,13 @@
   "bin": {
     "paseo-tui": "dist/cli.js"
   },
+  "exports": {
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "!dist/test",

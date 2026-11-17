@@ -319,11 +319,90 @@ When the focused agent reports token usage, the status bar shows `ctx 42% 84k/20
 
 ### Tab strip
 
-Each pane has its own tab strip. Tabs share its width equally, between 12 and 32 columns; when they no longer fit at 12 the strip scrolls to keep the selected tab in view. A tab shows its status dot, a kind icon (`❯` agent, `▣` terminal, `◆` subagent), its name (truncated with `…`) and `×` to close it. The selected tab is bold with an accent bar on its left edge; strips of unfocused panes are dimmed. The `tabStripBg`, `tabBg`, `tabActiveBg` and `tabActiveFg` theme colors restyle it.
+Each pane has its own tab strip. Tabs share its width equally, between 12 and 32 columns; when they no longer fit at 12 the strip scrolls to keep the selected tab in view. A tab shows its status dot, a kind icon (`❯` agent, `▣` terminal, `◆` subagent, `▤` plugin view), its name (truncated with `…`) and `×` to close it. The selected tab is bold with an accent bar on its left edge; strips of unfocused panes are dimmed. The `tabStripBg`, `tabBg`, `tabActiveBg` and `tabActiveFg` theme colors restyle it.
 
 ### Terminal activity
 
 Terminal tabs show the same dots as agent tabs when the daemon reports terminal activity: a spinner while the terminal's agent works, `!` while it waits for input, and `●` after it finishes, until you open the tab. The daemon reports activity only for terminal agents with Paseo hooks installed ("Enable terminal agent hooks" in the app's host settings); other terminals show no dot. Activity arrives with the terminal list, which refreshes on workspace changes and every three seconds.
+
+## Plugins
+
+A Paseo plugin can ship a TUI entry: a module that adds **views** (tabs drawn with OpenTUI and React) and **actions** (Command Center entries with keys) and talks to the plugin's server side on the daemon through plugin RPC. paseo-tui loads only the modules you list in the config file. It never loads code from a daemon.
+
+> [!WARNING]
+> Plugins run unsandboxed inside the paseo-tui process, with your user's full access. List only modules you trust.
+
+```json
+{
+  "plugins": ["/home/me/paseo-workboard/dist/tui.js", "my-paseo-tui-plugin"],
+  "keys": { "plugin.hello.open": "Ctrl-y" }
+}
+```
+
+- `plugins` lists prebuilt ESM modules, each an absolute path or a package name. Package names resolve from the config file's directory first (`npm install` there), then from paseo-tui's own dependencies. A malformed entry stops startup like any other config problem. A module that fails to load, has no valid default export or declares another `apiVersion` is skipped with a status message (`! Plugin … failed to load: …`, shown for five seconds); the rest still load.
+- A plugin is activated once per connected host whose daemon reports a server plugin of the same id as enabled and running, and needs a daemon with the `plugins` and `pluginManagement` features. Its views and actions disappear when that host disconnects or the server plugin is disabled or removed. Hosts without the server plugin never show them.
+- `keys` rebinds a plugin action as `plugin.<pluginId>.<actionId>`, with the same key format and rules as built-in actions; `[]` unbinds it. Plugin keys work in normal mode. A name whose plugin id matches no loaded plugin stops startup; an unknown action of a loaded plugin, or a key that conflicts, is reported in the status line once the plugin has registered its actions. From insert mode or a focused view, run plugin actions from the Command Center (`Ctrl-K`). The help popup and Command Center show the effective keys.
+- A view opens as a tab (`▤`) in a workspace on its host and fills the pane area. It has the keyboard only while its tab is selected and in input mode: `i` enters it, `Ctrl-]` returns to the TUI shortcuts. Open view tabs are saved with the workspace layout and come back after a restart only if the plugin is active on that host; otherwise they are dropped.
+- A failure in `activate`, an action, a view's render or key handler, or an RPC call is shown in that view or the status line. It does not stop paseo-tui or other plugins.
+
+### Writing a plugin
+
+The module's default export is `defineTuiPlugin({ id, apiVersion: 1, activate(ctx) })`, where `id` is the id of the Paseo server plugin it pairs with. Import the API from `paseo-tui/plugin`. Imports of `paseo-tui/plugin`, `react`, `@opentui/react` and `@opentui/core` always resolve to paseo-tui's own copies, so keep them external when you bundle (list them as `peerDependencies`). For JSX, compile with `"jsx": "react-jsx"` and `"jsxImportSource": "@opentui/react"`.
+
+```js
+import { createElement, useState } from "react";
+import { defineTuiPlugin, useViewKeyboard } from "paseo-tui/plugin";
+
+function Hello({ ctx, focused }) {
+  const [reply, setReply] = useState("press r");
+  useViewKeyboard((key) => {
+    if (key.name !== "r") return;
+    ctx.rpc("greet", { name: ctx.host.label }).then(
+      (output) => setReply(JSON.stringify(output)),
+      (error) => setReply(String(error)),
+    );
+  });
+  return createElement(
+    "text",
+    { fg: focused ? ctx.theme.accent : ctx.theme.muted },
+    `Hello from ${ctx.host.label}: ${reply}`,
+  );
+}
+
+export default defineTuiPlugin({
+  id: "hello",
+  apiVersion: 1,
+  activate(ctx) {
+    ctx.registerView({
+      id: "main",
+      title: "Hello",
+      render: (props) => createElement(Hello, { ctx, ...props }),
+    });
+    ctx.registerAction({
+      id: "open",
+      title: "Open Hello",
+      defaultKeys: ["Ctrl-y"],
+      run: () => ctx.openView("main"),
+    });
+  },
+});
+```
+
+`activate` runs once per host and may be async. Its context:
+
+| Member                                                 | Purpose                                                                                                          |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `ctx.host`                                             | `{ serverId, label }` of the host this activation belongs to                                                     |
+| `ctx.rpc(method, input)`                               | Calls this plugin's server RPC on that host; resolves to the unvalidated output, rejects with the daemon's error |
+| `ctx.registerView({ id, title, render })`              | Adds a view; `render` receives `{ focused }`. Returns a disposer                                                 |
+| `ctx.registerAction({ id, title, run, defaultKeys? })` | Adds a Command Center action; `run` may be async. Returns a disposer                                             |
+| `ctx.openView(viewId)`                                 | Opens or selects the view's tab in the active workspace on that host and gives it the keyboard                   |
+| `ctx.focusWorkspace(workspaceId)`                      | Selects a workspace                                                                                              |
+| `ctx.notify(message, level)`                           | Shows a status message; `level` is `"info"` (default) or `"error"` (prefixed `!`, shown twice as long)           |
+| `ctx.theme`                                            | The effective theme colors, read-only; an empty color means the terminal default                                 |
+| `ctx.onDispose(fn)`                                    | Runs `fn` when the host disconnects or the server plugin is disabled or removed                                  |
+
+Ids use letters, digits, `-` and `_`. In a view, read keys with `useViewKeyboard(handler)` rather than OpenTUI's `useKeyboard`: it delivers keys only while the view is focused and reports a throwing handler in the view. Once shown, a view stays mounted (hidden, with `focused` false) while another tab or workspace is selected, so it keeps its state until its tab is closed or the plugin is disposed; pause polling while `focused` is false if it is costly. Errors thrown later from your own timers or unhandled promises are not caught.
 
 ## Contributing
 

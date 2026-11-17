@@ -2,9 +2,12 @@ import type { Action, Binding } from "./keymap.js";
 
 /**
  * Stable config name of an action: its type, then its arguments joined with `:`,
- * e.g. `help`, `tab.cycle:1`, `pane.split:right`, `pane.select:3`.
+ * e.g. `help`, `tab.cycle:1`, `pane.split:right`, `pane.select:3`; a plugin's
+ * action is `plugin.<pluginId>.<actionId>`.
  */
 export function actionId(action: Action): string {
+  if (action.type === "plugin")
+    return `plugin.${action.plugin}.${action.action}`;
   const { type, ...args } = action;
   return [type, ...Object.values(args).map(String)].join(":");
 }

@@ -864,3 +864,20 @@ it("keeps the label view non-authoritative until every configured host has liste
   emitter.notify();
   expect(multi.labels.getSnapshot().authoritative).toBe(true);
 });
+
+it("lists each host's plugin connection and running server plugins", () => {
+  const { hosts } = setup();
+  const build = hosts.getSnapshot()[1];
+  if (!build) throw Error("No build host");
+  const rpc = async () => null;
+  const running = { kind: "ready" as const, running: new Set(["board"]) };
+  const plugins = { serverId: "srv-build", rpc, ...fixed(running) };
+  build.live.session.plugins = plugins;
+  const merged = createMultiHost(hosts);
+  expect(merged.plugins.getSnapshot()).toEqual([
+    { id: "home", label: "local", server: null, state: { kind: "offline" } },
+    { id: "build", label: "Build", server: plugins, state: running },
+  ]);
+  expect(merged.hostOf("w2")).toBe("build");
+  expect(merged.hostOf("nope")).toBeNull();
+});

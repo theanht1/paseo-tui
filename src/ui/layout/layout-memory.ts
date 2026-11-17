@@ -2,12 +2,24 @@ import { join } from "node:path";
 import type { PreferenceStorage } from "../agent/thinking-preference.js";
 import { assign, type Layout, type LayoutNode, panes } from "./split-tree.js";
 
-/** Split trees, pane agents, zoom and the selected tab, per workspace, across restarts. */
+/** A plugin view open as a tab, named by its plugin and view ids. */
+export interface SavedView {
+  plugin: string;
+  view: string;
+}
+/** Split trees, pane agents, zoom, the selected tab and plugin views, per workspace, across restarts. */
 export interface LayoutMemory {
   /** The last selected tab key of each remembered workspace. */
   tabs(): ReadonlyMap<string, string>;
+  /** The plugin views open in each remembered workspace. */
+  views(): ReadonlyMap<string, readonly SavedView[]>;
   /** Remembers a workspace's layout; the write is debounced. */
-  record(workspaceId: string, layout: Layout, tab: string | null): void;
+  record(
+    workspaceId: string,
+    layout: Layout,
+    tab: string | null,
+    views?: readonly SavedView[],
+  ): void;
   /** The workspace's remembered layout without vanished agents, showing `tabAgentId`. */
   restore(
     workspaceId: string,
@@ -19,6 +31,8 @@ export interface LayoutMemory {
 interface Saved {
   layout: Layout;
   tab: string | null;
+  /** Absent when no plugin view is open. */
+  views?: readonly SavedView[];
 }
 export type Schedule = (run: () => void, ms: number) => () => void;
 export interface LayoutMemoryOptions {
@@ -65,9 +79,20 @@ function parseNode(value: unknown): LayoutNode | null {
   }
   return null;
 }
+function parseViews(value: unknown): SavedView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry: unknown) =>
+    isRecord(entry) &&
+    typeof entry.plugin === "string" &&
+    typeof entry.view === "string"
+      ? [{ plugin: entry.plugin, view: entry.view }]
+      : [],
+  );
+}
 function parseSaved(value: unknown): Saved | null {
   if (!isRecord(value) || !isRecord(value.layout)) return null;
   const { layout, tab } = value;
+  const views = parseViews(value.views);
   const root = parseNode(layout.root);
   if (
     !root ||
@@ -89,6 +114,7 @@ function parseSaved(value: unknown): Saved | null {
       nextId: Math.max(layout.nextId, ...numeric.map((n) => n + 1)),
     }),
     tab,
+    ...(views.length ? { views } : {}),
   };
 }
 function parseFile(text: string | null): Map<string, Saved> {
@@ -172,8 +198,19 @@ export async function loadLayoutMemory(
           tab === null ? [] : [[id, tab]],
         ),
       ),
-    record(workspaceId, layout, tab) {
-      const next = { layout, tab };
+    views: () =>
+      new Map(
+        [...saved].flatMap(
+          ([id, { views }]): [string, readonly SavedView[]][] =>
+            views ? [[id, views]] : [],
+        ),
+      ),
+    record(workspaceId, layout, tab, views = []) {
+      const next: Saved = {
+        layout,
+        tab,
+        ...(views.length ? { views } : {}),
+      };
       const previous = saved.get(workspaceId);
       if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
       saved.delete(workspaceId);

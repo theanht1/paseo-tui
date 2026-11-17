@@ -1,6 +1,6 @@
 import { createEmitter } from "./emitter.js";
 
-interface Store<T> {
+export interface Store<T> {
   subscribe(listener: () => void): () => void;
   getSnapshot(): T;
 }

@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { PreferenceStorage } from "../agent/thinking-preference.js";
 import { BINDINGS } from "../input/bindings.js";
 import { applyKeyOverrides } from "../input/key-overrides.js";
@@ -7,6 +7,7 @@ import {
   type NotifyStyle,
   parseNotifyStyle,
 } from "../notify/terminal-notification.js";
+import { PLUGIN_KEY_PREFIX } from "../plugins/plugin-keys.js";
 import {
   isHighlightStyle,
   THEME_COLOR_FIELDS,
@@ -25,6 +26,10 @@ export interface UserConfig {
   editor?: string;
   /** The command that opens a file from the chat (`F`, clicks); default `vim`. */
   fileEditor?: string;
+  /** TUI plugin modules to load: absolute paths or package names. */
+  plugins: readonly string[];
+  /** The `keys` entries named `plugin.<pluginId>.<actionId>`, applied once plugins register. */
+  pluginKeys: ReadonlyMap<string, readonly string[]>;
 }
 
 /** `default` keeps a provider's headline window; an array lists exact usage ids. */
@@ -48,6 +53,7 @@ const SETTINGS = [
   "usage",
   "editor",
   "fileEditor",
+  "plugins",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -89,6 +95,28 @@ function parseKeys(
       );
   }
   return overrides;
+}
+
+/** A package name (optionally scoped, with a subpath) rather than a path or URL. */
+const PACKAGE = /^(?:@[\w.-]+\/)?[\w-][\w.-]*(?:\/[\w.-]+)*$/;
+function parsePlugins(value: unknown, errors: string[]): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push("plugins: expected an array of module paths or package names");
+    return [];
+  }
+  const plugins: string[] = [];
+  value.forEach((entry: unknown, index) => {
+    const where = `plugins[${index}]: ${JSON.stringify(entry)}`;
+    if (
+      typeof entry !== "string" ||
+      !(isAbsolute(entry) || PACKAGE.test(entry))
+    )
+      errors.push(`${where} must be an absolute path or a package name`);
+    else if (plugins.includes(entry)) errors.push(`${where} is listed twice`);
+    else plugins.push(entry);
+  });
+  return plugins;
 }
 
 function parseUsage(value: unknown, errors: string[]): UsageConfig | undefined {
@@ -222,7 +250,11 @@ export function parseUserConfig(text: string, source: string): UserConfig {
       errors.push(
         `unknown setting ${JSON.stringify(key)} (expected ${SETTINGS.join(", ")})`,
       );
-  const overrides = parseKeys(value.keys, errors);
+  const allKeys = parseKeys(value.keys, errors);
+  const pluginKeys = new Map(
+    [...allKeys].filter(([id]) => id.startsWith(PLUGIN_KEY_PREFIX)),
+  );
+  const overrides = new Map([...allKeys].filter(([id]) => !pluginKeys.has(id)));
   const keys =
     overrides.size > 0 ? applyKeyOverrides(BINDINGS, overrides) : null;
   if (keys) errors.push(...keys.errors);
@@ -245,6 +277,7 @@ export function parseUserConfig(text: string, source: string): UserConfig {
     parseCommand,
     errors,
   );
+  const plugins = parsePlugins(value.plugins, errors);
   if (errors.length > 0)
     throw new Error(
       `Invalid config ${source}:\n${errors.map((error) => `  - ${error}`).join("\n")}`,
@@ -257,6 +290,8 @@ export function parseUserConfig(text: string, source: string): UserConfig {
     ...(usage === undefined ? {} : { usage }),
     ...(editor === undefined ? {} : { editor }),
     ...(fileEditor === undefined ? {} : { fileEditor }),
+    plugins,
+    pluginKeys,
   };
 }
 
@@ -272,7 +307,12 @@ export async function loadUserConfig(
   const text = await storage.read();
   if (text === null) {
     if (required) throw new Error(`Config file ${source} not found`);
-    return { bindings: BINDINGS, theme: {} };
+    return {
+      bindings: BINDINGS,
+      theme: {},
+      plugins: [],
+      pluginKeys: new Map(),
+    };
   }
   return parseUserConfig(text, source);
 }

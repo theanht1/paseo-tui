@@ -329,3 +329,18 @@ export interface WorkspaceLabelEdit {
   newName?: string;
   color?: WorkspaceLabelDefinition["color"];
 }
+/** A server plugin on a host's daemon; `running` means enabled and started. */
+export interface ServerPlugin {
+  id: string;
+  running: boolean;
+}
+/** A host's server plugins (`plugins` and `pluginManagement`). */
+export interface PluginPort {
+  /** The daemon's `server_info.serverId`. */
+  serverId: string;
+  list(): Promise<readonly ServerPlugin[]>;
+  /** Calls a plugin's RPC method; resolves to its unvalidated output. */
+  rpc(pluginId: string, method: string, input: unknown): Promise<unknown>;
+  /** Runs `handler` whenever a plugin is installed, removed, enabled or disabled; stop resolves once released. */
+  observe(handler: () => void): () => Promise<void>;
+}

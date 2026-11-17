@@ -96,7 +96,9 @@ export type Action =
   | { type: "pane.select" | "tab.select" | "workspace.select"; index: number }
   | { type: "search.update"; query: string }
   | { type: "search.next"; dir: 1 | -1 }
-  | { type: "copy.key" | "hint.key"; key: string };
+  | { type: "copy.key" | "hint.key"; key: string }
+  /** A TUI plugin's registered action (`plugin.<plugin>.<action>` in `keys`). */
+  | { type: "plugin"; plugin: string; action: string };
 export interface Binding {
   keys: string;
   modes: Mode["kind"][];
@@ -375,6 +377,7 @@ const KEYSTROKE_ONLY: ReadonlySet<Action["type"]> = new Set([
   "queue.edit",
   "queue.remove",
   "queue.clear",
+  "plugin",
 ]);
 export interface PaletteAction {
   action: Action;

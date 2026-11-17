@@ -18,6 +18,7 @@ import {
   type LiveHost,
 } from "./hosts.js";
 import { createMultiHost, windowLabel } from "./multi-host.js";
+import { loadPlugins } from "./plugin-loader.js";
 import { shutdown } from "./shutdown.js";
 import type { HostHealthEntry } from "./state/host-health.js";
 import { hostsPath, loadHostRegistry } from "./state/host-registry.js";
@@ -49,6 +50,8 @@ import {
   notificationSequence,
   parseNotifyStyle,
 } from "./ui/notify/terminal-notification.js";
+import { createPluginHost } from "./ui/plugins/plugin-host.js";
+import { unloadedPluginKeys } from "./ui/plugins/plugin-keys.js";
 import {
   editExternally,
   nodeEditorFiles,
@@ -102,7 +105,7 @@ Environment: PASEO_TUI_KEY_LOG=<file> logs every key the terminal sends
 (raw bytes and how it parsed), to debug shortcuts that don't fire.
 
 Config keys: "keys" (rebind actions), "theme" (hex color overrides), "prefix",
-"notify". Layouts and your project, workspace and tab order are saved in
+"notify", "plugins" (TUI plugin modules to load; they run unsandboxed). Layouts and your project, workspace and tab order are saved in
 $XDG_STATE_HOME/paseo-tui/ (layouts.json, order.json, label-filter.json).
 `;
 
@@ -176,6 +179,18 @@ async function main() {
     configFile,
     values.config !== undefined,
   );
+  // Plugin modules run here, unsandboxed; one that fails to load is reported in the window.
+  const loaded = await loadPlugins(config.plugins, dirname(configFile));
+  if (loaded.errors.length === 0) {
+    const problems = unloadedPluginKeys(
+      config.pluginKeys,
+      loaded.plugins.map((plugin) => plugin.id),
+    );
+    if (problems.length > 0)
+      throw new Error(
+        `Invalid config ${configFile}:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`,
+      );
+  }
   const prefix = parsePrefix(values.prefix ?? config.prefix ?? "C-b");
   const notifyStyle = parseNotifyStyle(values.notify ?? config.notify);
   const layouts = await loadLayoutMemory(
@@ -237,6 +252,17 @@ async function main() {
     );
   const theme = createTheme(process.env, config.theme);
   const syntaxStyle = createSyntaxStyle(renderer, theme);
+  const pluginHost = createPluginHost({
+    plugins: loaded.plugins,
+    theme,
+    hosts: merged.plugins,
+    notices: loaded.errors,
+  });
+  const plugins = {
+    host: pluginHost,
+    keys: config.pluginKeys,
+    hostOf: merged.hostOf,
+  };
   function uncaught(error: Error) {
     renderer.destroy();
     process.stderr.write(`${error.stack ?? error.message}\n`);
@@ -271,6 +297,7 @@ async function main() {
               onActiveWorkspace={merged.focus}
               prefix={prefix}
               bindings={config.bindings}
+              plugins={plugins}
               layouts={layouts}
               order={order}
               labels={merged.labels}
@@ -327,6 +354,7 @@ async function main() {
     syntaxStyle.destroy();
     process.off("uncaughtException", uncaught);
     merged.timelines.close();
+    pluginHost.close();
     await shutdown([thinkingPreference, layouts, order, labelFilter], () =>
       hosts.close(),
     );

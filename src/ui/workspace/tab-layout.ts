@@ -49,5 +49,7 @@ export function tabKindIcon(kind: WorkspaceTab["kind"]): string {
       return "▣";
     case "subagent":
       return "◆";
+    case "plugin":
+      return "▤";
   }
 }

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,6 +21,32 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
+/** A server plugin answering `echo`, for plugin RPC tests. */
+const FIXTURE_PLUGIN = `import { defineRpc } from "@getpaseo/plugin";
+import { z } from "zod";
+const echo = defineRpc({
+  name: "echo",
+  input: z.object({ text: z.string() }),
+  output: z.object({ text: z.string(), from: z.string() }),
+});
+export default function contribute(server) {
+  server.handle(echo, ({ text }) => ({ text, from: "tui-fixture" }));
+  return () => {};
+}
+`;
+async function writeFixturePlugin(home: string): Promise<string> {
+  const directory = join(home, "tui-fixture-plugin");
+  await mkdir(directory);
+  await writeFile(
+    join(directory, "paseo-plugin.json"),
+    JSON.stringify({ id: "tui-fixture", requirements: { paseo: ">=0.15.0" } }),
+  );
+  await writeFile(join(directory, "index.server.ts"), FIXTURE_PLUGIN);
+  // The daemon bundles the plugin's imports from its own directory.
+  await symlink(resolve("node_modules"), join(directory, "node_modules"));
+  return directory;
+}
+
 export async function startTestDaemon() {
   const home = await mkdtemp(join(tmpdir(), "paseo-tui-test-"));
   if (resolve(home) === resolve(homedir(), ".paseo"))
@@ -39,11 +65,14 @@ export async function startTestDaemon() {
       "muse",
     ].map((id) => [id, { enabled: false }]),
   );
+  const plugin = await writeFixturePlugin(home);
   await writeFile(
     join(home, "config.json"),
     JSON.stringify({
       version: 1,
       agents: { providers },
+      pluginsEnabled: true,
+      plugins: { "tui-fixture": { source: "directory", path: plugin } },
       features: {
         dictation: { enabled: false },
         voiceMode: { enabled: false },

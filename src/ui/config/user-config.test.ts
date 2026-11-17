@@ -73,7 +73,7 @@ test("lists every problem in one startup error", () => {
     new RegExp(
       [
         "^Invalid config /home/me/\\.config/paseo-tui/config\\.json:",
-        '  - unknown setting "colour" \\(expected keys, theme, prefix, notify, usage, editor, fileEditor\\)',
+        '  - unknown setting "colour" \\(expected keys, theme, prefix, notify, usage, editor, fileEditor, plugins\\)',
         '  - keys\\."pane\\.zoom": expected a key string or an array of key strings',
         '  - keys\\."tab\\.explode": unknown action; valid: .*',
         '  - theme\\.accent: "orange" is not a hex color \\(#rgb, #rrggbb or #rrggbbaa\\)',
@@ -163,5 +163,54 @@ test("parses and validates the file editor command", () => {
   expect(parseUserConfig("{}", "c.json").fileEditor).toBeUndefined();
   expect(() => parseUserConfig('{"fileEditor": " "}', "c.json")).toThrow(
     "  - fileEditor: needs a command",
+  );
+});
+
+test("parses plugins and keeps their key overrides apart from the built-in ones", () => {
+  const config = parseUserConfig(
+    JSON.stringify({
+      plugins: ["/opt/board/tui.js", "paseo-workboard/tui", "@scope/pkg"],
+      keys: {
+        "sidebar.toggle": "|",
+        "plugin.board.refresh": "Ctrl-y",
+        "plugin.board.open": ["F7", "F8"],
+      },
+    }),
+    "config.json",
+  );
+  expect(config.plugins).toEqual([
+    "/opt/board/tui.js",
+    "paseo-workboard/tui",
+    "@scope/pkg",
+  ]);
+  expect([...config.pluginKeys]).toEqual([
+    ["plugin.board.refresh", ["Ctrl-y"]],
+    ["plugin.board.open", ["F7", "F8"]],
+  ]);
+  expect(parseUserConfig("{}", "config.json").plugins).toEqual([]);
+});
+
+test("lists every plugin setting problem", () => {
+  expect(() =>
+    parseUserConfig(
+      JSON.stringify({
+        plugins: ["./relative.js", "", 3, "/a.js", "/a.js", "https://x/y.js"],
+        keys: { "plugin.board.refresh": 5 },
+      }),
+      "config.json",
+    ),
+  ).toThrow(
+    [
+      "Invalid config config.json:",
+      '  - keys."plugin.board.refresh": expected a key string or an array of key strings',
+      '  - plugins[0]: "./relative.js" must be an absolute path or a package name',
+      '  - plugins[1]: "" must be an absolute path or a package name',
+      "  - plugins[2]: 3 must be an absolute path or a package name",
+      '  - plugins[4]: "/a.js" is listed twice',
+      '  - plugins[5]: "https://x/y.js" must be an absolute path or a package name',
+    ].join("\n"),
+  );
+  expect(() => parseUserConfig('{"plugins":"x"}', "config.json")).toThrow(
+    "  - plugins: expected an array of module paths or package names",
   );
 });

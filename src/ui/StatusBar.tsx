@@ -82,6 +82,8 @@ export interface StatusBarProps {
   context: Context;
   searchStatus?: string;
   terminalInput?: boolean;
+  /** A plugin view has the keyboard. */
+  viewInput?: boolean;
   /** Provider usage meters; absent when the daemon reports no usage. */
   usage?: ExternalStore<UsageSnapshot>;
   /** Which providers and windows the meters show; absent shows each headline. */
@@ -101,6 +103,7 @@ export function StatusBar({
   context,
   searchStatus,
   terminalInput = false,
+  viewInput = false,
   usage = NO_USAGE,
   usageConfig,
   contextWindow,
@@ -126,7 +129,7 @@ export function StatusBar({
       : connectionState.status !== "connected" && usage !== NO_USAGE
         ? "usage unavailable"
         : usageMeters(usageSnapshot.reports, Date.now(), usageConfig);
-  const prefix = `${terminalInput ? "Terminal input · Ctrl-] TUI shortcuts · " : ""}${label} ${state.text} ${mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}`;
+  const prefix = `${terminalInput ? "Terminal input · Ctrl-] TUI shortcuts · " : viewInput ? "View input · Ctrl-] TUI shortcuts · " : ""}${label} ${state.text} ${mode.kind === "search" ? `/${mode.query}` : mode.kind.toUpperCase()}`;
   const contextText = contextWindow ? contextMeterText(contextWindow) : "";
   const meter: Meter | null =
     contextWindow?.kind === "measured" && contextText
