@@ -1,5 +1,6 @@
 import type { PaseoProject } from "@getpaseo/client";
 import { expect, it } from "vitest";
+import type { CommandListSource } from "../connection/ports.js";
 import type { CreateAgentInput } from "../state/ports.js";
 import { agent, NO_PROJECT_ACTIONS } from "../test/fixtures.js";
 import type { CommandStep } from "./command-center/registry.js";
@@ -114,6 +115,7 @@ class FakeHosts implements HostsPort {
   watched: string[] = [];
   added: unknown[] = [];
   scopes: string[] = [];
+  listed: { host: string; source: CommandListSource }[] = [];
   hosts: HostOption[] = [
     {
       id: "home",
@@ -145,6 +147,13 @@ class FakeHosts implements HostsPort {
       label: id === "home" ? "local" : "Build",
       projects: async () => [project("remote", "/srv/remote", "git")],
       actions: actions(id, this.calls),
+      completions: {
+        commands: async (source) => {
+          this.listed.push({ host: id, source });
+          return [];
+        },
+        files: async () => [],
+      },
       catalog: {
         ...catalog,
         onProvidersChange: () => {
@@ -544,4 +553,29 @@ it("adds a host by address and optional name, and reconnects an offline one from
   await walk(wizard().step, ["GPU"]);
   await controller.settled();
   expect(hosts.connects).toEqual(["gpu"]);
+});
+
+it("lists the first prompt's slash commands on the host the workspace is created on", async () => {
+  const { controller, wizard, hosts } = setup();
+  controller.createWorkspace();
+  const prompt = await walk(wizard().step, [
+    "app",
+    "Build",
+    "Worktree",
+    "main",
+    "",
+    ...AGENT.slice(0, -1),
+  ]);
+  if (prompt?.kind !== "input" || !prompt.completion?.port)
+    throw Error("Expected a first prompt with the host's completions");
+  await prompt.completion.port.commands(prompt.completion.source);
+  expect(hosts.listed).toEqual([
+    {
+      host: "build",
+      source: {
+        kind: "draft",
+        config: { provider: "codex", cwd: "/srv/app", model: "best" },
+      },
+    },
+  ]);
 });

@@ -1,4 +1,5 @@
 import type { PaseoAgent } from "@getpaseo/client";
+import type { CompletionPort } from "../../connection/ports.js";
 import type {
   CatalogMode,
   CatalogModel,
@@ -20,6 +21,8 @@ export interface CreateDeps {
   /** Re-lists the Provider step when the host's provider snapshot changes. */
   onProvidersChange?(listener: () => void): () => void;
   thinkingPreference?: ThinkingPreference;
+  /** The host's own completions for the first prompt; absent uses the focused host's. */
+  completions?: CompletionPort;
   workspaces: readonly WorkspaceTarget[];
   defaultWorkspace: WorkspaceTarget | null;
   /** Adds the agent to the workspace, so the daemon never picks one from the cwd. */
@@ -30,7 +33,12 @@ export interface CreateDeps {
 
 export type ConfigurationDeps = Pick<
   CreateDeps,
-  "providers" | "models" | "modes" | "onProvidersChange" | "thinkingPreference"
+  | "providers"
+  | "models"
+  | "modes"
+  | "onProvidersChange"
+  | "thinkingPreference"
+  | "completions"
 >;
 export function agentConfigurationStep(
   deps: ConfigurationDeps,
@@ -245,6 +253,7 @@ export function agentConfigurationFlow(
             },
           },
           cwd,
+          ...(deps.completions ? { port: deps.completions } : {}),
         },
         submit: (text) =>
           finish({

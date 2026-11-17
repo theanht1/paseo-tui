@@ -48,6 +48,7 @@ function live(label: string, closed: string[]): FakeLive {
         projectKind: "git",
       },
     ],
+    completions: { commands: async () => [], files: async () => [] },
     actions: {
       ...NO_PROJECT_ACTIONS,
       baseBranches: async () => ({ branches: [], defaultBranch: null }),

@@ -6,7 +6,10 @@ import {
   scoreMatch,
   tokenizeQuery,
 } from "@getpaseo/protocol/search/text-match";
-import type { CommandListSource } from "../../connection/ports.js";
+import type {
+  CommandListSource,
+  CompletionPort,
+} from "../../connection/ports.js";
 import type { Action } from "../input/keymap.js";
 export type CommandGroup =
   | "Needs you"
@@ -163,8 +166,15 @@ export type CommandStep =
       title: string;
       placeholder: string;
       initial?: string;
-      /** Offers `/` command and `@` file completions while typing. */
-      completion?: { source: CommandListSource; cwd: string };
+      /**
+       * Offers `/` command and `@` file completions while typing; `port` answers them
+       * instead of the focused host's (a wizard creating on another host).
+       */
+      completion?: {
+        source: CommandListSource;
+        cwd: string;
+        port?: CompletionPort;
+      };
       /** Hides what is typed (a password); paste works, nothing is drawn but dots. */
       secret?: true;
       /** Enter on a blank value stays and says "<required> is required". */

@@ -305,6 +305,7 @@ export function createHosts<L extends HostLive>(options: {
         projects: live.projects,
         actions: live.actions,
         catalog: live.catalog,
+        completions: live.completions,
       };
     },
     async add(input) {
@@ -385,6 +386,7 @@ export function connectedHost(connection: Connection) {
     },
     actions: session.management,
     catalog: session.agentsPort,
+    completions: session.completions,
     async close() {
       await session.close();
       await connection.close();

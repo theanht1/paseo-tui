@@ -1,4 +1,5 @@
 import type { PaseoProject } from "@getpaseo/client";
+import type { CompletionPort } from "../../connection/ports.js";
 import type { AgentsPort } from "../../state/ports.js";
 import type { WorkspaceActions } from "../workspace/workspace-actions.js";
 
@@ -21,6 +22,8 @@ export interface HostScope {
     AgentsPort,
     "providers" | "models" | "modes" | "onProvidersChange"
   >;
+  /** Draft slash commands and files for prompts written before the agent exists. */
+  completions: CompletionPort;
 }
 export interface HostsPort {
   /** The startup host (localhost by default) first, then the others in the order they were added. */

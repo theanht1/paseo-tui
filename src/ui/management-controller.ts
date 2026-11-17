@@ -228,6 +228,7 @@ export function createManagementController(context: () => ManagementContext) {
         modes: (provider: string) => scope.catalog.modes(provider),
         onProvidersChange: (listener: () => void) =>
           scope.catalog.onProvidersChange(listener),
+        completions: scope.completions,
       },
     };
   }

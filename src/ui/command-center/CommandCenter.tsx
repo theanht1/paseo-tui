@@ -190,13 +190,11 @@ export function CommandCenter({
       : rankCommands(items, text);
   }
   const results = rank(candidates, query);
-  const completion = useMemo(
-    () =>
-      step?.kind === "input" && step.completion && completions
-        ? createCompletionStore(completions, step.completion)
-        : null,
-    [step, completions],
-  );
+  const completion = useMemo(() => {
+    if (step?.kind !== "input" || !step.completion) return null;
+    const port = step.completion.port ?? completions;
+    return port ? createCompletionStore(port, step.completion) : null;
+  }, [step, completions]);
   useEffect(() => () => completion?.close(), [completion]);
   const popup = useStore(completion ?? CLOSED_COMPLETIONS);
   function setInput(value: string) {
