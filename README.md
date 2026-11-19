@@ -2,6 +2,8 @@
 
 A full-screen terminal client for Paseo, built with TypeScript, OpenTUI and React. It groups agents by workspace and supports live timelines, prompts, permission answers, split panes, embedded terminals and a Command Center.
 
+![Paseo TUI showing the project sidebar, agent timeline, and an embedded terminal tab](docs/screenshot.png)
+
 ## Requirements
 
 - **Node 26.4 or newer.** OpenTUI needs Node's `--experimental-ffi`, which older versions lack; the installed `paseo-tui` command passes the flag for you. Check with `node --version`.
